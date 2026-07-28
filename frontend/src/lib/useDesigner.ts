@@ -6,7 +6,7 @@
 
 import { useMemo } from "react";
 import { computeProbabilitiesClient, computeSizingClient } from "./analytics";
-import { positionEntryCost } from "./optionsMath";
+import { positionEntryCost, positionValue, TRADING_HOURS_PER_YEAR } from "./optionsMath";
 import { useAccountStore } from "../store/accountStore";
 import {
   buildLegs,
@@ -25,6 +25,9 @@ export type Designer = {
   hoursToExpiry: number;
   tpPremium: number | null;
   slPremium: number | null;
+  /** Non-null when the CURRENT model value already sits at/beyond an exit —
+   * entering now would be closed by the enforcer immediately. */
+  instantExit: "tp" | "sl" | null;
   qty: number;
   autoQty: number;
   sizing: ReturnType<typeof computeSizingClient> | null;
@@ -58,6 +61,7 @@ export function useDesigner(): Designer {
       hoursToExpiry: 0,
       tpPremium: null,
       slPremium: null,
+      instantExit: null,
       qty: 0,
       autoQty: 0,
       sizing: null,
@@ -74,6 +78,14 @@ export function useDesigner(): Designer {
     const hte = calcHte(expiry);
     const tpPremium = entry + Math.abs(entry) * tpPct;
     const slPremium = entry - Math.abs(entry) * slPct;
+
+    // Sanity guard: with fresh quotes, model value at spot equals entry, so
+    // spot always starts inside (SL, TP). If it doesn't (stale quotes, or
+    // an inconsistent feed), the enforcer would exit the moment it fills —
+    // surface that instead of letting the order through.
+    const nowValue = positionValue(legs, spot, Math.max(hte, 0) / TRADING_HOURS_PER_YEAR);
+    const instantExit: "tp" | "sl" | null =
+      nowValue >= tpPremium ? "tp" : nowValue <= slPremium ? "sl" : null;
 
     const sizing = computeSizingClient(
       legs,
@@ -95,6 +107,7 @@ export function useDesigner(): Designer {
       hoursToExpiry: hte,
       tpPremium,
       slPremium,
+      instantExit,
       qty,
       autoQty,
       sizing,

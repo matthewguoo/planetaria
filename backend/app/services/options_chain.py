@@ -196,8 +196,20 @@ class ChainService:
         atm = round(spot / step) * step
         strikes = [round(atm + i * step, 2) for i in range(-12, 13)]
         contracts = []
+        from app.services.options_math import (
+            TRADING_HOURS_PER_YEAR,
+            trading_hours_to_expiry,
+        )
+
+        now_ms = time.time() * 1000
         for exp_i, expiry in enumerate(expirations):
-            tau = max((exp_i + 0.5) * 6.5 / (252 * 6.5), 1e-4)  # crude years
+            # Use the SAME trading-hours clock as the frontend designer.
+            # A fake tau here makes demo premiums carry time value the P/L
+            # surface says doesn't exist — producing impossible states like
+            # "spot already below the stop-loss boundary at entry".
+            tau = max(
+                trading_hours_to_expiry(expiry, now_ms) / TRADING_HOURS_PER_YEAR, 2e-5
+            )
             for strike in strikes:
                 moneyness = math.log(strike / spot)
                 iv = 0.18 + 0.35 * moneyness**2 + 0.02 * exp_i  # smile

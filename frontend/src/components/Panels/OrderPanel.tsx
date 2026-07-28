@@ -32,7 +32,8 @@ export function OrderPanel({ designer }: { designer: Designer }) {
   const [error, setError] = useState<string | null>(null);
   const [placed, setPlaced] = useState<string | null>(null);
 
-  const canTrade = designer.ready && designer.qty > 0 && !designer.demo;
+  const canTrade =
+    designer.ready && designer.qty > 0 && !designer.demo && designer.instantExit === null;
 
   const submit = async () => {
     if (!designer.legs) return;
@@ -167,6 +168,15 @@ export function OrderPanel({ designer }: { designer: Designer }) {
             LIVE 🔒
           </button>
         </div>
+        {designer.instantExit && (
+          <div
+            className="text-[10px] leading-tight text-bb-loss"
+            title="Current model value of the position is already at/beyond this exit level. Filling now would be closed by the exit enforcer immediately — adjust TP/SL or wait for quotes to refresh."
+          >
+            ⚠ {designer.instantExit.toUpperCase()} already breached at current price — order
+            would exit instantly
+          </div>
+        )}
         {placed && (
           <div className="truncate text-[10px] text-bb-profit">plan {placed.slice(0, 8)} submitted</div>
         )}
