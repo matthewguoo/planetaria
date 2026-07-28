@@ -106,6 +106,35 @@ export const tightenExits = (
   patch: { tp_premium?: number; sl_premium?: number; time_stop_utc?: string },
 ) => api.patch<Plan>(`/api/positions/${planId}/exits`, patch).then((r) => r.data);
 
+export type PortfolioHistory = {
+  timestamps: number[];
+  equity: (number | null)[];
+  profit_loss: (number | null)[];
+  base_value: number | null;
+};
+
+export type OpenOrder = {
+  id: string;
+  symbol: string;
+  side: string;
+  qty: number | null;
+  filled_qty: number;
+  type: string;
+  limit_price: number | null;
+  status: string;
+  submitted_at: string | null;
+  legs: { symbol: string; side: string; ratio: number }[];
+};
+
+export const getAccountHistory = (period = "1M", timeframe = "1D") =>
+  api
+    .get<PortfolioHistory>("/api/account/history", { params: { period, timeframe } })
+    .then((r) => r.data);
+export const getOpenOrders = () =>
+  api.get<{ orders: OpenOrder[] }>("/api/orders/open").then((r) => r.data.orders);
+export const cancelOpenOrder = (orderId: string) =>
+  api.delete(`/api/orders/${orderId}`).then((r) => r.data);
+
 /** Extract a readable message from an axios error (FastAPI detail). */
 export function apiError(err: unknown): string {
   const anyErr = err as { response?: { data?: { detail?: string } }; message?: string };

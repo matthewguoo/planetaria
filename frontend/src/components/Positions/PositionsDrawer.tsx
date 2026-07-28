@@ -12,6 +12,8 @@ import {
   type UntrackedPosition,
 } from "../../lib/api";
 import { useAccountStore } from "../../store/accountStore";
+import { useTradingStore } from "../../store/tradingStore";
+import { useUiStore } from "../../store/uiStore";
 
 type Tab = "POSITIONS" | "HISTORY" | "ACCOUNT";
 
@@ -36,6 +38,8 @@ function PositionRow({ plan }: { plan: Plan }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const refreshPositions = useAccountStore((s) => s.refreshPositions);
+  const viewPosition = useUiStore((s) => s.viewPosition);
+  const setSymbol = useTradingStore((s) => s.setSymbol);
 
   const act = async (fn: () => Promise<unknown>) => {
     setBusy(true);
@@ -55,7 +59,14 @@ function PositionRow({ plan }: { plan: Plan }) {
     .join(" ");
 
   return (
-    <tr className="border-b border-bb-border/50 hover:bg-bb-hover">
+    <tr
+      className="cursor-pointer border-b border-bb-border/50 hover:bg-bb-hover"
+      onClick={() => {
+        setSymbol(plan.underlying);
+        viewPosition(plan.id);
+      }}
+      title="View this position on the chart (entry-anchored P/L surface)"
+    >
       <td className="px-2 py-1 text-white">
         {plan.underlying}
         <span className="ml-1 text-[10px] text-bb-muted">{legsLabel}</span>
@@ -88,7 +99,7 @@ function PositionRow({ plan }: { plan: Plan }) {
       <td data-numeric className="px-2 py-1 text-right text-bb-profit">{plan.tp_premium.toFixed(2)}</td>
       <td data-numeric className="px-2 py-1 text-right text-bb-loss">{plan.sl_premium.toFixed(2)}</td>
       <td data-numeric className="px-2 py-1 text-right text-bb-orange">{etTime(plan.time_stop_utc)}</td>
-      <td className="px-2 py-1 text-right">
+      <td className="px-2 py-1 text-right" onClick={(e) => e.stopPropagation()}>
         <span className="inline-flex gap-1">
           <button
             className="border border-bb-border px-1.5 text-[10px] text-bb-muted hover:text-bb-amber"

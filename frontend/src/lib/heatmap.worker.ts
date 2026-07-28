@@ -38,6 +38,9 @@ export type HeatmapRequest = {
   volShift: number;
   /** apply skew-derived directional vol response */
   skewBeta: boolean;
+  /** P/L basis override (position view: the plan's actual fill premium);
+   * null/undefined => net of the legs' entry fields (designer). */
+  entryOverride?: number | null;
 };
 
 export type HeatmapResult = {
@@ -81,7 +84,7 @@ self.onmessage = (event: MessageEvent<HeatmapRequest>) => {
   const breakevenLine = new Float64Array(timeSteps);
   const tpLine = new Float64Array(timeSteps);
   const slLine = new Float64Array(timeSteps);
-  const entry = positionEntryCost(legs);
+  const entry = req.entryOverride ?? positionEntryCost(legs);
 
   const model = makeScenarioModel(smiles, spot0, req.volShift, req.skewBeta);
   const value = (s: number, tau: number) => positionValueModel(legs, s, tau, model);

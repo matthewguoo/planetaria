@@ -163,6 +163,88 @@ async def tighten(request: Request, plan_id: str, body: TightenIn) -> dict:
         raise HTTPException(422, str(exc))
 
 
+@router.get("/account/history")
+async def account_history(request: Request, period: str = "1M", timeframe: str = "1D") -> dict:
+    """Equity curve straight from the broker (Alpaca portfolio history)."""
+    if period not in {"1D", "1W", "1M", "3M", "6M", "1A", "all"}:
+        raise HTTPException(422, "period must be one of 1D/1W/1M/3M/6M/1A/all")
+    if timeframe not in {"1Min", "5Min", "15Min", "1H", "1D"}:
+        raise HTTPException(422, "timeframe must be one of 1Min/5Min/15Min/1H/1D")
+    trade = request.app.state.trade
+    if not trade.alpaca.configured:
+        return {"timestamps": [], "equity": [], "profit_loss": [], "base_value": None}
+    try:
+        from alpaca.trading.requests import GetPortfolioHistoryRequest
+
+        hist = await trade.alpaca.call(
+            trade.alpaca.trading.get_portfolio_history,
+            GetPortfolioHistoryRequest(period=period, timeframe=timeframe),
+        )
+        return {
+            "timestamps": list(hist.timestamp or []),
+            "equity": [float(v) if v is not None else None for v in (hist.equity or [])],
+            "profit_loss": [
+                float(v) if v is not None else None for v in (hist.profit_loss or [])
+            ],
+            "base_value": float(hist.base_value) if hist.base_value is not None else None,
+        }
+    except Exception as exc:
+        raise HTTPException(502, f"portfolio history failed: {exc}")
+
+
+@router.get("/orders/open")
+async def open_orders(request: Request) -> dict:
+    """Live open orders at the broker, normalized (incl. MLEG legs)."""
+    trade = request.app.state.trade
+    if not trade.alpaca.configured:
+        return {"orders": []}
+    try:
+        from alpaca.trading.enums import QueryOrderStatus
+        from alpaca.trading.requests import GetOrdersRequest
+
+        orders = await trade.alpaca.call(
+            trade.alpaca.trading.get_orders,
+            GetOrdersRequest(status=QueryOrderStatus.OPEN, nested=True, limit=100),
+        )
+    except Exception as exc:
+        raise HTTPException(502, f"orders fetch failed: {exc}")
+
+    def _norm(order) -> dict:
+        return {
+            "id": str(order.id),
+            "symbol": order.symbol,
+            "side": str(getattr(order.side, "value", order.side) or ""),
+            "qty": float(order.qty) if order.qty is not None else None,
+            "filled_qty": float(order.filled_qty or 0),
+            "type": str(getattr(order.order_type, "value", order.order_type) or ""),
+            "limit_price": float(order.limit_price) if order.limit_price is not None else None,
+            "status": str(getattr(order.status, "value", order.status) or ""),
+            "submitted_at": order.submitted_at.isoformat() if order.submitted_at else None,
+            "legs": [
+                {
+                    "symbol": leg.symbol,
+                    "side": str(getattr(leg.side, "value", leg.side) or ""),
+                    "ratio": float(leg.ratio_qty) if getattr(leg, "ratio_qty", None) else 1,
+                }
+                for leg in (order.legs or [])
+            ],
+        }
+
+    return {"orders": [_norm(o) for o in orders]}
+
+
+@router.delete("/orders/{order_id}")
+async def cancel_order(request: Request, order_id: str) -> dict:
+    trade = request.app.state.trade
+    if not trade.alpaca.configured:
+        raise HTTPException(503, "broker not configured")
+    try:
+        await trade.cancel_order(order_id)
+    except Exception as exc:
+        raise HTTPException(502, f"cancel failed: {exc}")
+    return {"ok": True}
+
+
 @router.get("/history")
 async def history(request: Request, limit: int = 200) -> dict:
     async with request.app.state.db.session() as session:

@@ -18,6 +18,7 @@ export type SurfaceInputs = {
   smiles: Smiles | null;
   volShift: number;
   skewBeta: boolean;
+  entryOverride?: number | null;
 };
 
 export function useHeatmap(inputs: SurfaceInputs | null, onResult: (r: HeatmapResult) => void) {
@@ -35,6 +36,11 @@ export function useHeatmap(inputs: SurfaceInputs | null, onResult: (r: HeatmapRe
       if (event.data.id === seqRef.current) onResultRef.current(event.data);
     };
     workerRef.current = worker;
+    // A fresh worker has no pending request. Reset the input-dedupe key so
+    // the next inputs effect re-posts — otherwise StrictMode's effect replay
+    // (terminate worker A, create worker B) leaves B idle forever because
+    // the key ref says the request was "already sent" (to the dead worker).
+    lastKeyRef.current = "";
     return () => {
       worker.terminate();
       workerRef.current = null;
@@ -60,6 +66,7 @@ export function useHeatmap(inputs: SurfaceInputs | null, onResult: (r: HeatmapRe
       smileKey,
       volShift,
       skewBeta,
+      inputs.entryOverride ?? null,
     ]);
     if (key === lastKeyRef.current) return;
     lastKeyRef.current = key;
@@ -89,6 +96,7 @@ export function useHeatmap(inputs: SurfaceInputs | null, onResult: (r: HeatmapRe
       smiles,
       volShift,
       skewBeta,
+      entryOverride: inputs.entryOverride ?? null,
     };
     workerRef.current?.postMessage(request);
   }, [inputs]);

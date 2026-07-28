@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { AccountPage } from "./components/Account/AccountPage";
 import { Header } from "./components/Header";
 import { CandlePane } from "./components/Chart/CandlePane";
 import { ChartControls } from "./components/Chart/ChartControls";
@@ -11,6 +12,7 @@ import { useDesigner } from "./lib/useDesigner";
 import { useAccountStore } from "./store/accountStore";
 import { useStrategyStore } from "./store/strategyStore";
 import { useTradingStore } from "./store/tradingStore";
+import { useUiStore } from "./store/uiStore";
 
 const MIN_WIDTH = 1280;
 
@@ -72,6 +74,7 @@ export default function App() {
   const locked = useViewportLock();
   useDataPumps();
   const designer = useDesigner();
+  const view = useUiStore((s) => s.view);
 
   if (locked && !UNLOCKED) return <ViewportLockout />;
 
@@ -79,21 +82,27 @@ export default function App() {
     <div className="flex h-full flex-col gap-px bg-bb-black p-px">
       <Header />
 
-      <main className="panel flex min-h-0 flex-1 flex-col">
-        <ChartControls />
-        <div className="min-h-0 flex-1">
-          <CandlePane />
-        </div>
-      </main>
+      {view === "account" ? (
+        <AccountPage />
+      ) : (
+        <>
+          <main className="panel flex min-h-0 flex-1 flex-col">
+            <ChartControls />
+            <div className="min-h-0 flex-1">
+              <CandlePane />
+            </div>
+          </main>
 
-      <PositionsDrawer />
+          <PositionsDrawer />
 
-      <section className="grid h-64 shrink-0 grid-cols-4 gap-px">
-        <StrategyPanel designer={designer} />
-        <SizingPanel designer={designer} />
-        <ProbabilityPanel designer={designer} />
-        <OrderPanel designer={designer} />
-      </section>
+          <section className="grid h-64 shrink-0 grid-cols-4 gap-px">
+            <StrategyPanel designer={designer} />
+            <SizingPanel designer={designer} />
+            <ProbabilityPanel designer={designer} />
+            <OrderPanel designer={designer} />
+          </section>
+        </>
+      )}
     </div>
   );
 }

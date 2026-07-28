@@ -34,6 +34,8 @@ export function useMonteCarlo(
       }
     };
     workerRef.current = worker;
+    // Same StrictMode guard as useHeatmap: a new worker needs a re-post.
+    lastKeyRef.current = "";
     return () => {
       worker.terminate();
       workerRef.current = null;

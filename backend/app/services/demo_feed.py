@@ -25,21 +25,22 @@ def _seed(symbol: str) -> random.Random:
 
 
 def synth_history(symbol: str, days: int = 3) -> list[dict]:
-    """Random-walk 1m bars across the last `days` regular sessions."""
+    """Random-walk 1m bars across the LAST `days` sessions ENDING TODAY —
+    today's intraday bars must exist so entry-anchored position views (and
+    anything else time-addressed) land on real bars, not in a gap."""
     rng = _seed(symbol)
     price = BASE_PRICES.get(symbol, 50 + (hash(symbol) % 400))
     vol = price * 0.00035  # per-minute sigma
     bars: list[dict] = []
     now = datetime.now(timezone.utc)
-    day = now.date() - timedelta(days=14)
-    sessions = 0
-    while sessions < days:
-        day += timedelta(days=1)
-        if day.weekday() >= 5:
-            continue
-        if datetime.combine(day, datetime.min.time(), tzinfo=timezone.utc) > now:
-            break
-        sessions += 1
+    session_days: list = []
+    cursor = now.date()
+    while len(session_days) < days:
+        if cursor.weekday() < 5:
+            session_days.append(cursor)
+        cursor -= timedelta(days=1)
+    session_days.reverse()
+    for day in session_days:
         start = datetime.combine(day, datetime.min.time(), tzinfo=timezone.utc).replace(
             hour=RTH_START_H, minute=30
         )

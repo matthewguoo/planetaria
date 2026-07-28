@@ -14,8 +14,11 @@ import {
   type ScenarioModel,
   type Smiles,
 } from "../../lib/optionsMath";
+import { buildPositionView } from "../../lib/positionView";
 import { useHeatmap } from "../../lib/useHeatmap";
+import { useAccountStore } from "../../store/accountStore";
 import { TF_MS, useTradingStore } from "../../store/tradingStore";
+import { useUiStore } from "../../store/uiStore";
 import {
   availableStrikes,
   buildLegs,
@@ -101,7 +104,31 @@ type StrategyOverlay = {
   /** Precomputed scenario model — the ONE pricing function shared by the
    * surface, contours, tooltip, and exit-drag inverse mapping. */
   model: ScenarioModel;
+  /** Position view: overlay is a live plan, not the designer — no editing. */
+  readOnly: boolean;
+  /** Position view: surface time anchor (entry timestamp, ms); null = now. */
+  anchorMs: number | null;
+  /** Position view: P/L basis (actual fill premium); null = leg net entry. */
+  entryBasis: number | null;
 };
+
+/** Bar index the surface's t=0 column maps to: entry bar for a position
+ * view (clamped into the loaded range), else the latest bar. */
+function anchorIndexFor(bars: Bars, overlay: StrategyOverlay | null): number {
+  const nowIdx = Math.max(bars.n - 1, 0);
+  if (!overlay || overlay.anchorMs === null || !bars.n) return nowIdx;
+  const target = overlay.anchorMs;
+  if (target <= bars.t[0]) return 0;
+  if (target >= bars.t[nowIdx]) return nowIdx;
+  let lo = 0;
+  let hi = nowIdx;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (bars.t[mid] < target) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
+}
 
 type DragTarget =
   | { kind: "strike"; i: number }
@@ -200,7 +227,52 @@ export function CandlePane() {
 
   // ------------------------------------------------- strategy derivations
 
+  const viewingPlanId = useUiStore((s) => s.viewingPlanId);
+  const pnlMode = useUiStore((s) => s.pnlMode);
+  const positions = useAccountStore((s) => s.positions);
+  const viewingPlan = viewingPlanId
+    ? positions.find((p) => p.id === viewingPlanId) ?? null
+    : null;
+
   const overlay: StrategyOverlay | null = useMemo(() => {
+    // POSITION VIEW: chart inspects a live plan (legs + rules), read-only,
+    // anchored at entry, P/L measured against the actual fill premium.
+    if (viewingPlan) {
+      const positionView = buildPositionView(viewingPlan, chain, pnlMode);
+      if (positionView) {
+        const spot = quote?.mid || chain?.spot || 0;
+        const live = pnlMode === "live";
+        const entry = positionView.entryBasis;
+        const shift = live ? volShift : 0;
+        const beta = live ? skewBeta : false;
+        return {
+          legs: positionView.legs,
+          strikes: positionView.strikes,
+          strikeSides: positionView.strikeSides,
+          strikeRights: positionView.strikeRights,
+          ratios: positionView.ratios,
+          snapStrikes: [],
+          hoursToExpiry: positionView.hoursTotal,
+          timeStopHours: positionView.timeStopHours,
+          tpPremium: positionView.tpPremium,
+          slPremium: positionView.slPremium,
+          tpPct:
+            Math.abs(entry) >= 0.01 ? (positionView.tpPremium - entry) / Math.abs(entry) : 0,
+          slPct:
+            Math.abs(entry) >= 0.01 ? (entry - positionView.slPremium) / Math.abs(entry) : 0,
+          entry,
+          sigma: positionIv(positionView.legs),
+          spot,
+          smiles: positionView.smiles,
+          volShift: shift,
+          skewBeta: beta,
+          model: makeScenarioModel(positionView.smiles, spot, shift, beta),
+          readOnly: true,
+          anchorMs: positionView.anchorMs,
+          entryBasis: entry,
+        };
+      }
+    }
     const legs = buildLegs({ chain, expiry, kind, strikes, ratios });
     if (!chain || !expiry) return null;
     const spot = quote?.mid || chain.spot;
@@ -241,8 +313,11 @@ export function CandlePane() {
       volShift,
       skewBeta,
       model: makeScenarioModel(smileFromChain(chain, expiry), spot, volShift, skewBeta),
+      readOnly: false,
+      anchorMs: null,
+      entryBasis: null,
     };
-  }, [chain, expiry, kind, strikes, ratios, tpPct, slPct, timeStopEt, quote, volShift, skewBeta]);
+  }, [chain, expiry, kind, strikes, ratios, tpPct, slPct, timeStopEt, quote, volShift, skewBeta, viewingPlan, pnlMode]);
 
   overlayRef.current = overlay;
 
@@ -293,6 +368,7 @@ export function CandlePane() {
       smiles: overlay.smiles,
       volShift: overlay.volShift,
       skewBeta: overlay.skewBeta,
+      entryOverride: overlay.entryBasis,
     };
   }, [overlay]);
 
@@ -373,7 +449,7 @@ export function CandlePane() {
   const hitTestStrike = useCallback((y: number): number | null => {
     const overlayNow = overlayRef.current;
     const wrap = wrapRef.current;
-    if (!overlayNow || !overlayNow.strikes.length || !wrap) return null;
+    if (!overlayNow || overlayNow.readOnly || !overlayNow.strikes.length || !wrap) return null;
     const layout = computeLayout(wrap.clientWidth, wrap.clientHeight);
     const domain = currentDomain(barsRef.current, viewRef.current, overlayNow, surfaceRef.current);
     let best: number | null = null;
@@ -392,7 +468,7 @@ export function CandlePane() {
   const hitTestRail = useCallback((x: number, y: number): number | null => {
     const overlayNow = overlayRef.current;
     const wrap = wrapRef.current;
-    if (!overlayNow || !overlayNow.strikes.length || !wrap) return null;
+    if (!overlayNow || overlayNow.readOnly || !overlayNow.strikes.length || !wrap) return null;
     const layout = computeLayout(wrap.clientWidth, wrap.clientHeight);
     if (Math.abs(x - (layout.plotW - RAIL_INSET)) > RAIL_HIT_PX) return null;
     const domain = currentDomain(barsRef.current, viewRef.current, overlayNow, surfaceRef.current);
@@ -413,17 +489,17 @@ export function CandlePane() {
     const overlayNow = overlayRef.current;
     const surface = surfaceRef.current;
     const wrap = wrapRef.current;
-    if (!overlayNow?.legs || !surface || !wrap) return null;
+    if (!overlayNow?.legs || overlayNow.readOnly || !surface || !wrap) return null;
     const layout = computeLayout(wrap.clientWidth, wrap.clientHeight);
     const domain = currentDomain(barsRef.current, viewRef.current, overlayNow, surfaceRef.current);
     const view = viewRef.current;
-    const n = barsRef.current.n;
+    const anchorIdx = anchorIndexFor(barsRef.current, overlayNow);
     const tfMinutes = TF_MS[useTradingStore.getState().tf] / 60000;
     if (y > layout.volTop) return null;
-    const xTs = indexToX(futureIndex(overlayNow.timeStopHours, n, tfMinutes), view, layout);
+    const xTs = indexToX(futureIndex(overlayNow.timeStopHours, anchorIdx, tfMinutes), view, layout);
     if (Math.abs(x - xTs) <= 6) return "timestop";
-    const x0 = indexToX(n - 1, view, layout);
-    const xExp = indexToX(futureIndex(surface.hoursToExpiry, n, tfMinutes), view, layout);
+    const x0 = indexToX(anchorIdx, view, layout);
+    const xExp = indexToX(futureIndex(surface.hoursToExpiry, anchorIdx, tfMinutes), view, layout);
     if (x < x0 || x > xExp || xExp <= x0) return null;
     const ti = Math.max(
       0,
@@ -444,7 +520,7 @@ export function CandlePane() {
       const overlayNow = overlayRef.current;
       const wrap = wrapRef.current;
       const canvas = canvasRef.current;
-      if (!overlayNow || !overlayNow.strikes.length || !wrap || !canvas) return null;
+      if (!overlayNow || overlayNow.readOnly || !overlayNow.strikes.length || !wrap || !canvas) return null;
       const layout = computeLayout(wrap.clientWidth, wrap.clientHeight);
       const domain = currentDomain(barsRef.current, viewRef.current, overlayNow, surfaceRef.current);
       const ctx = canvas.getContext("2d")!;
@@ -573,10 +649,10 @@ export function CandlePane() {
           } else if (target.kind === "timestop") {
             // Drag the force-exit time horizontally; snapped to 5 minutes,
             // clamped inside [now+5m, 15:55 ET] and before expiry.
-            const n = barsRef.current.n;
+            const anchorIdx = anchorIndexFor(barsRef.current, overlayNow);
             const tfMinutes = TF_MS[useTradingStore.getState().tf] / 60000;
             const idx = xToIndex(x, viewRef.current, layout);
-            const hours = ((idx - (n - 1)) * tfMinutes) / 60;
+            const hours = ((idx - anchorIdx) * tfMinutes) / 60;
             const nowMin = currentEtMinutes();
             const maxMin = Math.min(15 * 60 + 55, nowMin + overlayNow.hoursToExpiry * 60);
             const targetMin = Math.max(
@@ -590,11 +666,11 @@ export function CandlePane() {
             // TP/SL drag: invert price@time back to a premium level with the
             // SAME smile-aware pricing the contours use, then store as %.
             const surface = surfaceRef.current;
-            const n = barsRef.current.n;
+            const anchorIdx = anchorIndexFor(barsRef.current, overlayNow);
             const tfMinutes = TF_MS[useTradingStore.getState().tf] / 60000;
             const hte = surface?.hoursToExpiry ?? overlayNow.hoursToExpiry;
             const idx = xToIndex(x, viewRef.current, layout);
-            const hours = Math.max(0, Math.min(((idx - (n - 1)) * tfMinutes) / 60, hte));
+            const hours = Math.max(0, Math.min(((idx - anchorIdx) * tfMinutes) / 60, hte));
             const tau = Math.max(hte - hours, 0) / TRADING_HOURS_PER_YEAR;
             const price = yToPrice(y, domain, layout);
             if (price > 0) {
@@ -724,8 +800,10 @@ function currentDomain(
   return extendDomain(base, levels);
 }
 
-function futureIndex(hoursFromNow: number, n: number, tfMinutes: number): number {
-  return n - 1 + (hoursFromNow * 60) / tfMinutes;
+/** Bar-index offset from the surface anchor (entry bar in position view,
+ * latest bar in designer view) in trading time. */
+function futureIndex(hoursFromAnchor: number, anchorIdx: number, tfMinutes: number): number {
+  return anchorIdx + (hoursFromAnchor * 60) / tfMinutes;
 }
 
 function render(
@@ -756,12 +834,13 @@ function render(
   const barW = layout.plotW / view.barsVisible;
   const bodyW = Math.max(1, Math.min(barW * 0.7, 14));
 
+  const anchorIdx = anchorIndexFor(bars, overlay);
   drawPriceGrid(ctx, layout, domain);
-  drawTimeAxis(ctx, layout, bars, view, first, last, overlay, tfMinutes);
+  drawTimeAxis(ctx, layout, bars, view, first, last, overlay, tfMinutes, anchorIdx);
 
   // Heatmap first: background layer in the future region.
   if (overlay?.legs && surface) {
-    drawHeatmap(ctx, layout, bars, view, domain, overlay, surface, tfMinutes, dragTarget);
+    drawHeatmap(ctx, layout, bars, view, domain, overlay, surface, tfMinutes, dragTarget, anchorIdx);
   }
 
   drawVolume(ctx, layout, bars, view, first, last);
@@ -795,7 +874,7 @@ function render(
   if (mouse && mouse.x <= layout.plotW && mouse.y <= layout.plotH) {
     drawCrosshair(ctx, layout, bars, view, domain, mouse);
     if (overlay?.legs && surface) {
-      drawPlTooltip(ctx, layout, bars, view, domain, overlay, surface, mouse, tfMinutes);
+      drawPlTooltip(ctx, layout, view, domain, overlay, surface, mouse, tfMinutes, anchorIdx);
     }
   }
 }
@@ -805,18 +884,17 @@ function render(
 function drawPlTooltip(
   ctx: CanvasRenderingContext2D,
   layout: Layout,
-  bars: Bars,
   view: ViewState,
   domain: [number, number],
   overlay: StrategyOverlay,
   surface: HeatmapResult,
   mouse: { x: number; y: number },
   tfMinutes: number,
+  anchorIdx: number,
 ) {
   if (mouse.y > layout.volTop) return;
-  const n = bars.n;
   const idx = xToIndex(mouse.x, view, layout);
-  const hours = ((idx - (n - 1)) * tfMinutes) / 60;
+  const hours = ((idx - anchorIdx) * tfMinutes) / 60;
   if (hours < 0 || hours > surface.hoursToExpiry) return;
   const price = yToPrice(mouse.y, domain, layout);
   if (price <= 0) return;
@@ -904,14 +982,14 @@ function drawHeatmap(
   surface: HeatmapResult,
   tfMinutes: number,
   dragTarget: DragTarget | null,
+  anchorIdx: number,
 ) {
-  const n = bars.n;
   const risk = Math.max(
     overlay.slPremium !== null ? (overlay.entry - overlay.slPremium) * 100 : 100,
     1,
   );
-  const x0 = indexToX(n - 1, view, layout);
-  const xExpiry = indexToX(futureIndex(surface.hoursToExpiry, n, tfMinutes), view, layout);
+  const x0 = indexToX(anchorIdx, view, layout);
+  const xExpiry = indexToX(futureIndex(surface.hoursToExpiry, anchorIdx, tfMinutes), view, layout);
   if (xExpiry <= x0) return;
 
   const { priceLo, priceHi } = surface;
@@ -933,7 +1011,7 @@ function drawHeatmap(
   const { timeSteps } = surface;
   const colW = (xExpiry - x0) / timeSteps;
   const xTs = indexToX(
-    futureIndex(Math.min(overlay.timeStopHours, surface.hoursToExpiry), n, tfMinutes),
+    futureIndex(Math.min(overlay.timeStopHours, surface.hoursToExpiry), anchorIdx, tfMinutes),
     view, layout,
   );
 
@@ -1023,7 +1101,13 @@ function drawHeatmap(
     ctx.fillText(text, x, 4);
   };
   vline(xExpiry, COLORS.expiry, "EXPIRY");
-  vline(xTs, COLORS.timeStop, "⇔ TIME STOP", dragTarget?.kind === "timestop" ? 2.4 : 1.2);
+  vline(
+    xTs,
+    COLORS.timeStop,
+    overlay.readOnly ? "TIME STOP" : "⇔ TIME STOP",
+    dragTarget?.kind === "timestop" ? 2.4 : 1.2,
+  );
+  if (overlay.readOnly) vline(x0, "#9c8cff", "ENTRY", 1.2);
 
   // Terminal density strip along the expiry line (model-implied lognormal).
   if (overlay.sigma > 0 && overlay.spot > 0 && xExpiry > 0 && xExpiry <= layout.plotW) {
@@ -1078,7 +1162,8 @@ function drawStrikes(
     ctx.setLineDash([]);
   });
   // Chips: [−] ±ratio right strike [+] — click zones edit contracts, the
-  // middle (or the line/rail handle) drags the strike.
+  // middle (or the line/rail handle) drags the strike. Read-only (position
+  // view): plain labels, no edit affordances.
   for (const rect of computeChipRects(ctx, layout, domain, overlay)) {
     const isShort = overlay.strikeSides[rect.i] < 0;
     const color = isShort ? COLORS.strikeShort : COLORS.strike;
@@ -1089,9 +1174,11 @@ function drawStrikes(
     ctx.strokeRect(rect.x, rect.y - CHIP_H / 2, rect.w, CHIP_H);
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-    ctx.fillStyle = COLORS.axisText;
-    ctx.fillText("−", rect.x + CHIP_ZONE / 2 + 1, rect.y);
-    ctx.fillText("+", rect.x + rect.w - CHIP_ZONE / 2 - 1, rect.y);
+    if (!overlay.readOnly) {
+      ctx.fillStyle = COLORS.axisText;
+      ctx.fillText("−", rect.x + CHIP_ZONE / 2 + 1, rect.y);
+      ctx.fillText("+", rect.x + rect.w - CHIP_ZONE / 2 - 1, rect.y);
+    }
     ctx.fillStyle = color;
     ctx.fillText(rect.label, rect.x + rect.w / 2, rect.y);
   }
@@ -1106,6 +1193,7 @@ function drawRail(
   overlay: StrategyOverlay,
   draggingStrike: number | null,
 ) {
+  if (overlay.readOnly) return; // position view: strikes aren't editable
   const railX = layout.plotW - RAIL_INSET;
   ctx.strokeStyle = "#2a2a2a";
   ctx.lineWidth = 1;
@@ -1206,6 +1294,7 @@ function drawTimeAxis(
   last: number,
   overlay: StrategyOverlay | null,
   tfMinutes: number,
+  anchorIdx: number,
 ) {
   const targetPx = 90;
   const step = Math.max(1, Math.round((view.barsVisible * targetPx) / layout.plotW));
@@ -1229,7 +1318,7 @@ function drawTimeAxis(
     const hteCeil = Math.ceil(overlay.hoursToExpiry);
     const hourStep = overlay.hoursToExpiry > 14 ? 6.5 : 1;
     for (let h = hourStep; h < hteCeil; h += hourStep) {
-      const x = indexToX(futureIndex(h, bars.n, tfMinutes), view, layout);
+      const x = indexToX(futureIndex(h, anchorIdx, tfMinutes), view, layout);
       if (x < 0 || x > layout.plotW) continue;
       const label = hourStep === 6.5 ? `+${Math.round(h / 6.5)}d` : `+${h}h`;
       ctx.fillText(label, x, layout.plotH + 6);

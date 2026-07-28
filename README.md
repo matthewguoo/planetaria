@@ -57,6 +57,21 @@ Broker positions with no plan (placed elsewhere, or predating the DB) are
 surfaced as **UNTRACKED** in the positions drawer and can be **adopted**:
 grouped per underlying into a managed plan with TP/SL/time-stop enforcement.
 
+### Account dashboard & position views
+
+The ACCOUNT view is the broker dashboard for the connected (paper) account:
+equity/cash/buying-power/day-P&L cards, the Alpaca equity curve
+(1D/1W/1M/3M/1A), all positions (managed + untracked, with adopt/close),
+live open orders (with cancel), and closed-trade history. Clicking any
+position opens it ON THE CHART as a read-only position view: the P/L
+surface anchors at the ENTRY bar (spanning entry -> expiry over the actual
+price path and into the future), P/L is measured against the actual fill
+premium, and the plan's TP/SL contours and time stop render as its real
+boundaries. A toggle switches the basis between **ENTRY PROJ** (leg IVs
+frozen from the fill — the projection you signed up for) and **LIVE
+GREEKS** (legs re-marked from the latest chain smile, scenario shocks
+apply — what it's worth now).
+
 ### Strategy presets
 
 All common single-expiry structures are built in: long call/put, debit and
