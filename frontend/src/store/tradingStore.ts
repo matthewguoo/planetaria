@@ -23,6 +23,7 @@ export const TF_MS: Record<Timeframe, number> = {
 export type IndicatorToggles = {
   heat: boolean; // P/L heatmap surface
   sim: boolean; // on-chart probability / Monte Carlo stats
+  theta: boolean; // theta-sell overlay: expected-move cone + templates
   vwap: boolean;
   ema: boolean;
   bb: boolean;
@@ -46,7 +47,7 @@ export const useTradingStore = create<TradingState>((set) => ({
   tf: "1m",
   quote: null,
   status: { configured: false, demo: false, sources: {}, redis: false, stream_age_s: null, connection: "connecting" },
-  indicators: { heat: true, sim: true, vwap: true, ema: false, bb: false },
+  indicators: { heat: true, sim: true, theta: false, vwap: true, ema: false, bb: false },
   setSymbol: (symbol) => set({ symbol: symbol.toUpperCase(), quote: null }),
   setTf: (tf) => set({ tf }),
   setQuote: (quote) => set({ quote }),

@@ -273,3 +273,120 @@ describe("custom leg composition (chain-panel clicks)", () => {
     expect(s.sides).toEqual([1, -1, -1, 1]);
   });
 });
+
+describe("theta-sell templates", () => {
+  const spot = 450;
+  const expiry = "2099-01-15";
+  const callDeltas: Record<number, number> = {
+    455: 0.4, 460: 0.3, 465: 0.25, 470: 0.16, 475: 0.1, 480: 0.06, 485: 0.04, 490: 0.03,
+  };
+  const putDeltas: Record<number, number> = {
+    445: -0.4, 440: -0.3, 435: -0.25, 430: -0.16, 425: -0.1, 420: -0.06, 415: -0.04, 410: -0.03,
+  };
+  const contracts = [];
+  for (let k = 405; k <= 495; k += 5) {
+    for (const right of ["C", "P"] as const) {
+      const delta = right === "C" ? (callDeltas[k] ?? (k <= spot ? 0.7 : 0.02)) : (putDeltas[k] ?? (k >= spot ? -0.7 : -0.02));
+      contracts.push({
+        symbol: `X${right}${k}`, right, strike: k, expiry,
+        bid: 1, ask: 1.1, mid: 1.05, iv: 0.2, delta,
+      });
+    }
+  }
+  const chain = {
+    underlying: "SPY", spot, asof: Date.now(), expirations: [expiry], contracts, demo: true,
+  } as never;
+
+  function primed() {
+    useStrategyStore.setState({ chain, expiry, tpPct: 1.0, slPct: 0.5, timeStopEt: "15:50" });
+  }
+
+  it("IC 16Δ sells the 16-delta strikes with wings one width out", () => {
+    primed();
+    expect(useStrategyStore.getState().applyThetaTemplate("ic16")).toBe(true);
+    const s = useStrategyStore.getState();
+    expect(s.strikes).toEqual([425, 430, 470, 475]);
+    expect(s.rights).toEqual(["P", "P", "C", "C"]);
+    expect(s.sides).toEqual([1, -1, -1, 1]);
+    expect(s.modified).toBe(true);
+    expect(s.tpPct).toBe(0.5);
+    expect(s.slPct).toBe(1.0);
+    expect(s.timeStopEt).toBe("15:45");
+  });
+
+  it("IC 25Δ picks tighter shorts", () => {
+    primed();
+    useStrategyStore.getState().applyThetaTemplate("ic25");
+    expect(useStrategyStore.getState().strikes).toEqual([430, 435, 465, 470]);
+  });
+
+  it("put credit spread: long wing below the short put", () => {
+    primed();
+    useStrategyStore.getState().applyThetaTemplate("pcs16");
+    const s = useStrategyStore.getState();
+    expect(s.strikes).toEqual([425, 430]);
+    expect(s.sides).toEqual([1, -1]);
+    expect(s.rights).toEqual(["P", "P"]);
+  });
+
+  it("call credit spread: long wing above the short call", () => {
+    primed();
+    useStrategyStore.getState().applyThetaTemplate("ccs16");
+    const s = useStrategyStore.getState();
+    expect(s.strikes).toEqual([470, 475]);
+    expect(s.sides).toEqual([-1, 1]);
+  });
+
+  it("short strangle has no wings and both legs short", () => {
+    primed();
+    useStrategyStore.getState().applyThetaTemplate("strangle16");
+    const s = useStrategyStore.getState();
+    expect(s.strikes).toEqual([430, 470]);
+    expect(s.sides).toEqual([-1, -1]);
+    expect(s.rights).toEqual(["P", "C"]);
+  });
+
+  it("fails gracefully with no chain", () => {
+    useStrategyStore.setState({ chain: null });
+    expect(useStrategyStore.getState().applyThetaTemplate("ic16")).toBe(false);
+  });
+
+  it("slPct clamp allows credit-style stops up to 300%", () => {
+    useStrategyStore.getState().setSlPct(2.0);
+    expect(useStrategyStore.getState().slPct).toBe(2.0);
+    useStrategyStore.getState().setSlPct(9);
+    expect(useStrategyStore.getState().slPct).toBe(3.0);
+  });
+});
+
+describe("theta template expiry roll-forward", () => {
+  it("skips a dead 0DTE (step-function deltas) and resolves the next expiry", () => {
+    const spot = 450;
+    const dead = "2099-01-14";
+    const live = "2099-01-15";
+    const contracts: object[] = [];
+    for (let k = 405; k <= 495; k += 5) {
+      for (const right of ["C", "P"] as const) {
+        // Dead expiry: binary deltas (tau=0). Live expiry: usable ones.
+        const itm = right === "C" ? k < spot : k > spot;
+        contracts.push({ symbol: `D${right}${k}`, right, strike: k, expiry: dead,
+          bid: 1, ask: 1.1, mid: 1.05, iv: 0.2,
+          delta: right === "C" ? (itm ? 1 : 0) : (itm ? -1 : 0) });
+        const dist = Math.abs(k - spot);
+        const mag = Math.max(0.02, 0.5 - dist * 0.017);
+        contracts.push({ symbol: `L${right}${k}`, right, strike: k, expiry: live,
+          bid: 1, ask: 1.1, mid: 1.05, iv: 0.2,
+          delta: right === "C" ? (k <= spot ? 0.7 : mag) : (k >= spot ? -0.7 : -mag) });
+      }
+    }
+    useStrategyStore.setState({
+      chain: { underlying: "SPY", spot, asof: Date.now(), expirations: [dead, live], contracts, demo: true } as never,
+      expiry: dead,
+    });
+    expect(useStrategyStore.getState().applyThetaTemplate("ic16")).toBe(true);
+    const s = useStrategyStore.getState();
+    expect(s.expiry).toBe(live);
+    expect(s.strikes).toHaveLength(4);
+    expect(s.sides).toEqual([1, -1, -1, 1]);
+  });
+});

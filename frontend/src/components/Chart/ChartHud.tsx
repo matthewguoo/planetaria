@@ -9,15 +9,17 @@
 import { useMemo, useRef, useState } from "react";
 import { computeAtr, realizedVolAnnualized } from "../../lib/indicators";
 import type { McResult } from "../../lib/mcSim";
+import { bsThetaPerDay, structuralMaxLoss, TRADING_HOURS_PER_YEAR } from "../../lib/optionsMath";
 import { useMonteCarlo, type McInputs } from "../../lib/useMonteCarlo";
 import type { Designer } from "../../lib/useDesigner";
-import { useStrategyStore } from "../../store/strategyStore";
+import { THETA_TEMPLATES, useStrategyStore } from "../../store/strategyStore";
 import { TF_MS, useTradingStore } from "../../store/tradingStore";
 import type { Bars } from "./scales";
 
 const TOGGLES = [
   { key: "heat", label: "HEAT", title: "P/L heatmap surface (price × time)" },
   { key: "sim", label: "SIM", title: "Probability + Monte Carlo readout" },
+  { key: "theta", label: "THETA", title: "Theta-sell overlay: expected-move cone + delta-targeted premium-selling templates" },
   { key: "vwap", label: "VWAP", title: "Session-anchored VWAP" },
   { key: "ema", label: "EMA", title: "EMA 9 / 21" },
   { key: "bb", label: "BB", title: "Bollinger 20 × 2σ" },
@@ -33,6 +35,86 @@ function StatRow({ label, value, cls }: { label: string; value: string; cls?: st
       <span data-numeric className={cls ?? "text-white"}>
         {value}
       </span>
+    </div>
+  );
+}
+
+/** Theta-sell block: delta-targeted templates + credit-selling metrics.
+ * Templates resolve short strikes by |delta| from the LIVE chain. */
+function ThetaBlock({ designer }: { designer: Designer }) {
+  const applyThetaTemplate = useStrategyStore((s) => s.applyThetaTemplate);
+  const chain = useStrategyStore((s) => s.chain);
+  const [failed, setFailed] = useState<string | null>(null);
+
+  const isCredit = designer.ready && designer.entry < 0;
+  const credit = isCredit ? Math.abs(designer.entry) * 100 : 0;
+  const structural = designer.legs ? structuralMaxLoss(designer.legs) : null;
+  const maxLoss = structural !== null ? Math.abs(structural) * 100 : null;
+  const width = maxLoss !== null ? maxLoss + credit : null; // wing width $
+  const tau = designer.hoursToExpiry / TRADING_HOURS_PER_YEAR;
+  // Per contract SET (like CREDIT/SET) — qty may still be 0 pre-sizing.
+  const thetaDay = designer.legs
+    ? designer.legs.reduce(
+        (acc, leg) =>
+          acc +
+          leg.side * leg.qty * 100 * bsThetaPerDay(designer.spot, leg.strike, tau, leg.iv, leg.right),
+        0,
+      )
+    : 0;
+  // Expected move to expiry (1σ) vs the nearest short strike.
+  const sigma = designer.probabilities?.sigmaUsed ?? 0;
+  const em = designer.spot > 0 && sigma > 0 ? designer.spot * sigma * Math.sqrt(Math.max(tau, 0)) : 0;
+  const shortStrikes = (designer.legs ?? []).filter((l) => l.side < 0).map((l) => l.strike);
+  const minShortDist = shortStrikes.length
+    ? Math.min(...shortStrikes.map((k) => Math.abs(k - designer.spot)))
+    : null;
+  const insideEm = minShortDist !== null && em > 0 && minShortDist < em;
+
+  return (
+    <div className="pointer-events-auto flex flex-col gap-0.5 border border-bb-border/60 bg-black/75 px-1.5 py-1">
+      <div className="flex flex-wrap gap-px">
+        {THETA_TEMPLATES.map((t) => (
+          <button
+            key={t.id}
+            disabled={!chain}
+            title={t.title}
+            onClick={() => setFailed(applyThetaTemplate(t.id) ? null : t.label)}
+            className="border border-bb-border px-1 py-0.5 text-bb-muted hover:text-bb-amber disabled:opacity-30"
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+      {failed && (
+        <span className="text-bb-loss">couldn't resolve {failed} — no OTM deltas in chain</span>
+      )}
+      {isCredit ? (
+        <>
+          <StatRow label="CREDIT/SET" value={`$${credit.toFixed(0)}`} cls="text-bb-profit" />
+          {width !== null && width > 0 && (
+            <StatRow
+              label="CREDIT/WIDTH"
+              value={`${((credit / width) * 100).toFixed(0)}%`}
+              cls={credit / width >= 0.25 ? "text-bb-profit" : "text-bb-orange"}
+            />
+          )}
+          <StatRow
+            label="THETA/DAY/SET"
+            value={usd(thetaDay)}
+            cls={thetaDay >= 0 ? "text-bb-profit" : "text-bb-loss"}
+          />
+          {em > 0 && (
+            <StatRow label="EXP MOVE ±" value={`$${em.toFixed(2)}`} cls="text-bb-amber" />
+          )}
+          {insideEm && (
+            <span className="leading-tight text-bb-orange" title="A short strike sits closer than one expected move (1σ to expiry) — high touch probability">
+              ⚠ SHORT STRIKE INSIDE EXPECTED MOVE
+            </span>
+          )}
+        </>
+      ) : (
+        <span className="text-bb-muted">pick a template — current position is not net credit</span>
+      )}
     </div>
   );
 }
@@ -150,6 +232,8 @@ export function ChartHud({
           {ivRv !== null && ` · ${ivRv >= 0 ? "+" : ""}${(ivRv * 100).toFixed(1)}pt`}
         </span>
       </div>
+
+      {indicators.theta && <ThetaBlock designer={designer} />}
 
       {indicators.sim && designer.ready && p && (
         <div

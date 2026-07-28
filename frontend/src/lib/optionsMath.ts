@@ -65,6 +65,43 @@ export function bsPrice(
   return K * Math.exp(-r * tau) * normCdf(-d2) - S * normCdf(-d1);
 }
 
+export function bsDelta(
+  S: number,
+  K: number,
+  tau: number,
+  sigma: number,
+  right: Right,
+  r: number = RISK_FREE,
+): number {
+  if (tau <= 0 || sigma <= 0 || S <= 0) {
+    if (right === "C") return S > K ? 1 : 0;
+    return S < K ? -1 : 0;
+  }
+  const d1 = (Math.log(S / K) + (r + 0.5 * sigma * sigma) * tau) / (sigma * Math.sqrt(tau));
+  return right === "C" ? normCdf(d1) : normCdf(d1) - 1;
+}
+
+/** BS theta per TRADING day (negative = decay), per share. Mirrors the
+ * backend's bs_greeks theta_day. */
+export function bsThetaPerDay(
+  S: number,
+  K: number,
+  tau: number,
+  sigma: number,
+  right: Right,
+  r: number = RISK_FREE,
+): number {
+  if (S <= 0 || tau <= 0 || sigma <= 0) return 0;
+  const sq = sigma * Math.sqrt(tau);
+  const d1 = (Math.log(S / K) + (r + 0.5 * sigma * sigma) * tau) / sq;
+  const d2 = d1 - sq;
+  const decay = -(S * normPdf(d1) * sigma) / (2 * Math.sqrt(tau));
+  const disc = Math.exp(-r * tau);
+  const theta =
+    right === "C" ? decay - r * K * disc * normCdf(d2) : decay + r * K * disc * normCdf(-d2);
+  return theta / 252;
+}
+
 export function impliedVol(
   price: number,
   S: number,

@@ -891,6 +891,9 @@ function render(
   }
 
   drawIndicators(ctx, layout, bars, view, domain, first, last, indicators);
+  if (indicators.theta && overlay && overlay.sigma > 0 && overlay.spot > 0) {
+    drawExpectedMove(ctx, layout, view, domain, bars, overlay, tfMinutes);
+  }
   if (overlay) {
     drawStrikes(ctx, layout, domain, overlay, draggingStrike);
     drawRail(ctx, layout, domain, overlay, draggingStrike);
@@ -1255,6 +1258,63 @@ const IND_COLORS = {
 };
 
 /** Overlay indicator lines across the visible bar range. */
+/** Theta-sell context: ±1σ expected-move cone from NOW to expiry. Short
+ * strikes that sit inside the cone are the ones the market expects to
+ * touch — the core visual for premium selling. */
+function drawExpectedMove(
+  ctx: CanvasRenderingContext2D,
+  layout: Layout,
+  view: ViewState,
+  domain: [number, number],
+  bars: Bars,
+  overlay: StrategyOverlay,
+  tfMinutes: number,
+) {
+  const nowIdx = bars.n - 1;
+  const spot = overlay.spot;
+  const sigma = overlay.sigma;
+  const hours = overlay.hoursToExpiry;
+  if (hours <= 0) return;
+  const STEPS = 40;
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(0, 0, layout.plotW, layout.plotH);
+  ctx.clip();
+
+  const upper: [number, number][] = [];
+  const lower: [number, number][] = [];
+  for (let i = 0; i <= STEPS; i++) {
+    const h = (hours * i) / STEPS;
+    const tau = h / TRADING_HOURS_PER_YEAR;
+    const move = Math.exp(sigma * Math.sqrt(tau));
+    const x = indexToX(futureIndex(h, nowIdx, tfMinutes), view, layout);
+    upper.push([x, priceToY(spot * move, domain, layout)]);
+    lower.push([x, priceToY(spot / move, domain, layout)]);
+  }
+
+  ctx.fillStyle = "rgba(255,166,0,0.05)";
+  ctx.beginPath();
+  upper.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
+  for (let i = lower.length - 1; i >= 0; i--) ctx.lineTo(lower[i][0], lower[i][1]);
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.strokeStyle = "rgba(255,166,0,0.55)";
+  ctx.lineWidth = 1;
+  ctx.setLineDash([5, 4]);
+  for (const line of [upper, lower]) {
+    ctx.beginPath();
+    line.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
+    ctx.stroke();
+  }
+  ctx.setLineDash([]);
+  const endUp = upper[upper.length - 1];
+  ctx.fillStyle = "rgba(255,166,0,0.8)";
+  ctx.textAlign = "right";
+  ctx.fillText("±1σ EM", Math.min(endUp[0], layout.plotW) - 4, endUp[1] - 4);
+  ctx.restore();
+}
+
 function drawIndicators(
   ctx: CanvasRenderingContext2D,
   layout: Layout,

@@ -177,6 +177,31 @@ the strategy panel. All strikes everywhere are the chain API's actual
 tradeable contracts — rail drags and chain clicks snap to listed strikes
 only, never interpolated prices.
 
+### Theta-sell system
+
+The THETA chip in the HUD turns on the premium-seller's workspace:
+
+- **Delta-targeted templates** — PUT/CALL credit spread 16Δ, iron condor
+  16Δ and 25Δ, short strangle 16Δ. Short strikes are picked by |delta|
+  from the LIVE chain (the way sellers actually choose strikes — by
+  probability, not distance); wings go ~0.8% of spot further out on
+  listed strikes. If the active expiry can't resolve (0DTE after the
+  close has step-function deltas), the template rolls forward to the next
+  expiry that can. One click builds the whole structure with standard
+  mechanics pre-set: TP at 50% of the credit, stop at 100% of the credit
+  (SL % field now accepts up to 300% for credit-style stops), time stop
+  15:45 ET so nothing rides into the close.
+- **Expected-move cone** — dashed ±1σ band from now to expiry drawn on
+  the chart; short strikes inside the cone are the ones the market
+  expects to touch. The HUD warns explicitly when a short strike sits
+  inside the expected move.
+- **Seller metrics** — credit per set, credit/width (the % of the wing
+  you're paid — the seller's odds line), theta $/day per set, and the
+  expected move in dollars. The MC simulator and P(profit) then price the
+  exact TP-50%/SL-100%/time-stop mechanics path-dependently, net of
+  spread friction — the honest number for whether the structure is worth
+  selling after costs.
+
 ### Portfolio risk (account page)
 
 `GET /api/account/risk` + a PORTFOLIO RISK panel on the account page:

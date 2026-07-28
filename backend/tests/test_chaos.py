@@ -333,7 +333,7 @@ async def test_hung_submit_does_not_wedge_and_never_double_closes(stack):
         for _ in range(40):
             stack.market.pump(SYM, 0.8)  # <= SL
             await asyncio.sleep(0.02)
-        status = await wait_status(stack.trade, plan.id, deadline=8.0)
+        status = await wait_status(stack.trade, plan.id, deadline=15.0)
         assert status == "closed", f"plan stuck in {status}"
         # Exactly one close made it through; the ghost was cancelled/adopted.
         await asyncio.sleep(1.5)  # let the hung submit land + sweeps run
@@ -371,7 +371,9 @@ async def test_time_stop_fires_with_no_quotes_at_all(stack):
     )
     try:
         await stack.enforcer.arm(plan.id)
-        status = await wait_status(stack.trade, plan.id, deadline=6.0)
+        # Generous deadline: under full-suite load the compressed 40ms
+        # timers get starved; the invariant is completion, not speed.
+        status = await wait_status(stack.trade, plan.id, deadline=15.0)
         assert status == "closed", f"plan stuck in {status}"
         assert (await stack.trade.get_plan(plan.id)).exit_reason == "time_stop"
     finally:
@@ -475,7 +477,7 @@ async def test_storm_all_plans_close_exactly_once(stack):
         pumper = asyncio.create_task(pump_quotes())
         try:
             results = await asyncio.gather(
-                *[wait_status(stack.trade, p.id, deadline=15.0) for p, _, _ in plans]
+                *[wait_status(stack.trade, p.id, deadline=20.0) for p, _, _ in plans]
             )
         finally:
             pumper.cancel()

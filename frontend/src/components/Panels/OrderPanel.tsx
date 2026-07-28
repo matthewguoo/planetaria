@@ -113,7 +113,7 @@ export function OrderPanel({ designer }: { designer: Designer }) {
               type="number"
               step={5}
               min={5}
-              max={95}
+              max={300}
               className="w-14 border border-bb-border bg-black px-1 py-0.5 text-right text-[12px] text-bb-loss outline-none focus:border-bb-amber"
               value={Math.round(slPct * 100)}
               onChange={(e) => setSlPct(Number(e.target.value) / 100)}

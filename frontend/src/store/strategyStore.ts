@@ -10,7 +10,12 @@
 
 import { create } from "zustand";
 import { api } from "../lib/api";
-import { tradingHoursToExpiry, type Leg } from "../lib/optionsMath";
+import {
+  bsDelta,
+  TRADING_HOURS_PER_YEAR,
+  tradingHoursToExpiry,
+  type Leg,
+} from "../lib/optionsMath";
 
 export type Contract = {
   symbol: string;
@@ -218,10 +223,131 @@ type StrategyState = {
   setQty: (v: number) => void;
   setVolShift: (v: number) => void;
   setSkewBeta: (v: boolean) => void;
+  /** Build a delta-targeted premium-selling structure from the live chain.
+   * Returns false when the chain can't resolve it (no OTM deltas). */
+  applyThetaTemplate: (id: ThetaTemplateId) => boolean;
 };
 
 function nearestStrike(strikes: number[], target: number): number {
   return strikes.reduce((best, s) => (Math.abs(s - target) < Math.abs(best - target) ? s : best), strikes[0]);
+}
+
+// ------------------------------------------------------- theta-sell system
+
+export type ThetaTemplateId = "pcs16" | "ccs16" | "ic16" | "ic25" | "strangle16";
+
+export type ThetaTemplate = {
+  id: ThetaTemplateId;
+  label: string;
+  title: string;
+  targetDelta: number; // |delta| of the short strike
+  structure: "pcs" | "ccs" | "ic" | "strangle";
+};
+
+/** Premium-selling templates targeted by SHORT-STRIKE DELTA (probability),
+ * not strike offset — the way theta sellers actually pick strikes. ~16Δ is
+ * the classic one-standard-deviation short; 25Δ collects more for tighter
+ * strikes. Exits default to the standard mechanics: TP at 50% of the
+ * credit, stop at 100% of the credit (loss = credit received), time stop
+ * 15:45 ET so nothing rides into the close. */
+export const THETA_TEMPLATES: ThetaTemplate[] = [
+  { id: "pcs16", label: "PUT CS 16Δ", structure: "pcs", targetDelta: 0.16,
+    title: "Sell ~16Δ put + buy wing below. Bullish-neutral defined-risk income." },
+  { id: "ccs16", label: "CALL CS 16Δ", structure: "ccs", targetDelta: 0.16,
+    title: "Sell ~16Δ call + buy wing above. Bearish-neutral defined-risk income." },
+  { id: "ic16", label: "IC 16Δ", structure: "ic", targetDelta: 0.16,
+    title: "Iron condor: sell ~16Δ put AND call, wings beyond. Neutral, defined risk, max theta when price sits still." },
+  { id: "ic25", label: "IC 25Δ", structure: "ic", targetDelta: 0.25,
+    title: "Tighter iron condor at ~25Δ shorts — more credit, more touch risk." },
+  { id: "strangle16", label: "STRGL 16Δ", structure: "strangle", targetDelta: 0.16,
+    title: "Short ~16Δ strangle — UNDEFINED risk (no wings). Margin-heavy; the stop is the only protection." },
+];
+
+function contractDelta(c: Contract, spot: number, tau: number): number | null {
+  if (c.delta != null) return c.delta;
+  if (!c.iv || !spot || tau <= 0) return null;
+  return bsDelta(spot, c.strike, tau, c.iv, c.right);
+}
+
+/** Resolve a theta template into parallel leg arrays against the chain.
+ * Short strikes: OTM contract whose |delta| is closest to the target.
+ * Wings: nearest listed strike ~0.8% of spot further out (≥ 1 grid step). */
+export function resolveThetaLegs(
+  chain: Chain,
+  expiry: string,
+  template: ThetaTemplate,
+): { rights: ("C" | "P")[]; sides: (1 | -1)[]; strikes: number[]; ratios: number[] } | null {
+  const spot = chain.spot;
+  const contracts = chain.contracts.filter((c) => c.expiry === expiry);
+  if (!contracts.length || !spot) return null;
+  const tau = tradingHoursToExpiry(expiry, Date.now()) / TRADING_HOURS_PER_YEAR;
+  const grid = [...new Set(contracts.map((c) => c.strike))].sort((a, b) => a - b);
+  const atmIdx = grid.indexOf(nearestStrike(grid, spot));
+  const step = grid.length > atmIdx + 1 ? grid[atmIdx + 1] - grid[atmIdx] : 1;
+  const wingDist = Math.max(step, Math.round((spot * 0.008) / step) * step);
+
+  const short = (right: "C" | "P"): number | null => {
+    let best: number | null = null;
+    let bestErr = Infinity;
+    for (const c of contracts) {
+      if (c.right !== right) continue;
+      if (right === "C" ? c.strike <= spot : c.strike >= spot) continue; // OTM only
+      const delta = contractDelta(c, spot, tau);
+      if (delta === null) continue;
+      const abs = Math.abs(delta);
+      if (abs < 0.02 || abs > 0.6) continue;
+      const err = Math.abs(abs - template.targetDelta);
+      if (err < bestErr) {
+        bestErr = err;
+        best = c.strike;
+      }
+    }
+    return best;
+  };
+
+  const wing = (shortStrike: number, dir: 1 | -1): number | null => {
+    const target = shortStrike + dir * wingDist;
+    let candidate = nearestStrike(grid, target);
+    if (candidate === shortStrike) {
+      const next = grid.filter((s) => (dir > 0 ? s > shortStrike : s < shortStrike));
+      candidate = dir > 0 ? next[0] : next[next.length - 1];
+    }
+    return candidate ?? null;
+  };
+
+  const put = template.structure !== "ccs" ? short("P") : null;
+  const call = template.structure !== "pcs" ? short("C") : null;
+
+  switch (template.structure) {
+    case "pcs": {
+      if (put === null) return null;
+      const w = wing(put, -1);
+      if (w === null) return null;
+      return { rights: ["P", "P"], sides: [1, -1], strikes: [w, put], ratios: [1, 1] };
+    }
+    case "ccs": {
+      if (call === null) return null;
+      const w = wing(call, 1);
+      if (w === null) return null;
+      return { rights: ["C", "C"], sides: [-1, 1], strikes: [call, w], ratios: [1, 1] };
+    }
+    case "ic": {
+      if (put === null || call === null) return null;
+      const wp = wing(put, -1);
+      const wc = wing(call, 1);
+      if (wp === null || wc === null) return null;
+      return {
+        rights: ["P", "P", "C", "C"],
+        sides: [1, -1, -1, 1],
+        strikes: [wp, put, call, wc],
+        ratios: [1, 1, 1, 1],
+      };
+    }
+    case "strangle": {
+      if (put === null || call === null) return null;
+      return { rights: ["P", "C"], sides: [-1, -1], strikes: [put, call], ratios: [1, 1] };
+    }
+  }
 }
 
 export function defaultStrikes(chain: Chain, expiry: string, kind: StrategyKind): number[] {
@@ -363,11 +489,42 @@ export const useStrategyStore = create<StrategyState>((set, get) => ({
       };
     }),
   setTpPct: (v) => set({ tpPct: Math.max(0.05, Math.min(v, 10)) }),
-  setSlPct: (v) => set({ slPct: Math.max(0.05, Math.min(v, 0.95)) }),
+  // SL beyond 100% of premium is meaningless for debit structures but is
+  // THE standard stop for credit ones (stop at 1-2x the credit received).
+  setSlPct: (v) => set({ slPct: Math.max(0.05, Math.min(v, 3.0)) }),
   setTimeStopEt: (v) => set({ timeStopEt: v }),
   setQty: (v) => set({ qty: Math.max(0, Math.min(v, 100)) }),
   setVolShift: (v) => set({ volShift: Math.max(-0.5, Math.min(v, 0.5)) }),
   setSkewBeta: (v) => set({ skewBeta: v }),
+  applyThetaTemplate: (id) => {
+    const { chain, expiry } = get();
+    const template = THETA_TEMPLATES.find((t) => t.id === id);
+    if (!chain || !template) return false;
+    // Try the active expiry first, then roll FORWARD: a 0DTE chain after
+    // the close (or at tau≈0) has step-function deltas — nothing sellable —
+    // so the template moves to the next expiry that actually resolves.
+    const candidates = [
+      ...(expiry ? [expiry] : []),
+      ...chain.expirations.filter((e) => e !== expiry),
+    ];
+    for (const candidate of candidates) {
+      const resolved = resolveThetaLegs(chain, candidate, template);
+      if (!resolved) continue;
+      set({
+        ...resolved,
+        expiry: candidate,
+        modified: true,
+        // Standard premium-selling mechanics: take profit at 50% of the
+        // credit, stop when the loss equals the credit received, and never
+        // carry into the close.
+        tpPct: 0.5,
+        slPct: 1.0,
+        timeStopEt: "15:45",
+      });
+      return true;
+    }
+    return false;
+  },
 }));
 
 /** Trading hours from now until today's HH:MM ET (clamped to [0, 6.5]). */
