@@ -6,6 +6,7 @@ import {
   normPdf,
   positionEntryCost,
   positionIv,
+  positionPl,
   TRADING_HOURS_PER_YEAR,
   type Leg,
 } from "../../lib/optionsMath";
@@ -15,6 +16,7 @@ import {
   availableStrikes,
   buildLegs,
   hoursToExpiry as calcHoursToExpiry,
+  strategyDef,
   useStrategyStore,
 } from "../../store/strategyStore";
 import {
@@ -89,6 +91,7 @@ export function CandlePane() {
   const expiry = useStrategyStore((s) => s.expiry);
   const kind = useStrategyStore((s) => s.kind);
   const strikes = useStrategyStore((s) => s.strikes);
+  const ratios = useStrategyStore((s) => s.ratios);
   const tpPct = useStrategyStore((s) => s.tpPct);
   const slPct = useStrategyStore((s) => s.slPct);
   const timeStopEt = useStrategyStore((s) => s.timeStopEt);
@@ -108,13 +111,12 @@ export function CandlePane() {
   // ------------------------------------------------- strategy derivations
 
   const overlay: StrategyOverlay | null = useMemo(() => {
-    const legs = buildLegs({ chain, expiry, kind, strikes });
+    const legs = buildLegs({ chain, expiry, kind, strikes, ratios });
     if (!chain || !expiry) return null;
     const spot = quote?.mid || chain.spot;
     const hte = calcHoursToExpiry(expiry);
     const entry = legs ? positionEntryCost(legs) : 0;
-    const sides =
-      kind === "long_call" || kind === "long_put" ? [1] : [1, -1];
+    const sides = strategyDef(kind).legs.map((l) => l.side);
     // Time stop: today at HH:MM ET, in trading hours from now.
     const nowEt = new Intl.DateTimeFormat("en-US", {
       timeZone: "America/New_York",
@@ -126,6 +128,7 @@ export function CandlePane() {
     const nowMin = Number(parts.hour === "24" ? 0 : parts.hour) * 60 + Number(parts.minute);
     const [tsH, tsM] = timeStopEt.split(":").map(Number);
     const timeStopHours = Math.max(0, Math.min((tsH * 60 + tsM - nowMin) / 60, 6.5));
+    const priced = legs !== null && Math.abs(entry) >= 0.01;
     return {
       legs,
       strikes,
@@ -133,13 +136,14 @@ export function CandlePane() {
       snapStrikes: availableStrikes(chain, expiry),
       hoursToExpiry: hte,
       timeStopHours,
-      tpPremium: legs && entry > 0 ? entry * (1 + tpPct) : null,
-      slPremium: legs && entry > 0 ? entry * (1 - slPct) : null,
+      // Signed premium axis: TP above entry, SL below — credit-safe.
+      tpPremium: priced ? entry + Math.abs(entry) * tpPct : null,
+      slPremium: priced ? entry - Math.abs(entry) * slPct : null,
       entry,
       sigma: legs ? positionIv(legs) : 0,
       spot,
     };
-  }, [chain, expiry, kind, strikes, tpPct, slPct, timeStopEt, quote]);
+  }, [chain, expiry, kind, strikes, ratios, tpPct, slPct, timeStopEt, quote]);
 
   overlayRef.current = overlay;
 
@@ -463,18 +467,101 @@ function render(
   drawLastPrice(ctx, layout, bars, domain);
   if (mouse && mouse.x <= layout.plotW && mouse.y <= layout.plotH) {
     drawCrosshair(ctx, layout, bars, view, domain, mouse);
+    if (overlay?.legs && surface) {
+      drawPlTooltip(ctx, layout, bars, view, domain, overlay, surface, mouse, tfMinutes);
+    }
   }
 }
 
-function plColor(pl: number, risk: number): string {
-  // R-normalized diverging scale, capped ±2R.
+/** Hover readout over the P/L surface: price, trading-time offset, and the
+ * model P/L at that exact point (computed live, not sampled from the grid). */
+function drawPlTooltip(
+  ctx: CanvasRenderingContext2D,
+  layout: Layout,
+  bars: Bars,
+  view: ViewState,
+  domain: [number, number],
+  overlay: StrategyOverlay,
+  surface: HeatmapResult,
+  mouse: { x: number; y: number },
+  tfMinutes: number,
+) {
+  if (mouse.y > layout.volTop) return;
+  const n = bars.n;
+  const idx = xToIndex(mouse.x, view, layout);
+  const hours = ((idx - (n - 1)) * tfMinutes) / 60;
+  if (hours < 0 || hours > surface.hoursToExpiry) return;
+  const price = yToPrice(mouse.y, domain, layout);
+  if (price <= 0) return;
+  const tau = Math.max(surface.hoursToExpiry - hours, 0) / TRADING_HOURS_PER_YEAR;
+  const pl = positionPl(overlay.legs!, price, tau) * 100;
+  const hLabel = hours >= 6.5 ? `+${(hours / 6.5).toFixed(1)}d` : `+${hours.toFixed(1)}h`;
+  const txt = `S ${fmtPrice(price)}  ${hLabel}  P/L ${pl >= 0 ? "+" : "-"}$${Math.abs(pl).toFixed(0)}/set`;
+  const w = ctx.measureText(txt).width + 12;
+  let bx = mouse.x + 14;
+  if (bx + w > layout.plotW) bx = mouse.x - w - 14;
+  let by = mouse.y - 26;
+  if (by < 0) by = mouse.y + 14;
+  const color = pl >= 0 ? COLORS.up : COLORS.down;
+  ctx.fillStyle = "rgba(0,0,0,0.92)";
+  ctx.fillRect(bx, by, w, 18);
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1;
+  ctx.strokeRect(bx, by, w, 18);
+  ctx.fillStyle = color;
+  ctx.textAlign = "left";
+  ctx.textBaseline = "middle";
+  ctx.fillText(txt, bx + 6, by + 9);
+}
+
+/** R-normalized diverging color, capped ±2R. Returns [r,g,b,a255]. */
+function plColorRGBA(pl: number, risk: number): [number, number, number, number] {
   const r = Math.max(Math.min(pl / risk, 2), -2);
   if (r >= 0) {
     const t = r / 2;
-    return `rgba(0,${Math.round(120 + 80 * t)},${Math.round(50 + 30 * t)},${0.28 + 0.30 * t})`;
+    return [0, Math.round(120 + 80 * t), Math.round(50 + 30 * t), Math.round(255 * (0.28 + 0.3 * t))];
   }
   const t = -r / 2;
-  return `rgba(${Math.round(150 + 105 * t)},${Math.round(23 * (1 - t) + 10)},${Math.round(50 * (1 - t) + 18)},${0.28 + 0.30 * t})`;
+  return [
+    Math.round(150 + 105 * t),
+    Math.round(23 * (1 - t) + 10),
+    Math.round(50 * (1 - t) + 18),
+    Math.round(255 * (0.28 + 0.3 * t)),
+  ];
+}
+
+/**
+ * Rasterize the P/L grid once per (surface, risk) into an offscreen canvas —
+ * one pixel per cell — then let drawImage's bilinear filtering stretch it into
+ * a CONTINUOUS gradient. Re-renders on pan/zoom are a single blit.
+ */
+let surfaceImage: { surface: HeatmapResult; risk: number; canvas: HTMLCanvasElement } | null = null;
+
+function surfaceToImage(surface: HeatmapResult, risk: number): HTMLCanvasElement {
+  if (surfaceImage && surfaceImage.surface === surface && surfaceImage.risk === risk) {
+    return surfaceImage.canvas;
+  }
+  const { priceSteps, timeSteps, grid } = surface;
+  const canvas = document.createElement("canvas");
+  canvas.width = timeSteps;
+  canvas.height = priceSteps;
+  const ctx = canvas.getContext("2d")!;
+  const img = ctx.createImageData(timeSteps, priceSteps);
+  for (let ti = 0; ti < timeSteps; ti++) {
+    for (let pi = 0; pi < priceSteps; pi++) {
+      // Image row 0 = top = highest price = last price index.
+      const row = priceSteps - 1 - pi;
+      const [r, g, b, a] = plColorRGBA(grid[ti * priceSteps + pi], risk);
+      const off = (row * timeSteps + ti) * 4;
+      img.data[off] = r;
+      img.data[off + 1] = g;
+      img.data[off + 2] = b;
+      img.data[off + 3] = a;
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+  surfaceImage = { surface, risk, canvas };
+  return canvas;
 }
 
 function drawHeatmap(
@@ -496,24 +583,24 @@ function drawHeatmap(
   const xExpiry = indexToX(futureIndex(surface.hoursToExpiry, n, tfMinutes), view, layout);
   if (xExpiry <= x0) return;
 
-  const { priceSteps, timeSteps, priceLo, priceHi, grid } = surface;
+  const { priceLo, priceHi } = surface;
+  const image = surfaceToImage(surface, risk);
+  // Price axis is linear, so the grid maps affinely onto the plot. Half-cell
+  // insets align pixel CENTERS with the grid's sample points.
+  const halfPrice = (priceHi - priceLo) / (surface.priceSteps - 1) / 2;
+  const yTop = priceToY(priceHi + halfPrice, domain, layout);
+  const yBottom = priceToY(priceLo - halfPrice, domain, layout);
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(Math.max(x0, 0), 0, layout.plotW - Math.max(x0, 0), layout.volTop);
+  ctx.clip();
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
+  ctx.drawImage(image, x0, yTop, xExpiry - x0, yBottom - yTop);
+  ctx.restore();
+
+  const { timeSteps } = surface;
   const colW = (xExpiry - x0) / timeSteps;
-  // Draw columns left->right (now -> expiry).
-  for (let ti = 0; ti < timeSteps; ti++) {
-    const cx0 = x0 + ti * colW;
-    if (cx0 > layout.plotW) break;
-    const cx1 = Math.min(cx0 + colW + 0.5, layout.plotW);
-    if (cx1 < 0) continue;
-    for (let pi = 0; pi < priceSteps; pi++) {
-      const p0 = priceLo + ((priceHi - priceLo) * pi) / (priceSteps - 1);
-      const p1 = priceLo + ((priceHi - priceLo) * (pi + 1)) / (priceSteps - 1);
-      const y0 = priceToY(p1, domain, layout);
-      const y1 = priceToY(p0, domain, layout);
-      if (y1 < 0 || y0 > layout.volTop) continue;
-      ctx.fillStyle = plColor(grid[ti * priceSteps + pi], risk);
-      ctx.fillRect(Math.max(cx0, 0), Math.max(y0, 0), cx1 - Math.max(cx0, 0), Math.min(y1, layout.volTop) - Math.max(y0, 0));
-    }
-  }
 
   // Contours.
   const lineAt = (line: Float64Array, color: string, dash: number[]) => {

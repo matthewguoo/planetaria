@@ -27,7 +27,12 @@ TICK = 0.01
 
 
 def round_tick(x: float) -> float:
-    return max(round(round(x / TICK) * TICK, 2), TICK)
+    """Round to a cent, preserving sign (negative = net credit for MLEG
+    orders per Alpaca semantics). Never returns exactly 0."""
+    r = round(round(x / TICK) * TICK, 2)
+    if r == 0.0:
+        r = TICK if x >= 0 else -TICK
+    return r
 
 
 def position_mid_from_quotes(legs: list[dict], quotes: dict[str, dict]) -> float | None:
@@ -41,6 +46,25 @@ def position_mid_from_quotes(legs: list[dict], quotes: dict[str, dict]) -> float
     return total
 
 
+def parse_occ_symbol(symbol: str) -> dict | None:
+    """OCC option symbol -> {underlying, expiry, right, strike}; None if not OCC."""
+    try:
+        if len(symbol) < 16:
+            return None
+        strike = int(symbol[-8:]) / 1000.0
+        right = symbol[-9].upper()
+        if right not in ("C", "P"):
+            return None
+        yymmdd = symbol[-15:-9]
+        expiry = f"20{yymmdd[0:2]}-{yymmdd[2:4]}-{yymmdd[4:6]}"
+        underlying = symbol[:-15].strip()
+        if not underlying:
+            return None
+        return {"underlying": underlying, "expiry": expiry, "right": right, "strike": strike}
+    except (ValueError, IndexError):
+        return None
+
+
 class TradeService:
     def __init__(self, db, alpaca: AlpacaService, market, risk):
         self.db = db
@@ -49,6 +73,7 @@ class TradeService:
         self.risk = risk
         self.enforcer = None  # set by ExitEnforcer at startup (circular)
         self._account_cache: tuple[float, dict] | None = None
+        self._positions_cache: tuple[float, list[dict]] | None = None
 
     # ------------------------------------------------------------- account
 
@@ -72,6 +97,128 @@ class TradeService:
         self._account_cache = (_time.monotonic(), out)
         return out
 
+    # ---------------------------------------------------- broker positions
+
+    async def broker_positions(self, max_age_s: float = 5.0) -> list[dict]:
+        """Live positions straight from the Alpaca account, normalized.
+        These are the ground truth; TradePlans are our management layer on
+        top. Cached briefly to keep the positions poll off the rate budget."""
+        import time as _time
+
+        if self._positions_cache and _time.monotonic() - self._positions_cache[0] < max_age_s:
+            return self._positions_cache[1]
+        if not self.alpaca.configured:
+            return []
+        positions = await self.alpaca.call(self.alpaca.trading.get_all_positions)
+        out: list[dict] = []
+        for pos in positions:
+            occ = parse_occ_symbol(pos.symbol)
+            asset_class = str(getattr(pos, "asset_class", "") or "").lower()
+            # OCC parse is the reliable signal; asset_class strings vary.
+            is_option = occ is not None and ("option" in asset_class or not asset_class)
+            qty = float(pos.qty)
+
+            def _f(name: str) -> float | None:
+                value = getattr(pos, name, None)
+                return float(value) if value is not None else None
+
+            out.append(
+                {
+                    "symbol": pos.symbol,
+                    "qty": qty,
+                    "side": 1 if qty > 0 else -1,
+                    "asset_class": "option" if is_option else "stock",
+                    "avg_entry_price": _f("avg_entry_price") or 0.0,
+                    "current_price": _f("current_price"),
+                    "market_value": _f("market_value"),
+                    "unrealized_pl": _f("unrealized_pl"),
+                    "occ": occ if is_option else None,
+                }
+            )
+        self._positions_cache = (_time.monotonic(), out)
+        return out
+
+    async def untracked_positions(self) -> list[dict]:
+        """Broker positions not covered by any open plan's legs."""
+        plans = await self.risk.open_plans()
+        covered = {leg["symbol"] for plan in plans for leg in plan.legs}
+        return [p for p in await self.broker_positions() if p["symbol"] not in covered]
+
+    async def adopt_positions(
+        self,
+        symbols: list[str],
+        tp_pct: float,
+        sl_pct: float,
+        time_stop_utc: datetime,
+    ) -> list[dict]:
+        """Fold untracked broker option positions into managed TradePlans —
+        one multi-leg plan per underlying (chunked at 4 legs, the MLEG close
+        limit) — so the enforcer runs TP/SL/time exits on them."""
+        from math import gcd
+
+        untracked = {p["symbol"]: p for p in await self.untracked_positions()}
+        chosen = [untracked[s] for s in symbols if s in untracked and untracked[s]["occ"]]
+        if not chosen:
+            raise ValueError("no adoptable untracked option positions in selection")
+
+        by_underlying: dict[str, list[dict]] = {}
+        for p in chosen:
+            by_underlying.setdefault(p["occ"]["underlying"], []).append(p)
+
+        adopted: list[dict] = []
+        for underlying, group in sorted(by_underlying.items()):
+            group.sort(key=lambda p: (p["occ"]["expiry"], p["occ"]["strike"]))
+            for chunk_start in range(0, len(group), 4):
+                chunk = group[chunk_start : chunk_start + 4]
+                qtys = [max(int(abs(p["qty"])), 1) for p in chunk]
+                sets = qtys[0]
+                for q in qtys[1:]:
+                    sets = gcd(sets, q)
+                sets = max(sets, 1)
+
+                legs, entry = [], 0.0
+                for p, q in zip(chunk, qtys):
+                    ratio = max(q // sets, 1)
+                    legs.append(
+                        {
+                            "symbol": p["symbol"],
+                            "right": p["occ"]["right"],
+                            "strike": p["occ"]["strike"],
+                            "expiry": p["occ"]["expiry"],
+                            "side": p["side"],
+                            "ratio": ratio,
+                            "entry": p["avg_entry_price"],
+                            "iv": 0.0,
+                        }
+                    )
+                    entry += p["side"] * ratio * p["avg_entry_price"]
+                if abs(entry) < TICK:
+                    entry = TICK  # zero-cost basis: manage on absolute premium
+
+                plan = TradePlan(
+                    underlying=underlying[:12],
+                    strategy="adopted",
+                    legs=legs,
+                    qty=sets,
+                    entry_limit=round(entry, 4),
+                    tp_premium=round(entry + abs(entry) * tp_pct, 4),
+                    sl_premium=round(entry - abs(entry) * sl_pct, 4),
+                    time_stop_utc=time_stop_utc,
+                    status="filled",
+                    fill_premium=round(entry, 4),
+                    notes="adopted from broker positions",
+                )
+                async with self.db.session() as session:
+                    session.add(plan)
+                    await session.commit()
+                    await session.refresh(plan)
+                self.market.broadcast.publish("plans", {"t": "plan", "plan": plan.to_dict()})
+                if self.enforcer:
+                    await self.enforcer.arm(plan.id)
+                log.info("adopted %d broker legs into plan %s (%s)", len(legs), plan.id, underlying)
+                adopted.append(plan.to_dict())
+        return adopted
+
     # ------------------------------------------------------------ placement
 
     async def place_trade(self, payload: dict) -> dict:
@@ -93,16 +240,24 @@ class TradeService:
             raise ValueError("qty must be >= 1")
         if not legs or len(legs) > 4:
             raise ValueError("1-4 legs required")
-        if entry_limit <= 0:
-            raise ValueError("net credit entries not supported in v1")
+        if abs(entry_limit) < TICK:
+            raise ValueError("net premium must be at least one tick")
         if not (sl < entry_limit < tp):
             raise ValueError(
                 f"exits must bracket entry: SL {sl} < entry {entry_limit} < TP {tp}"
             )
 
         account = await self.get_account()
-        entry_cost = entry_limit * 100 * qty
+        # Capital consumed: debit paid for longs; margin (structural worst case)
+        # for credit structures; stop-risk proxy when risk is undefined.
         max_loss = (entry_limit - sl) * 100 * qty
+        if entry_limit > 0:
+            entry_cost = entry_limit * 100 * qty
+        else:
+            from app.services.options_math import Leg, structural_max_loss
+
+            structural = structural_max_loss([Leg.from_dict(leg) for leg in legs])
+            entry_cost = (structural * 100 * qty) if structural is not None else max_loss * 3
         expiry = max(leg["expiry"] for leg in legs)
         violations = await self.risk.validate_new_trade(
             account_equity=account["equity"],
@@ -145,6 +300,9 @@ class TradeService:
     async def _submit_entry(self, plan: TradePlan):
         legs = plan.legs
         if len(legs) == 1:
+            # Single-leg limit prices are unsigned premiums; side carries
+            # direction (a short entry's net credit arrives as negative
+            # entry_limit in position terms).
             leg = legs[0]
             request = LimitOrderRequest(
                 symbol=leg["symbol"],
@@ -153,10 +311,12 @@ class TradeService:
                 position_intent=(
                     PositionIntent.BUY_TO_OPEN if leg["side"] > 0 else PositionIntent.SELL_TO_OPEN
                 ),
-                limit_price=round_tick(plan.entry_limit),
+                limit_price=abs(round_tick(plan.entry_limit)),
                 time_in_force=TimeInForce.DAY,
             )
         else:
+            # MLEG limit prices are signed: positive = net debit, negative =
+            # net credit. entry_limit already uses that convention.
             request = LimitOrderRequest(
                 order_class=OrderClass.MLEG,
                 qty=plan.qty,
@@ -197,6 +357,28 @@ class TradeService:
         self.market.broadcast.publish("plans", {"t": "plan", "plan": plan.to_dict()})
         return plan
 
+    def _fill_value(self, plan: TradePlan, avg: float | None, *, is_entry: bool) -> float | None:
+        """Normalize a broker fill price into position-value terms (signed,
+        same axis as entry_limit/TP/SL).
+
+        Single-leg: broker prices are unsigned premiums; leg side supplies the
+        sign for entry AND exit (a short's buy-to-close debit is negative
+        position value). MLEG: prices are signed net debit/credit in the
+        ORDER's orientation — entries share the position orientation, exits
+        are reversed so the sign flips.
+        """
+        if avg is None:
+            return None
+        if len(plan.legs) == 1:
+            return plan.legs[0]["side"] * abs(avg)
+        if is_entry:
+            # Defensive: a credit entry cannot fill at a debit; force the
+            # entry_limit's sign if the feed reports magnitude only.
+            import math as _math
+
+            return _math.copysign(abs(avg), plan.entry_limit) if avg > 0 else avg
+        return -avg
+
     async def on_trade_update(self, update) -> None:
         """TradingStream handler (fills for entry AND exit orders)."""
         try:
@@ -218,10 +400,15 @@ class TradeService:
             if plan is None:
                 return
             is_entry = plan.entry_order_id == order_id
-            avg = float(order.filled_avg_price or 0) if order.filled_avg_price else None
-            log.info("trade update: plan %s %s event=%s avg=%s", plan.id, "entry" if is_entry else "exit", event, avg)
+            raw_avg = float(order.filled_avg_price) if order.filled_avg_price else None
+            avg = self._fill_value(plan, raw_avg, is_entry=is_entry)
+            filled_qty = int(float(order.filled_qty or 0))
+            log.info(
+                "trade update: plan %s %s event=%s avg=%s filled=%d",
+                plan.id, "entry" if is_entry else "exit", event, avg, filled_qty,
+            )
 
-            if event in ("fill",):
+            if event == "fill":
                 if is_entry:
                     await self._update_plan(plan.id, status="filled", fill_premium=avg)
                     if self.enforcer:
@@ -235,13 +422,33 @@ class TradeService:
                     )
                     if self.enforcer:
                         self.enforcer.disarm(plan.id)
+            elif event == "partial_fill":
+                # Record the running average so a later cancel still knows the
+                # real cost basis of whatever DID fill.
+                if is_entry and avg is not None:
+                    await self._update_plan(plan.id, fill_premium=avg)
             elif event in ("canceled", "expired", "rejected"):
                 if is_entry:
-                    await self._update_plan(plan.id, status="cancelled", notes=f"entry {event}")
-                    if self.enforcer:
-                        self.enforcer.disarm(plan.id)
+                    if filled_qty > 0:
+                        # Entry died with a partial position on the books:
+                        # shrink the plan to what filled and keep managing it.
+                        log.warning(
+                            "plan %s entry %s after partial fill (%d/%d) - managing partial",
+                            plan.id, event, filled_qty, plan.qty,
+                        )
+                        await self._update_plan(
+                            plan.id, status="filled", qty=filled_qty,
+                            fill_premium=avg if avg is not None else plan.fill_premium,
+                            notes=f"entry {event} after partial fill {filled_qty}",
+                        )
+                        if self.enforcer:
+                            await self.enforcer.arm(plan.id)
+                    else:
+                        await self._update_plan(plan.id, status="cancelled", notes=f"entry {event}")
+                        if self.enforcer:
+                            self.enforcer.disarm(plan.id)
                 else:
-                    # Exit order failed - enforcer escalation will retry.
+                    # Exit order failed - monitor/escalation will resubmit.
                     await self._update_plan(plan.id, exit_order_id=None)
         except Exception:
             log.exception("trade update handling failed")
@@ -249,7 +456,14 @@ class TradeService:
     # -------------------------------------------------------------- exits
 
     async def submit_exit(self, plan: TradePlan, reason: str, limit_price: float | None) -> None:
-        """Submit closing order (reverse all legs). limit None => market."""
+        """Submit closing order (reverse all legs). limit None => market.
+
+        limit_price is in POSITION-VALUE terms (signed, same axis as
+        entry/TP/SL). The closing order has every leg reversed, so its
+        submitted limit is the NEGATION: closing a debit position collects a
+        credit (negative MLEG limit), closing a credit position pays a debit
+        (positive MLEG limit). Single-leg orders take the unsigned premium.
+        """
         legs = plan.legs
         if len(legs) == 1:
             leg = legs[0]
@@ -265,7 +479,7 @@ class TradeService:
             request = (
                 MarketOrderRequest(**common)
                 if limit_price is None
-                else LimitOrderRequest(**common, limit_price=round_tick(limit_price))
+                else LimitOrderRequest(**common, limit_price=abs(round_tick(limit_price)))
             )
         else:
             mleg_legs = [
@@ -290,7 +504,7 @@ class TradeService:
             request = (
                 MarketOrderRequest(**common)
                 if limit_price is None
-                else LimitOrderRequest(**common, limit_price=round_tick(limit_price))
+                else LimitOrderRequest(**common, limit_price=round_tick(-limit_price))
             )
         order = await self.alpaca.call(self.alpaca.trading.submit_order, request)
         await self._update_plan(

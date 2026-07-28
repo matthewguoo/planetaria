@@ -36,6 +36,13 @@ class ExitEnforcer:
         log.info("reconciling %d open plans", len(plans))
         for plan in plans:
             try:
+                if plan.status == "planned" and not plan.entry_order_id:
+                    # Crashed between plan commit and order submit: no order
+                    # ever reached the broker, so nothing to manage.
+                    await self.trade._update_plan(
+                        plan.id, status="cancelled", notes="orphaned planned row (no order submitted)"
+                    )
+                    continue
                 # Refresh entry order status in case fills happened while down.
                 if plan.status == "submitted" and plan.entry_order_id:
                     status = await self.trade.order_status(plan.entry_order_id)
@@ -126,6 +133,11 @@ class ExitEnforcer:
                     if timeout <= 0 and plan.status == "submitted":
                         await self.trade.cancel_entry(plan)
                         return
+                    if plan.status == "exiting" and not plan.exit_order_id:
+                        # Exit order died (cancel/reject) - resubmit the ladder.
+                        log.warning("plan %s exiting with no live order - resubmitting", plan.id)
+                        await self._execute_exit(plan_id, plan.exit_reason or "manual")
+                        return
                     try:
                         msg = await asyncio.wait_for(queue.get(), timeout=min(max(timeout, 0.1), 15.0))
                     except asyncio.TimeoutError:
@@ -162,10 +174,11 @@ class ExitEnforcer:
     # ------------------------------------------------------------ exits
 
     async def _execute_exit(self, plan_id: str, reason: str) -> None:
-        """Escalation ladder; runs until the position is confirmed closed."""
+        """Escalation ladder, then a verification loop: this must not return
+        with the position alive and nobody watching it."""
         for buffer, wait in ESCALATION:
             plan = await self.trade.get_plan(plan_id)
-            if plan.status == "closed":
+            if plan.status in ("closed", "cancelled", "rejected"):
                 return
             if plan.exit_order_id:
                 try:
@@ -173,8 +186,12 @@ class ExitEnforcer:
                 except Exception:
                     pass
             quotes = {leg["symbol"]: self.market.latest_quote(leg["symbol"]) for leg in plan.legs}
-            mid = position_mid_from_quotes(plan.legs, quotes) or plan.sl_premium
-            limit = None if buffer is None else round_tick(mid * (1 - buffer))
+            mid = position_mid_from_quotes(plan.legs, quotes)
+            if mid is None:
+                mid = plan.sl_premium
+            # Marketable = accept a WORSE position value: sign-agnostic shift
+            # downward by |mid|*buffer (long: sell lower; short: buy back higher).
+            limit = None if buffer is None else round_tick(mid - abs(mid) * buffer)
             try:
                 await self.trade.submit_exit(plan, reason, limit)
             except Exception as exc:
@@ -186,7 +203,37 @@ class ExitEnforcer:
                 plan = await self.trade.get_plan(plan_id)
                 if plan.status == "closed":
                     return
-        log.info("exit ladder exhausted for %s; market order submitted", plan_id)
+        log.info("exit ladder exhausted for %s; verifying market order", plan_id)
+        await self._verify_closed(plan_id, reason)
+
+    async def _verify_closed(self, plan_id: str, reason: str) -> None:
+        """Poll until the plan closes; if the final order dies, resubmit a
+        market close. Bounded per-iteration, unbounded overall — the ladder's
+        whole point is that a triggered exit always finishes."""
+        for attempt in range(120):  # ~10 min of 5s polls before loud rearm
+            await asyncio.sleep(5)
+            plan = await self.trade.get_plan(plan_id)
+            if plan.status in ("closed", "cancelled", "rejected"):
+                return
+            if plan.exit_order_id:
+                try:
+                    status = await self.trade.order_status(plan.exit_order_id)
+                except Exception as exc:
+                    log.warning("exit status poll failed for %s: %s", plan_id, exc)
+                    continue
+                if status == "filled":
+                    continue  # trade-update handler will close the plan
+                if status in ("canceled", "expired", "rejected"):
+                    await self.trade._update_plan(plan_id, exit_order_id=None)
+            if not (await self.trade.get_plan(plan_id)).exit_order_id:
+                log.warning("exit order dead for %s - resubmitting market close", plan_id)
+                try:
+                    await self.trade.submit_exit(plan, reason, None)
+                except Exception as exc:
+                    log.error("market close resubmit failed for %s: %s", plan_id, exc)
+        log.error("plan %s STILL not closed after verification window - rearming monitor", plan_id)
+        self._monitors.pop(plan_id, None)
+        await self.arm(plan_id)
 
     # ---------------------------------------------------- manual actions
 

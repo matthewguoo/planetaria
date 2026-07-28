@@ -37,6 +37,7 @@ export function useDesigner(): Designer {
   const expiry = useStrategyStore((s) => s.expiry);
   const kind = useStrategyStore((s) => s.kind);
   const strikes = useStrategyStore((s) => s.strikes);
+  const ratios = useStrategyStore((s) => s.ratios);
   const tpPct = useStrategyStore((s) => s.tpPct);
   const slPct = useStrategyStore((s) => s.slPct);
   const qtyOverride = useStrategyStore((s) => s.qty);
@@ -44,7 +45,7 @@ export function useDesigner(): Designer {
   const account = useAccountStore((s) => s.account);
 
   return useMemo(() => {
-    const legs = buildLegs({ chain, expiry, kind, strikes });
+    const legs = buildLegs({ chain, expiry, kind, strikes, ratios });
     const spot = quote?.mid || chain?.spot || 0;
     const equity = account?.equity ?? 0;
     const risk = account?.risk;
@@ -65,11 +66,14 @@ export function useDesigner(): Designer {
     };
     if (!legs || !expiry || spot <= 0) return empty;
 
+    // entry is signed: +debit / -credit. TP/SL are premium levels on the same
+    // axis — TP above entry, SL below, scaled by |entry| so credit structures
+    // (e.g. iron condor) bracket correctly too.
     const entry = positionEntryCost(legs);
-    if (entry <= 0) return { ...empty, legs };
+    if (Math.abs(entry) < 0.01) return { ...empty, legs };
     const hte = calcHte(expiry);
-    const tpPremium = entry * (1 + tpPct);
-    const slPremium = entry * (1 - slPct);
+    const tpPremium = entry + Math.abs(entry) * tpPct;
+    const slPremium = entry - Math.abs(entry) * slPct;
 
     const sizing = computeSizingClient(
       legs,
@@ -97,5 +101,5 @@ export function useDesigner(): Designer {
       probabilities,
       equity,
     };
-  }, [chain, expiry, kind, strikes, tpPct, slPct, qtyOverride, quote, account]);
+  }, [chain, expiry, kind, strikes, ratios, tpPct, slPct, qtyOverride, quote, account]);
 }

@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -72,7 +72,9 @@ async def positions(request: Request) -> dict:
     app = request.app
     plans = await app.state.risk.open_plans()
     out = []
+    covered: set[str] = set()
     for plan in plans:
+        covered.update(leg["symbol"] for leg in plan.legs)
         quotes = {leg["symbol"]: app.state.market.latest_quote(leg["symbol"]) for leg in plan.legs}
         mid = position_mid_from_quotes(plan.legs, quotes)
         row = plan.to_dict()
@@ -83,7 +85,55 @@ async def positions(request: Request) -> dict:
         else:
             row["unrealized_pnl"] = None
         out.append(row)
-    return {"positions": out}
+
+    # Live broker positions with no managing plan — surfaced so nothing in
+    # the account can be invisible to the UI (and adoptable into management).
+    untracked: list[dict] = []
+    try:
+        untracked = [
+            p for p in await app.state.trade.broker_positions() if p["symbol"] not in covered
+        ]
+    except Exception as exc:  # broker down != positions page down
+        return {"positions": out, "untracked": [], "untracked_error": str(exc)}
+    return {"positions": out, "untracked": untracked}
+
+
+class AdoptIn(BaseModel):
+    symbols: list[str] = Field(min_length=1, max_length=32)
+    tp_pct: float | None = Field(default=None, gt=0, le=10)
+    sl_pct: float | None = Field(default=None, gt=0, le=0.95)
+    time_stop_utc: str | None = None
+
+
+@router.post("/positions/adopt")
+async def adopt_positions(request: Request, body: AdoptIn) -> dict:
+    """Group untracked broker option positions into managed multi-leg plans
+    (one trade object per underlying) with TP/SL/time-stop enforcement."""
+    app = request.app
+    risk = await app.state.risk.get_settings()
+    tp_pct = body.tp_pct if body.tp_pct is not None else risk["default_tp_pct"]
+    sl_pct = body.sl_pct if body.sl_pct is not None else risk["default_sl_pct"]
+    if body.time_stop_utc:
+        time_stop = datetime.fromisoformat(body.time_stop_utc)
+        if time_stop.tzinfo is None:
+            time_stop = time_stop.replace(tzinfo=timezone.utc)
+    else:
+        # Default: today's configured cutoff (ET) — same default the designer uses.
+        from zoneinfo import ZoneInfo
+
+        et = ZoneInfo("America/New_York")
+        hh, mm = str(risk["time_stop_et"]).split(":")
+        now_et = datetime.now(et)
+        time_stop = now_et.replace(hour=int(hh), minute=int(mm), second=0, microsecond=0).astimezone(
+            timezone.utc
+        )
+    try:
+        adopted = await app.state.trade.adopt_positions(body.symbols, tp_pct, sl_pct, time_stop)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+    except Exception as exc:
+        raise HTTPException(502, f"adopt failed: {exc}")
+    return {"adopted": adopted}
 
 
 @router.post("/positions/{plan_id}/close")

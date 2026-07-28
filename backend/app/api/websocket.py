@@ -43,7 +43,10 @@ async def ws_stream(ws: WebSocket) -> None:
 
     async def heartbeat() -> None:
         while True:
-            await ws.send_json(market.status())
+            try:
+                await ws.send_json(market.status())
+            except Exception:
+                return  # socket gone; the receive loop is tearing down
             await asyncio.sleep(5)
 
     pump_task = asyncio.create_task(pump())
@@ -59,72 +62,91 @@ async def ws_stream(ws: WebSocket) -> None:
             topics.discard(topic)
             broadcaster.unsubscribe(topic, queue)
 
+    async def handle(msg: dict) -> None:
+        op, channel = msg.get("op"), msg.get("channel")
+
+        if channel == "bars":
+            symbol = (msg.get("symbol") or "").upper()
+            tf = msg.get("tf") or "1m"
+            if not symbol:
+                return
+            topic = f"bars:{symbol}:{tf}"
+            if op == "subscribe":
+                join(topic)
+                if symbol not in stock_subs:
+                    stock_subs.add(symbol)
+                    await market.subscribe_stock(symbol)
+                # Cached snapshot immediately; backfill (running in the
+                # background) pushes a fresh bars_snapshot when it lands.
+                await ws.send_json(
+                    {"t": "bars_snapshot", "symbol": symbol, "tf": tf,
+                     "bars": market.bars.get_bars(symbol, tf)}
+                )
+            elif op == "unsubscribe":
+                leave(topic)
+
+        elif channel == "quote":
+            symbol = (msg.get("symbol") or "").upper()
+            if not symbol:
+                return
+            topic = f"quote:{symbol}"
+            if op == "subscribe":
+                join(topic)
+                quote = market.latest_quote(symbol) or await market.fetch_latest_stock_quote(symbol)
+                if quote:
+                    await ws.send_json(quote)
+            elif op == "unsubscribe":
+                leave(topic)
+
+        elif channel == "plans":
+            if op == "subscribe":
+                join("plans")
+                plans = await app.state.risk.open_plans()
+                await ws.send_json(
+                    {"t": "plans_snapshot", "plans": [p.to_dict() for p in plans]}
+                )
+            elif op == "unsubscribe":
+                leave("plans")
+
+        elif channel == "oquotes":
+            symbols = [s for s in (msg.get("symbols") or []) if s]
+            if not symbols:
+                return
+            if op == "subscribe":
+                fresh = [s for s in symbols if s not in option_subs]
+                option_subs.update(fresh)
+                for sym in fresh:
+                    join(f"oquote:{sym}")
+                await market.subscribe_options(fresh)
+                for sym in fresh:
+                    cached = market.latest_quote(sym)
+                    if cached:
+                        await ws.send_json(cached)
+            elif op == "unsubscribe":
+                stale = [s for s in symbols if s in option_subs]
+                option_subs.difference_update(stale)
+                for sym in stale:
+                    leave(f"oquote:{sym}")
+                await market.unsubscribe_options(stale)
+
     try:
         while True:
-            msg = await ws.receive_json()
-            op, channel = msg.get("op"), msg.get("channel")
-
-            if channel == "bars":
-                symbol = (msg.get("symbol") or "").upper()
-                tf = msg.get("tf") or "1m"
-                if not symbol:
-                    continue
-                topic = f"bars:{symbol}:{tf}"
-                if op == "subscribe":
-                    join(topic)
-                    if symbol not in stock_subs:
-                        stock_subs.add(symbol)
-                        await market.subscribe_stock(symbol)
-                    await ws.send_json(
-                        {"t": "bars_snapshot", "symbol": symbol, "tf": tf,
-                         "bars": market.bars.get_bars(symbol, tf)}
-                    )
-                elif op == "unsubscribe":
-                    leave(topic)
-
-            elif channel == "quote":
-                symbol = (msg.get("symbol") or "").upper()
-                if not symbol:
-                    continue
-                topic = f"quote:{symbol}"
-                if op == "subscribe":
-                    join(topic)
-                    quote = market.latest_quote(symbol) or await market.fetch_latest_stock_quote(symbol)
-                    if quote:
-                        await ws.send_json(quote)
-                elif op == "unsubscribe":
-                    leave(topic)
-
-            elif channel == "plans":
-                if op == "subscribe":
-                    join("plans")
-                    plans = await app.state.risk.open_plans()
-                    await ws.send_json(
-                        {"t": "plans_snapshot", "plans": [p.to_dict() for p in plans]}
-                    )
-                elif op == "unsubscribe":
-                    leave("plans")
-
-            elif channel == "oquotes":
-                symbols = [s for s in (msg.get("symbols") or []) if s]
-                if not symbols:
-                    continue
-                if op == "subscribe":
-                    fresh = [s for s in symbols if s not in option_subs]
-                    option_subs.update(fresh)
-                    for sym in fresh:
-                        join(f"oquote:{sym}")
-                    await market.subscribe_options(fresh)
-                    for sym in fresh:
-                        cached = market.latest_quote(sym)
-                        if cached:
-                            await ws.send_json(cached)
-                elif op == "unsubscribe":
-                    stale = [s for s in symbols if s in option_subs]
-                    option_subs.difference_update(stale)
-                    for sym in stale:
-                        leave(f"oquote:{sym}")
-                    await market.unsubscribe_options(stale)
+            # One malformed frame must not kill the connection — the client
+            # would reconnect with backoff and the feed looks "spotty".
+            try:
+                msg = await ws.receive_json()
+            except (ValueError, TypeError) as exc:
+                log.warning("ws bad frame ignored: %s", exc)
+                continue
+            if not isinstance(msg, dict):
+                continue
+            try:
+                await handle(msg)
+            except (WebSocketDisconnect, RuntimeError):
+                raise
+            except Exception:
+                log.exception("ws message handling failed (op=%s channel=%s)",
+                              msg.get("op"), msg.get("channel"))
 
     except WebSocketDisconnect:
         pass

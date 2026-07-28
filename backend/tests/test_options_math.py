@@ -168,11 +168,50 @@ def test_sizing_respects_budgets():
     assert any("buying-power" in reason for reason in capped.reasons)
 
 
-def test_sizing_refuses_credit_and_inverted_stops():
-    credit = [Leg("C", 450, 1, -1, 2.0, 0.2)]
-    assert compute_sizing(credit, 25_000, 0.02, 1.0, 0.25).contracts == 0
+def test_sizing_credit_structures():
+    # Naked short call: undefined risk -> stop-based sizing with a warning.
+    naked = [Leg("C", 450, 1, -1, 2.0, 0.2)]  # entry = -2.0 (credit)
+    sizing = compute_sizing(naked, 25_000, 0.02, sl_premium=-3.0, bp_cap_pct=0.25)
+    # risk/contract = (-2.0 - -3.0)*100 = $100; budget $500 -> 5 contracts
+    assert sizing.contracts == 5
+    assert sizing.max_loss_at_stop == 500.0
+    assert any("undefined risk" in r for r in sizing.reasons)
+
+    # Defined-risk credit spread: margin = structural max loss.
+    spread = [Leg("C", 450, 1, -1, 2.0, 0.2), Leg("C", 455, 1, 1, 0.8, 0.19)]  # credit 1.2
+    s = compute_sizing(spread, 25_000, 0.02, sl_premium=-2.4, bp_cap_pct=0.25)
+    # structural loss = width 5 - credit 1.2 = 3.8/share = $380/set
+    assert s.contracts >= 1
+    assert s.max_loss_structural == pytest.approx(380.0 * s.contracts)
+
+
+def test_sizing_refuses_inverted_stops():
     legs = long_call(entry=2.0)
     assert compute_sizing(legs, 25_000, 0.02, sl_premium=2.5, bp_cap_pct=0.25).contracts == 0
+
+
+def test_structural_max_loss():
+    from app.services.options_math import structural_max_loss
+
+    # Long call: max loss = debit.
+    assert structural_max_loss(long_call(entry=2.0)) == pytest.approx(2.0)
+    # Call credit spread: width - credit.
+    spread = [Leg("C", 450, 1, -1, 2.0, 0.2), Leg("C", 455, 1, 1, 0.8, 0.19)]
+    assert structural_max_loss(spread) == pytest.approx(5.0 - 1.2)
+    # Naked short call: unbounded.
+    assert structural_max_loss([Leg("C", 450, 1, -1, 2.0, 0.2)]) is None
+    # Short put: bounded by strike (S=0).
+    short_put = [Leg("P", 450, 1, -1, 3.0, 0.2)]
+    assert structural_max_loss(short_put) == pytest.approx(450.0 - 3.0)
+    # Iron condor: width - net credit.
+    condor = [
+        Leg("P", 440, 1, 1, 0.5, 0.2),
+        Leg("P", 445, 1, -1, 1.2, 0.2),
+        Leg("C", 460, 1, -1, 1.1, 0.2),
+        Leg("C", 465, 1, 1, 0.4, 0.2),
+    ]
+    net_credit = 1.2 + 1.1 - 0.5 - 0.4
+    assert structural_max_loss(condor) == pytest.approx(5.0 - net_credit)
 
 
 def test_position_iv_weighting():

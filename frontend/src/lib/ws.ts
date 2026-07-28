@@ -36,8 +36,17 @@ class TerminalSocket {
   private connState: "connecting" | "open" | "down" = "connecting";
   private stateListeners = new Set<(s: string) => void>();
 
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+
   connect(): void {
     if (this.closed) return;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) {
+      return;
+    }
     this.setState("connecting");
     this.ws = new WebSocket(WS_URL);
     this.ws.onopen = () => {
@@ -46,16 +55,36 @@ class TerminalSocket {
       for (const spec of this.subs.values()) this.send({ op: "subscribe", ...spec });
     };
     this.ws.onmessage = (event) => {
-      const msg = JSON.parse(event.data) as WsMessage;
-      for (const handler of this.handlers) handler(msg);
+      let msg: WsMessage;
+      try {
+        msg = JSON.parse(event.data) as WsMessage;
+      } catch {
+        return; // one bad frame must not kill the handler chain
+      }
+      for (const handler of this.handlers) {
+        try {
+          handler(msg);
+        } catch (err) {
+          console.error("ws handler failed", err);
+        }
+      }
     };
     this.ws.onclose = () => {
       this.setState("down");
       if (this.closed) return;
-      const delay = Math.min(15_000, 500 * 2 ** this.retry++) + Math.random() * 500;
-      setTimeout(() => this.connect(), delay);
+      // Fast, capped backoff: the backend serves snapshots on subscribe so
+      // aggressive reconnects are always safe.
+      const delay = Math.min(5_000, 400 * 2 ** this.retry++) + Math.random() * 300;
+      this.reconnectTimer = setTimeout(() => this.connect(), delay);
     };
     this.ws.onerror = () => this.ws?.close();
+  }
+
+  /** Skip any pending backoff and reconnect right now (if down). */
+  reconnectNow(): void {
+    if (this.closed || this.connState === "open") return;
+    this.retry = 0;
+    this.connect();
   }
 
   get state(): string {
@@ -96,3 +125,10 @@ class TerminalSocket {
 
 export const socket = new TerminalSocket();
 socket.connect();
+
+// Recover instantly when the network returns or the tab wakes up, instead of
+// waiting out the backoff timer.
+window.addEventListener("online", () => socket.reconnectNow());
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") socket.reconnectNow();
+});

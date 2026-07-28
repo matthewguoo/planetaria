@@ -52,6 +52,7 @@ async def startup(app: FastAPI, settings: Settings) -> None:
 
     await market.start()
 
+    app.state.reconcile_task = None
     if alpaca.configured:
         stream = alpaca.make_trading_stream()
         stream.subscribe_trade_updates(trade.on_trade_update)
@@ -59,11 +60,30 @@ async def startup(app: FastAPI, settings: Settings) -> None:
         app.state.trading_stream_task = asyncio.create_task(
             supervise("trading-stream", stream._run_forever), name="trading-stream"
         )
-        await enforcer.startup_reconcile()
+        # Reconcile in the background: it makes serial broker REST calls, and
+        # while the lifespan is awaiting, uvicorn accepts NO connections — this
+        # is exactly the "server up but nothing connects" startup window.
+        app.state.reconcile_task = asyncio.create_task(
+            _reconcile_with_retry(enforcer), name="startup-reconcile"
+        )
+
+
+async def _reconcile_with_retry(enforcer: ExitEnforcer, attempts: int = 5) -> None:
+    for attempt in range(1, attempts + 1):
+        try:
+            await enforcer.startup_reconcile()
+            log.info("startup reconcile complete")
+            return
+        except Exception:
+            log.exception("startup reconcile failed (attempt %d/%d)", attempt, attempts)
+            await asyncio.sleep(min(2**attempt, 30))
+    log.error("startup reconcile gave up after %d attempts", attempts)
 
 
 async def shutdown(app: FastAPI) -> None:
     state = app.state
+    if getattr(state, "reconcile_task", None):
+        state.reconcile_task.cancel()
     await state.enforcer.shutdown()
     if state.trading_stream_task:
         state.trading_stream_task.cancel()

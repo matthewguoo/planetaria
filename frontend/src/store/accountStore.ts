@@ -1,10 +1,17 @@
 import { create } from "zustand";
-import { getAccount, getPositions, type Account, type Plan } from "../lib/api";
+import {
+  getAccount,
+  getPositions,
+  type Account,
+  type Plan,
+  type UntrackedPosition,
+} from "../lib/api";
 
 type AccountState = {
   account: Account | null;
   accountError: string | null;
   positions: Plan[];
+  untracked: UntrackedPosition[];
   refreshAccount: () => Promise<void>;
   refreshPositions: () => Promise<void>;
   applyPlanUpdate: (plan: Plan) => void;
@@ -14,6 +21,7 @@ export const useAccountStore = create<AccountState>((set) => ({
   account: null,
   accountError: null,
   positions: [],
+  untracked: [],
 
   refreshAccount: async () => {
     try {
@@ -25,7 +33,8 @@ export const useAccountStore = create<AccountState>((set) => ({
 
   refreshPositions: async () => {
     try {
-      set({ positions: await getPositions() });
+      const payload = await getPositions();
+      set({ positions: payload.positions, untracked: payload.untracked ?? [] });
     } catch {
       // transient; keep last known
     }

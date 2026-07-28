@@ -68,11 +68,31 @@ export type Plan = {
   quote_stale?: boolean;
 };
 
+export type UntrackedPosition = {
+  symbol: string;
+  qty: number;
+  side: number;
+  asset_class: "option" | "stock";
+  avg_entry_price: number;
+  current_price: number | null;
+  market_value: number | null;
+  unrealized_pl: number | null;
+  occ: { underlying: string; expiry: string; right: "C" | "P"; strike: number } | null;
+};
+
+export type PositionsPayload = {
+  positions: Plan[];
+  untracked: UntrackedPosition[];
+  untracked_error?: string;
+};
+
 export const getAccount = () => api.get<Account>("/api/account").then((r) => r.data);
 export const putRisk = (patch: Partial<RiskSettings>) =>
   api.put<RiskSettings>("/api/settings/risk", patch).then((r) => r.data);
 export const getPositions = () =>
-  api.get<{ positions: Plan[] }>("/api/positions").then((r) => r.data.positions);
+  api.get<PositionsPayload>("/api/positions").then((r) => r.data);
+export const adoptPositions = (symbols: string[]) =>
+  api.post<{ adopted: Plan[] }>("/api/positions/adopt", { symbols }).then((r) => r.data.adopted);
 export const getHistory = () =>
   api.get<{ trades: Plan[] }>("/api/history").then((r) => r.data.trades);
 export const postOrder = (payload: object) =>

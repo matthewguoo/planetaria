@@ -46,8 +46,9 @@ export function SizingPanel({ designer }: { designer: Designer }) {
               </span>
             </div>
             <Row
-              label="COST"
-              value={`$${(designer.entry * 100 * designer.qty).toFixed(0)}`}
+              label={designer.entry < 0 ? "CREDIT RECEIVED" : "COST"}
+              value={`$${Math.abs(designer.entry * 100 * designer.qty).toFixed(0)}`}
+              cls={designer.entry < 0 ? "text-bb-profit" : undefined}
             />
             <Row
               label="MAX LOSS @ SL"
@@ -56,12 +57,16 @@ export function SizingPanel({ designer }: { designer: Designer }) {
             />
             <Row
               label="STRUCTURAL MAX"
-              value={`-$${(designer.entry * 100 * designer.qty).toFixed(0)}`}
+              value={
+                sizing.contracts > 0
+                  ? `-$${((sizing.maxLossStructural / Math.max(sizing.contracts, 1)) * designer.qty).toFixed(0)}`
+                  : "—"
+              }
               cls="text-bb-loss"
             />
             <Row
               label="BP USED"
-              value={`${(designer.equity ? ((designer.entry * 100 * designer.qty) / designer.equity) * 100 : 0).toFixed(1)}%`}
+              value={`${(designer.equity && sizing.contracts > 0 ? ((sizing.entryCost / sizing.contracts) * designer.qty / designer.equity) * 100 : 0).toFixed(1)}%`}
             />
             <Row label="EQUITY" value={`$${designer.equity.toLocaleString("en-US", { maximumFractionDigits: 0 })}`} />
             {sizing.reasons.map((reason) => (

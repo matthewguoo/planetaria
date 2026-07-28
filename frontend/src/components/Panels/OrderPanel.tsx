@@ -88,7 +88,7 @@ export function OrderPanel({ designer }: { designer: Designer }) {
             />
             <span className="text-[10px] text-bb-muted">%</span>
             <span data-numeric className="w-14 text-right text-[11px] text-bb-profit">
-              {designer.tpPremium ? designer.tpPremium.toFixed(2) : "—"}
+              {designer.tpPremium != null ? designer.tpPremium.toFixed(2) : "—"}
             </span>
           </span>
         </div>
@@ -108,7 +108,7 @@ export function OrderPanel({ designer }: { designer: Designer }) {
             />
             <span className="text-[10px] text-bb-muted">%</span>
             <span data-numeric className="w-14 text-right text-[11px] text-bb-loss">
-              {designer.slPremium ? designer.slPremium.toFixed(2) : "—"}
+              {designer.slPremium != null ? designer.slPremium.toFixed(2) : "—"}
             </span>
           </span>
         </div>
@@ -126,9 +126,11 @@ export function OrderPanel({ designer }: { designer: Designer }) {
           </span>
         </div>
         <div className="flex items-baseline justify-between gap-2">
-          <span className="text-[11px] text-bb-muted">ENTRY LIMIT</span>
-          <span data-numeric className="text-[12px] text-bb-amber">
-            {designer.ready ? `${designer.entry.toFixed(2)} × ${designer.qty}` : "—"}
+          <span className="text-[11px] text-bb-muted">
+            ENTRY {designer.ready && designer.entry < 0 ? "CREDIT" : "LIMIT"}
+          </span>
+          <span data-numeric className={"text-[12px] " + (designer.entry < 0 ? "text-bb-profit" : "text-bb-amber")}>
+            {designer.ready ? `${Math.abs(designer.entry).toFixed(2)} × ${designer.qty}` : "—"}
           </span>
         </div>
 
@@ -170,8 +172,8 @@ export function OrderPanel({ designer }: { designer: Designer }) {
             {symbol} {kind.replace("_", " ").toUpperCase()} × {designer.qty}
           </div>
           <div data-numeric className="text-bb-muted">
-            entry {designer.entry.toFixed(2)} · TP {designer.tpPremium!.toFixed(2)} · SL{" "}
-            {designer.slPremium!.toFixed(2)}
+            {designer.entry < 0 ? "credit" : "debit"} {designer.entry.toFixed(2)} · TP{" "}
+            {designer.tpPremium!.toFixed(2)} · SL {designer.slPremium!.toFixed(2)}
           </div>
           <div data-numeric className="text-bb-muted">
             max loss ${designer.sizing ? (designer.sizing.perContractRisk * designer.qty).toFixed(0) : "—"} ·

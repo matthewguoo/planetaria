@@ -24,3 +24,7 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Runtime artifacts
+backend/trader.db
+*.db

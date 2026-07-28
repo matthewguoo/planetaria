@@ -1,0 +1,155 @@
+/**
+ * Preset integrity: every strategy must produce a complete, priced leg set
+ * from a realistic chain, with sane structure (leg counts, credit/debit
+ * orientation, editable ratios), and the credit-aware sizing mirror must
+ * agree with the backend's semantics.
+ */
+
+import { describe, expect, it } from "vitest";
+import { computeSizingClient } from "../lib/analytics";
+import { positionEntryCost, structuralMaxLoss, type Leg } from "../lib/optionsMath";
+import {
+  buildLegs,
+  defaultRatios,
+  defaultStrikes,
+  STRATEGIES,
+  type Chain,
+  type StrategyKind,
+} from "./strategyStore";
+
+function syntheticChain(spot = 450): Chain {
+  const expiry = "2026-07-31";
+  const contracts = [];
+  for (let k = spot - 30; k <= spot + 30; k += 2.5) {
+    for (const right of ["C", "P"] as const) {
+      const intrinsic = Math.max(right === "C" ? spot - k : k - spot, 0);
+      // Time value decays away from ATM so spreads carry realistic debits/credits.
+      const timeValue = 3.0 * Math.exp(-Math.abs(k - spot) / 8);
+      const mid = Math.max(intrinsic + timeValue, 0.05);
+      contracts.push({
+        symbol: `SPY260731${right}${String(Math.round(k * 1000)).padStart(8, "0")}`,
+        right,
+        strike: k,
+        expiry,
+        bid: mid - 0.05,
+        ask: mid + 0.05,
+        mid,
+        iv: 0.2,
+        delta: null,
+      });
+    }
+  }
+  return {
+    underlying: "SPY",
+    spot,
+    asof: Date.now(),
+    expirations: [expiry],
+    contracts,
+    demo: true,
+  };
+}
+
+const KINDS = Object.keys(STRATEGIES) as StrategyKind[];
+
+describe("strategy presets", () => {
+  const chain = syntheticChain();
+  const expiry = chain.expirations[0];
+
+  it("covers the common strategy families", () => {
+    expect(KINDS.length).toBeGreaterThanOrEqual(15);
+    for (const required of [
+      "long_call", "long_put", "call_debit_spread", "put_debit_spread",
+      "call_credit_spread", "put_credit_spread", "long_straddle", "long_strangle",
+      "short_straddle", "short_strangle", "iron_condor", "iron_butterfly",
+      "call_butterfly", "put_butterfly", "short_put",
+    ]) {
+      expect(KINDS).toContain(required);
+    }
+  });
+
+  it.each(KINDS)("%s builds a complete priced leg set", (kind) => {
+    const strikes = defaultStrikes(chain, expiry, kind);
+    const ratios = defaultRatios(kind);
+    expect(strikes.length).toBe(STRATEGIES[kind].legs.length);
+    expect(strikes.length).toBeLessThanOrEqual(4); // MLEG order limit
+    const legs = buildLegs({ chain, expiry, kind, strikes, ratios });
+    expect(legs).not.toBeNull();
+    expect(legs!.length).toBe(STRATEGIES[kind].legs.length);
+    for (const leg of legs!) {
+      expect(leg.entry).toBeGreaterThan(0);
+      expect(leg.iv).toBeGreaterThan(0);
+      expect(leg.qty).toBeGreaterThanOrEqual(1);
+    }
+  });
+
+  it("credit presets produce net credits, debit presets net debits", () => {
+    const entryOf = (kind: StrategyKind) => {
+      const legs = buildLegs({
+        chain, expiry, kind,
+        strikes: defaultStrikes(chain, expiry, kind),
+        ratios: defaultRatios(kind),
+      })!;
+      return positionEntryCost(legs);
+    };
+    for (const kind of ["long_call", "long_put", "call_debit_spread", "put_debit_spread",
+                        "long_straddle", "long_strangle"] as StrategyKind[]) {
+      expect(entryOf(kind)).toBeGreaterThan(0);
+    }
+    for (const kind of ["call_credit_spread", "put_credit_spread", "iron_condor",
+                        "iron_butterfly", "short_straddle", "short_strangle",
+                        "short_put"] as StrategyKind[]) {
+      expect(entryOf(kind)).toBeLessThan(0);
+    }
+  });
+
+  it("butterfly middle legs carry ratio 2", () => {
+    expect(defaultRatios("call_butterfly")).toEqual([1, 2, 1]);
+    expect(defaultRatios("put_butterfly")).toEqual([1, 2, 1]);
+  });
+});
+
+describe("structuralMaxLoss (mirror of backend)", () => {
+  it("long call: max loss = debit", () => {
+    const legs: Leg[] = [{ right: "C", strike: 455, qty: 1, side: 1, entry: 2, iv: 0.2 }];
+    expect(structuralMaxLoss(legs)).toBeCloseTo(2.0, 9);
+  });
+  it("call credit spread: width - credit", () => {
+    const legs: Leg[] = [
+      { right: "C", strike: 450, qty: 1, side: -1, entry: 2.0, iv: 0.2 },
+      { right: "C", strike: 455, qty: 1, side: 1, entry: 0.8, iv: 0.2 },
+    ];
+    expect(structuralMaxLoss(legs)).toBeCloseTo(5 - 1.2, 9);
+  });
+  it("naked short call: unbounded", () => {
+    const legs: Leg[] = [{ right: "C", strike: 450, qty: 1, side: -1, entry: 2, iv: 0.2 }];
+    expect(structuralMaxLoss(legs)).toBeNull();
+  });
+  it("short put: bounded by strike", () => {
+    const legs: Leg[] = [{ right: "P", strike: 450, qty: 1, side: -1, entry: 3, iv: 0.2 }];
+    expect(structuralMaxLoss(legs)).toBeCloseTo(447, 9);
+  });
+});
+
+describe("credit-aware sizing", () => {
+  it("sizes a defined-risk credit spread by margin", () => {
+    const legs: Leg[] = [
+      { right: "C", strike: 450, qty: 1, side: -1, entry: 2.0, iv: 0.2 },
+      { right: "C", strike: 455, qty: 1, side: 1, entry: 0.8, iv: 0.2 },
+    ];
+    // entry = -1.2 credit; SL at -2.4 -> $120 risk/set
+    const s = computeSizingClient(legs, 25_000, 0.02, -2.4, 0.25);
+    expect(s.contracts).toBeGreaterThanOrEqual(1);
+    expect(s.maxLossAtStop).toBeCloseTo(s.contracts * 120, 6);
+    expect(s.maxLossStructural).toBeCloseTo(s.contracts * 380, 6);
+  });
+  it("flags undefined-risk shorts", () => {
+    const legs: Leg[] = [{ right: "C", strike: 450, qty: 1, side: -1, entry: 2, iv: 0.2 }];
+    const s = computeSizingClient(legs, 25_000, 0.02, -3.0, 0.25);
+    expect(s.contracts).toBe(5); // $100 risk/set vs $500 budget
+    expect(s.reasons.some((r) => r.includes("undefined risk"))).toBe(true);
+  });
+  it("refuses inverted stops", () => {
+    const legs: Leg[] = [{ right: "C", strike: 455, qty: 1, side: 1, entry: 2, iv: 0.2 }];
+    expect(computeSizingClient(legs, 25_000, 0.02, 2.5, 0.25).contracts).toBe(0);
+  });
+});

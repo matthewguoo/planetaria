@@ -12,6 +12,7 @@ import {
   premiumBarrierUnderlying,
   probAboveAtExpiry,
   probTouch,
+  structuralMaxLoss,
   terminalEv,
   TRADING_HOURS_PER_YEAR,
   type Leg,
@@ -93,6 +94,7 @@ export type ClientSizing = {
   contracts: number;
   entryCost: number;
   maxLossAtStop: number;
+  maxLossStructural: number;
   buyingPowerPct: number;
   perContractRisk: number;
   reasons: string[];
@@ -106,16 +108,33 @@ export function computeSizingClient(
   bpCapPct: number,
 ): ClientSizing {
   const reasons: string[] = [];
-  const entry = positionEntryCost(legs);
-  if (entry <= 0) {
-    return { contracts: 0, entryCost: 0, maxLossAtStop: 0, buyingPowerPct: 0, perContractRisk: 0,
-             reasons: ["net credit structures not supported in v1"] };
+  const entry = positionEntryCost(legs); // +debit / -credit, per share
+  const empty = { contracts: 0, entryCost: 0, maxLossAtStop: 0, maxLossStructural: 0,
+                  buyingPowerPct: 0, perContractRisk: 0 };
+  if (Math.abs(entry) < 0.01) {
+    return { ...empty, reasons: ["net premium is zero - nothing to size"] };
   }
-  const perSetCost = entry * 100;
+  // Stop-based risk is sign-agnostic: SL sits below entry on the
+  // position-value axis for debit AND credit structures.
   const perSetRisk = Math.max((entry - slPremium) * 100, 0);
   if (perSetRisk <= 0) {
-    return { contracts: 0, entryCost: 0, maxLossAtStop: 0, buyingPowerPct: 0, perContractRisk: 0,
-             reasons: ["stop-loss premium must be below entry cost"] };
+    return { ...empty, reasons: ["stop-loss premium must be below entry"] };
+  }
+  // Capital per set: debit paid for longs; margin (structural max loss) for
+  // defined-risk credit; stop-risk proxy for undefined-risk shorts.
+  const structural = structuralMaxLoss(legs);
+  let perSetCost: number;
+  let perSetStructural: number;
+  if (entry > 0) {
+    perSetCost = entry * 100;
+    perSetStructural = structural !== null ? structural * 100 : entry * 100;
+  } else if (structural === null) {
+    perSetCost = perSetRisk * 3;
+    perSetStructural = perSetCost;
+    reasons.push("undefined risk (net short calls) - stop-based sizing only");
+  } else {
+    perSetCost = structural * 100;
+    perSetStructural = structural * 100;
   }
   const budget = accountEquity * maxLossPct;
   let contracts = Math.floor(budget / perSetRisk);
@@ -135,6 +154,7 @@ export function computeSizingClient(
     contracts,
     entryCost: contracts * perSetCost,
     maxLossAtStop: contracts * perSetRisk,
+    maxLossStructural: contracts * perSetStructural,
     buyingPowerPct: accountEquity ? (contracts * perSetCost) / accountEquity : 0,
     perContractRisk: perSetRisk,
     reasons,

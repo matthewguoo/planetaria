@@ -88,7 +88,7 @@ export default function App() {
 
       <PositionsDrawer />
 
-      <section className="grid h-56 shrink-0 grid-cols-4 gap-px">
+      <section className="grid h-64 shrink-0 grid-cols-4 gap-px">
         <StrategyPanel designer={designer} />
         <SizingPanel designer={designer} />
         <ProbabilityPanel designer={designer} />

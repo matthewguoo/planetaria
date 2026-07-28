@@ -65,6 +65,7 @@ class MarketDataService:
         self._option_stream = None
         self._tasks: list[asyncio.Task] = []
         self._backfilled: set[str] = set()
+        self._backfill_tasks: dict[str, asyncio.Task] = {}
         self._lock = asyncio.Lock()
 
         # Synthetic feed when no keys (dev/UI QA); import here to avoid cycle.
@@ -120,6 +121,8 @@ class MarketDataService:
             await self.demo.stop()
         for task in self._tasks:
             task.cancel()
+        for task in self._backfill_tasks.values():
+            task.cancel()
         for stream in (self._stock_stream, self._option_stream):
             if stream is not None:
                 try:
@@ -157,13 +160,35 @@ class MarketDataService:
             await self.alpaca.call(
                 self._stock_stream.subscribe_quotes, self._on_stock_quote, symbol
             )
-        if symbol not in self._backfilled:
+        # Backfill runs as a background task: the caller (often the WS receive
+        # loop) must not stall for seconds of REST paging — subscribers get the
+        # cached snapshot immediately and a fresh bars_snapshot is pushed when
+        # the backfill lands.
+        self._kick_backfill(symbol)
+
+    def _kick_backfill(self, symbol: str) -> None:
+        if symbol in self._backfilled or symbol in self._backfill_tasks:
+            return
+        task = asyncio.create_task(self._backfill_and_mark(symbol), name=f"backfill-{symbol}")
+        self._backfill_tasks[symbol] = task
+
+    async def _backfill_and_mark(self, symbol: str) -> None:
+        try:
+            await self._backfill(symbol)
             self._backfilled.add(symbol)
-            try:
-                await self._backfill(symbol)
-            except Exception as exc:
-                self._backfilled.discard(symbol)
-                log.error("backfill %s failed: %s", symbol, exc)
+        except Exception as exc:
+            log.error("backfill %s failed: %s", symbol, exc)
+        finally:
+            self._backfill_tasks.pop(symbol, None)
+
+    async def ensure_backfilled(self, symbol: str) -> None:
+        """Await completion of the symbol's backfill (REST callers that want
+        the data in-hand rather than streamed)."""
+        symbol = symbol.upper()
+        self._kick_backfill(symbol)
+        task = self._backfill_tasks.get(symbol)
+        if task is not None:
+            await asyncio.shield(task)
 
     async def unsubscribe_stock(self, symbol: str) -> None:
         symbol = symbol.upper()

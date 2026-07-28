@@ -70,6 +70,10 @@ socket.onMessage((msg: WsMessage) => {
 socket.onStateChange((s) => {
   useTradingStore.getState().patchStatus({ connection: s as "connecting" | "open" | "down" });
 });
+// The socket connects at module init and may already be OPEN before this
+// listener registered — sync the current state or the pill shows CONNECTING
+// forever on a healthy feed.
+useTradingStore.getState().patchStatus({ connection: socket.state as "connecting" | "open" | "down" });
 
 /** Point the feed at a (symbol, tf). Idempotent; swaps subscriptions. */
 export function focusFeed(symbol: string, tf: Timeframe): void {

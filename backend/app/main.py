@@ -4,7 +4,7 @@ behavior lives in app.services.*. Keep this file boring."""
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from app import bootstrap
@@ -52,12 +52,14 @@ app.include_router(ws_router)
 
 
 @app.get("/api/health")
-async def health() -> dict:
+async def health(request: Request) -> dict:
     s = get_settings()
+    reconcile = getattr(request.app.state, "reconcile_task", None)
     return {
         "status": "ok",
         "paper": s.alpaca_paper,
         "stock_feed": s.alpaca_stock_feed,
         "option_feed": s.alpaca_option_feed,
         "alpaca_keys_configured": bool(s.alpaca_api_key and s.alpaca_secret_key),
+        "reconciled": reconcile is None or reconcile.done(),
     }

@@ -20,6 +20,7 @@ from app.services.options_math import (
     premium_barrier_underlying,
     prob_above_at_expiry,
     prob_touch,
+    structural_max_loss,
     terminal_ev,
 )
 
@@ -53,14 +54,30 @@ def compute_sizing(
     bp_cap_pct: float,
 ) -> SizingResult:
     reasons: list[str] = []
-    entry = position_entry_cost(legs)  # per share, one contract-set
-    if entry <= 0:
-        return SizingResult(0, 0, 0, 0, 0, 0, ["net credit structures not supported in v1"])
+    entry = position_entry_cost(legs)  # per share, one contract-set (+debit / -credit)
+    if abs(entry) < 0.01:
+        return SizingResult(0, 0, 0, 0, 0, 0, ["net premium is zero - nothing to size"])
 
-    per_set_cost = entry * 100
+    # Risk per set is stop-based and sign-agnostic: SL premium sits below entry
+    # on the position-value axis for debit AND credit structures alike.
     per_set_risk = max((entry - sl_premium) * 100, 0.0)
     if per_set_risk <= 0:
-        return SizingResult(0, 0, 0, 0, 0, 0, ["stop-loss premium must be below entry cost"])
+        return SizingResult(0, 0, 0, 0, 0, 0, ["stop-loss premium must be below entry"])
+
+    # Capital consumed per set: debit paid for longs; margin (structural max
+    # loss) for defined-risk credit; stop-risk proxy for undefined-risk shorts.
+    structural = structural_max_loss(legs)
+    if entry > 0:
+        per_set_cost = entry * 100
+        per_set_structural = structural * 100 if structural is not None else entry * 100
+    else:
+        if structural is None:
+            per_set_cost = per_set_risk * 3
+            per_set_structural = per_set_cost
+            reasons.append("undefined risk (net short calls) - stop-based sizing only")
+        else:
+            per_set_cost = structural * 100
+            per_set_structural = structural * 100
 
     budget = account_equity * max_loss_pct
     contracts = int(budget // per_set_risk)
@@ -81,7 +98,7 @@ def compute_sizing(
         contracts=contracts,
         entry_cost=round(contracts * per_set_cost, 2),
         max_loss_at_stop=round(contracts * per_set_risk, 2),
-        max_loss_structural=round(contracts * per_set_cost, 2),
+        max_loss_structural=round(contracts * per_set_structural, 2),
         buying_power_pct=round(contracts * per_set_cost / account_equity, 4) if account_equity else 0.0,
         per_contract_risk=round(per_set_risk, 2),
         reasons=reasons,

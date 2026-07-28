@@ -144,6 +144,19 @@ def payoff_at_expiry(legs: list[Leg], S: float) -> float:
     return total - position_entry_cost(legs)
 
 
+def structural_max_loss(legs: list[Leg]) -> float | None:
+    """Worst-case loss per share if held to expiry, as a positive number.
+    None means unbounded (net short calls). Expiry payoff is piecewise linear
+    with kinks only at strikes, so checking kinks + endpoints is exact."""
+    slope_up = sum(leg.side * leg.qty for leg in legs if leg.right == "C")
+    if slope_up < 0:
+        return None
+    strikes = [leg.strike for leg in legs]
+    points = [0.0, *strikes, max(strikes) * 2.0]
+    worst = min(payoff_at_expiry(legs, s) for s in points)
+    return -min(worst, 0.0)
+
+
 def breakevens(legs: list[Leg], lo: float, hi: float, steps: int = 2000) -> list[float]:
     """Zero crossings of expiry payoff, refined by bisection."""
     out: list[float] = []

@@ -112,6 +112,22 @@ export function payoffAtExpiry(legs: Leg[], S: number): number {
   return total - positionEntryCost(legs);
 }
 
+/**
+ * Worst-case loss per share if held to expiry (positive number); null =
+ * unbounded (net short calls). Expiry payoff is piecewise linear with kinks
+ * only at strikes, so kinks + endpoints are exact. Mirrors Python.
+ */
+export function structuralMaxLoss(legs: Leg[]): number | null {
+  let slopeUp = 0;
+  for (const leg of legs) if (leg.right === "C") slopeUp += leg.side * leg.qty;
+  if (slopeUp < 0) return null;
+  const strikes = legs.map((l) => l.strike);
+  const points = [0, ...strikes, Math.max(...strikes) * 2];
+  let worst = Infinity;
+  for (const s of points) worst = Math.min(worst, payoffAtExpiry(legs, s));
+  return -Math.min(worst, 0);
+}
+
 export function breakevens(legs: Leg[], lo: number, hi: number, steps = 2000): number[] {
   const out: number[] = [];
   let prevS = lo;

@@ -22,8 +22,10 @@ async def get_bars(
         raise HTTPException(400, f"unknown timeframe {tf!r}; valid: {sorted(TF_MS)}")
     market = request.app.state.market
     symbol = symbol.upper()
-    await market.subscribe_stock(symbol)  # idempotent; triggers backfill on first touch
+    await market.subscribe_stock(symbol)  # idempotent; kicks backfill on first touch
     await market.unsubscribe_stock(symbol)
+    if market.alpaca.configured:
+        await market.ensure_backfilled(symbol)  # REST callers want data in-hand
     return {"symbol": symbol, "tf": tf, "bars": market.bars.get_bars(symbol, tf, limit)}
 
 

@@ -56,15 +56,22 @@ export function useHeatmap(inputs: SurfaceInputs | null, onResult: (r: HeatmapRe
 
     const sigma = positionIv(legs) || 0.2;
     const tau = Math.max(hoursToExpiry, 0.5) / TRADING_HOURS_PER_YEAR;
-    const span = Math.max(spot * 4 * sigma * Math.sqrt(tau), spot * 0.004);
+    // Cover ±4σ√τ AND every strike (wide condor wings must not fall off the
+    // surface), with a little slack past the farthest strike.
+    const strikeReach = Math.max(...legs.map((l) => Math.abs(l.strike - qSpot)), 0);
+    const span = Math.max(
+      spot * 4 * sigma * Math.sqrt(tau),
+      strikeReach * 1.25,
+      spot * 0.004,
+    );
     const request: HeatmapRequest = {
       id: ++seqRef.current,
       legs,
       hoursToExpiry,
-      priceLo: qSpot - span,
+      priceLo: Math.max(qSpot - span, 0.01),
       priceHi: qSpot + span,
-      priceSteps: 96,
-      timeSteps: 48,
+      priceSteps: 128,
+      timeSteps: 64,
       tpPremium,
       slPremium,
       riskDollars,
