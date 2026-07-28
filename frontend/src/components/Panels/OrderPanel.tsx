@@ -92,6 +92,12 @@ export function OrderPanel({ designer }: { designer: Designer }) {
             </span>
           </span>
         </div>
+        <div
+          className="-mt-1 text-right text-[9px] text-bb-muted"
+          title="Underlying price where the position premium hits TP (green boundary on the chart)"
+        >
+          executes ≈ @{designer.probabilities?.tpBarrier?.toFixed(2) ?? "—"}
+        </div>
         <div className="flex items-center justify-between gap-2">
           <span className="text-[11px] text-bb-muted">SL</span>
           <span className="flex items-center gap-1">
@@ -111,6 +117,12 @@ export function OrderPanel({ designer }: { designer: Designer }) {
               {designer.slPremium != null ? designer.slPremium.toFixed(2) : "—"}
             </span>
           </span>
+        </div>
+        <div
+          className="-mt-1 text-right text-[9px] text-bb-muted"
+          title="Underlying price where the position premium hits SL (red boundary on the chart)"
+        >
+          executes ≈ @{designer.probabilities?.slBarrier?.toFixed(2) ?? "—"}
         </div>
         <div className="flex items-center justify-between gap-2">
           <span className="text-[11px] text-bb-muted">TIME STOP</span>

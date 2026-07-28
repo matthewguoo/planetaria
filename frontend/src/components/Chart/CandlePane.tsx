@@ -361,7 +361,7 @@ export function CandlePane() {
     const wrap = wrapRef.current;
     if (!overlayNow || !overlayNow.strikes.length || !wrap) return null;
     const layout = computeLayout(wrap.clientWidth, wrap.clientHeight);
-    const domain = currentDomain(barsRef.current, viewRef.current, overlayNow);
+    const domain = currentDomain(barsRef.current, viewRef.current, overlayNow, surfaceRef.current);
     let best: number | null = null;
     let bestDist = STRIKE_HIT_PX + 1;
     overlayNow.strikes.forEach((strike, i) => {
@@ -381,7 +381,7 @@ export function CandlePane() {
     if (!overlayNow || !overlayNow.strikes.length || !wrap) return null;
     const layout = computeLayout(wrap.clientWidth, wrap.clientHeight);
     if (Math.abs(x - (layout.plotW - RAIL_INSET)) > RAIL_HIT_PX) return null;
-    const domain = currentDomain(barsRef.current, viewRef.current, overlayNow);
+    const domain = currentDomain(barsRef.current, viewRef.current, overlayNow, surfaceRef.current);
     let best: number | null = null;
     let bestDist = RAIL_HIT_PX + 1;
     overlayNow.strikes.forEach((strike, i) => {
@@ -401,7 +401,7 @@ export function CandlePane() {
     const wrap = wrapRef.current;
     if (!overlayNow?.legs || !surface || !wrap) return null;
     const layout = computeLayout(wrap.clientWidth, wrap.clientHeight);
-    const domain = currentDomain(barsRef.current, viewRef.current, overlayNow);
+    const domain = currentDomain(barsRef.current, viewRef.current, overlayNow, surfaceRef.current);
     const view = viewRef.current;
     const n = barsRef.current.n;
     const tfMinutes = TF_MS[useTradingStore.getState().tf] / 60000;
@@ -432,7 +432,7 @@ export function CandlePane() {
       const canvas = canvasRef.current;
       if (!overlayNow || !overlayNow.strikes.length || !wrap || !canvas) return null;
       const layout = computeLayout(wrap.clientWidth, wrap.clientHeight);
-      const domain = currentDomain(barsRef.current, viewRef.current, overlayNow);
+      const domain = currentDomain(barsRef.current, viewRef.current, overlayNow, surfaceRef.current);
       const ctx = canvas.getContext("2d")!;
       ctx.font = "11px 'SF Mono', Consolas, monospace";
       for (const rect of computeChipRects(ctx, layout, domain, overlayNow)) {
@@ -457,7 +457,7 @@ export function CandlePane() {
       const factor = e.deltaY > 0 ? 1.15 : 1 / 1.15;
       if (x > layout.plotW && y <= layout.plotH) {
         // Wheel over the price axis: vertical scale around the cursor price.
-        const domain = currentDomain(barsRef.current, view, overlayRef.current);
+        const domain = currentDomain(barsRef.current, view, overlayRef.current, surfaceRef.current);
         const anchor = yToPrice(y, domain, layout);
         view.yDomain = [
           anchor - (anchor - domain[0]) * factor,
@@ -488,7 +488,7 @@ export function CandlePane() {
         // Grab the price axis: vertical scale drag.
         axisDragRef.current = {
           startY: y,
-          domain: currentDomain(barsRef.current, viewRef.current, overlayRef.current),
+          domain: currentDomain(barsRef.current, viewRef.current, overlayRef.current, surfaceRef.current),
         };
         return;
       }
@@ -522,7 +522,7 @@ export function CandlePane() {
           startX: e.clientX,
           startY: e.clientY,
           startRight: viewRef.current.rightIndex,
-          startDomain: currentDomain(barsRef.current, viewRef.current, overlayRef.current),
+          startDomain: currentDomain(barsRef.current, viewRef.current, overlayRef.current, surfaceRef.current),
           vActive: viewRef.current.yDomain !== null,
         };
       }
@@ -543,7 +543,7 @@ export function CandlePane() {
         const target = dragTargetRef.current;
         const overlayNow = overlayRef.current;
         if (overlayNow) {
-          const domain = currentDomain(barsRef.current, viewRef.current, overlayNow);
+          const domain = currentDomain(barsRef.current, viewRef.current, overlayNow, surfaceRef.current);
           if (target.kind === "strike") {
             const price = yToPrice(y, domain, layout);
             const snaps = overlayNow.snapStrikes;
@@ -682,7 +682,18 @@ export function CandlePane() {
 
 // ------------------------------------------------------------- rendering
 
-function currentDomain(bars: Bars, view: ViewState, overlay: StrategyOverlay | null): [number, number] {
+/** Earliest-in-time finite value of a contour line (its "active now" level). */
+function firstFinite(line: Float64Array): number | null {
+  for (let i = 0; i < line.length; i++) if (isFinite(line[i])) return line[i];
+  return null;
+}
+
+function currentDomain(
+  bars: Bars,
+  view: ViewState,
+  overlay: StrategyOverlay | null,
+  surface: HeatmapResult | null = null,
+): [number, number] {
   // Manual vertical scale (axis wheel/drag or chart vertical pan) wins;
   // double-click restores auto-fit.
   if (view.yDomain) return view.yDomain;
@@ -690,6 +701,14 @@ function currentDomain(bars: Bars, view: ViewState, overlay: StrategyOverlay | n
   if (!overlay) return base;
   const levels = [...overlay.strikes];
   if (overlay.spot) levels.push(overlay.spot);
+  // Auto-fit also keeps the TP/SL execution boundaries on screen, so editing
+  // the % fields visibly moves the lines into view.
+  if (surface) {
+    const tp = firstFinite(surface.tpLine);
+    const sl = firstFinite(surface.slLine);
+    if (tp !== null) levels.push(tp);
+    if (sl !== null) levels.push(sl);
+  }
   return extendDomain(base, levels);
 }
 
@@ -720,7 +739,7 @@ function render(
     return;
   }
 
-  const domain = currentDomain(bars, view, overlay);
+  const domain = currentDomain(bars, view, overlay, surface);
   const [first, last] = visibleRange(bars, view);
   const barW = layout.plotW / view.barsVisible;
   const bodyW = Math.max(1, Math.min(barW * 0.7, 14));
@@ -759,6 +778,7 @@ function render(
     drawStrikes(ctx, layout, domain, overlay, draggingStrike);
     drawRail(ctx, layout, domain, overlay, draggingStrike);
   }
+  if (overlay?.legs && surface) drawExitLevels(ctx, layout, domain, surface);
   drawLastPrice(ctx, layout, bars, domain);
   if (mouse && mouse.x <= layout.plotW && mouse.y <= layout.plotH) {
     drawCrosshair(ctx, layout, bars, view, domain, mouse);
@@ -1098,6 +1118,45 @@ function drawRail(
     ctx.strokeStyle = COLORS.bg;
     ctx.stroke();
   });
+}
+
+/**
+ * Always-visible execution boundaries: horizontal guides + price-axis badges
+ * at the underlying level where TP / SL would fire at the earliest active
+ * time. Directly driven by the TP%/SL% fields (and contour drags). Off-scale
+ * levels clamp to the axis edge with a direction arrow instead of vanishing.
+ */
+function drawExitLevels(
+  ctx: CanvasRenderingContext2D,
+  layout: Layout,
+  domain: [number, number],
+  surface: HeatmapResult,
+) {
+  const drawLevel = (level: number | null, color: string, tag: string) => {
+    if (level === null) return;
+    const y = priceToY(level, domain, layout);
+    const onScreen = y >= 0 && y <= layout.volTop;
+    if (onScreen) {
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1;
+      ctx.setLineDash([1, 4]);
+      ctx.beginPath();
+      ctx.moveTo(0, y);
+      ctx.lineTo(layout.plotW, y);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+    const by = Math.max(8, Math.min(layout.volTop - 8, y));
+    const text = onScreen ? `${tag} ${fmtPrice(level)}` : `${tag} ${y < 0 ? "↑" : "↓"}`;
+    ctx.fillStyle = color;
+    ctx.fillRect(layout.plotW, by - 8, layout.axisW, 16);
+    ctx.fillStyle = COLORS.bg;
+    ctx.textAlign = "left";
+    ctx.textBaseline = "middle";
+    ctx.fillText(text, layout.plotW + 4, by);
+  };
+  drawLevel(firstFinite(surface.tpLine), COLORS.tp, "TP");
+  drawLevel(firstFinite(surface.slLine), COLORS.sl, "SL");
 }
 
 function niceStep(span: number, maxTicks: number): number {
