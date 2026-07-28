@@ -5,12 +5,14 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes.market_data import router as market_router
+from app.api.routes.options import router as options_router
 from app.api.websocket import router as ws_router
 from app.config import get_settings
 from app.services.alpaca import AlpacaService
 from app.services.bar_store import BarStore
 from app.services.broadcast import Broadcaster
 from app.services.market_data import MarketDataService
+from app.services.options_chain import ChainService
 from app.services.redis_client import RedisFacade
 
 logging.basicConfig(
@@ -43,6 +45,7 @@ async def lifespan(app: FastAPI):
     app.state.alpaca = alpaca
     app.state.broadcaster = broadcaster
     app.state.market = market
+    app.state.chain = ChainService(alpaca, redis, market)
 
     await market.start()
     yield
@@ -62,6 +65,7 @@ app.add_middleware(
 )
 
 app.include_router(market_router)
+app.include_router(options_router)
 app.include_router(ws_router)
 
 
