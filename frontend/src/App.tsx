@@ -2,6 +2,15 @@ import { useEffect, useState } from "react";
 import { Header } from "./components/Header";
 import { CandlePane } from "./components/Chart/CandlePane";
 import { ChartControls } from "./components/Chart/ChartControls";
+import { OrderPanel } from "./components/Panels/OrderPanel";
+import { ProbabilityPanel } from "./components/Panels/ProbabilityPanel";
+import { SizingPanel } from "./components/Panels/SizingPanel";
+import { StrategyPanel } from "./components/Panels/StrategyPanel";
+import { PositionsDrawer } from "./components/Positions/PositionsDrawer";
+import { useDesigner } from "./lib/useDesigner";
+import { useAccountStore } from "./store/accountStore";
+import { useStrategyStore } from "./store/strategyStore";
+import { useTradingStore } from "./store/tradingStore";
 
 const MIN_WIDTH = 1280;
 
@@ -31,11 +40,39 @@ function ViewportLockout() {
   );
 }
 
+/** Background data pumps: chain (10s), account (30s), positions (5s). */
+function useDataPumps() {
+  const symbol = useTradingStore((s) => s.symbol);
+  const loadChain = useStrategyStore((s) => s.loadChain);
+  const refreshAccount = useAccountStore((s) => s.refreshAccount);
+  const refreshPositions = useAccountStore((s) => s.refreshPositions);
+
+  useEffect(() => {
+    void loadChain(symbol);
+    const id = window.setInterval(() => void loadChain(symbol), 10_000);
+    return () => window.clearInterval(id);
+  }, [symbol, loadChain]);
+
+  useEffect(() => {
+    void refreshAccount();
+    void refreshPositions();
+    const acctId = window.setInterval(() => void refreshAccount(), 30_000);
+    const posId = window.setInterval(() => void refreshPositions(), 5_000);
+    return () => {
+      window.clearInterval(acctId);
+      window.clearInterval(posId);
+    };
+  }, [refreshAccount, refreshPositions]);
+}
+
 // ?unlock bypasses the viewport lock (QA/testing in small panes).
 const UNLOCKED = new URLSearchParams(window.location.search).has("unlock");
 
 export default function App() {
   const locked = useViewportLock();
+  useDataPumps();
+  const designer = useDesigner();
+
   if (locked && !UNLOCKED) return <ViewportLockout />;
 
   return (
@@ -49,13 +86,13 @@ export default function App() {
         </div>
       </main>
 
+      <PositionsDrawer />
+
       <section className="grid h-56 shrink-0 grid-cols-4 gap-px">
-        {["STRATEGY", "SIZING", "PROBABILITY", "ORDER"].map((title) => (
-          <div key={title} className="panel flex flex-col">
-            <div className="panel-title">{title}</div>
-            <div className="flex flex-1 items-center justify-center text-bb-muted">—</div>
-          </div>
-        ))}
+        <StrategyPanel designer={designer} />
+        <SizingPanel designer={designer} />
+        <ProbabilityPanel designer={designer} />
+        <OrderPanel designer={designer} />
       </section>
     </div>
   );

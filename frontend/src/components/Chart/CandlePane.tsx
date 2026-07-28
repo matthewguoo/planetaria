@@ -1,7 +1,22 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import { barsTable } from "../../lib/perspective";
 import { focusFeed, onSnapshot } from "../../lib/barFeed";
-import { useTradingStore } from "../../store/tradingStore";
+import type { HeatmapResult } from "../../lib/heatmap.worker";
+import {
+  normPdf,
+  positionEntryCost,
+  positionIv,
+  TRADING_HOURS_PER_YEAR,
+  type Leg,
+} from "../../lib/optionsMath";
+import { useHeatmap } from "../../lib/useHeatmap";
+import { TF_MS, useTradingStore } from "../../store/tradingStore";
+import {
+  availableStrikes,
+  buildLegs,
+  hoursToExpiry as calcHoursToExpiry,
+  useStrategyStore,
+} from "../../store/strategyStore";
 import {
   computeLayout,
   extendDomain,
@@ -29,6 +44,13 @@ const COLORS = {
   crosshair: "#444444",
   volUp: "rgba(0,200,83,0.35)",
   volDown: "rgba(255,23,68,0.35)",
+  strike: "#FFB000",
+  strikeShort: "#FFA028",
+  breakeven: "#FFFFFF",
+  tp: "#00C853",
+  sl: "#FF1744",
+  expiry: "#2196F3",
+  timeStop: "#FF6D00",
 };
 
 const EMPTY: Bars = {
@@ -41,12 +63,36 @@ const EMPTY: Bars = {
   n: 0,
 };
 
-/** Future pad (fraction of visible width) kept clear right of the last bar. */
 const RIGHT_PAD_FRAC = 0.08;
+const STRIKE_HIT_PX = 6;
+
+type StrategyOverlay = {
+  legs: (Leg & { symbol: string })[] | null;
+  strikes: number[];
+  strikeSides: number[]; // +1 long leg, -1 short leg (for coloring)
+  snapStrikes: number[];
+  hoursToExpiry: number;
+  timeStopHours: number;
+  tpPremium: number | null;
+  slPremium: number | null;
+  entry: number;
+  sigma: number;
+  spot: number;
+};
 
 export function CandlePane() {
   const symbol = useTradingStore((s) => s.symbol);
   const tf = useTradingStore((s) => s.tf);
+  const quote = useTradingStore((s) => s.quote);
+
+  const chain = useStrategyStore((s) => s.chain);
+  const expiry = useStrategyStore((s) => s.expiry);
+  const kind = useStrategyStore((s) => s.kind);
+  const strikes = useStrategyStore((s) => s.strikes);
+  const tpPct = useStrategyStore((s) => s.tpPct);
+  const slPct = useStrategyStore((s) => s.slPct);
+  const timeStopEt = useStrategyStore((s) => s.timeStopEt);
+  const setStrike = useStrategyStore((s) => s.setStrike);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -54,7 +100,48 @@ export function CandlePane() {
   const viewRef = useRef<ViewState>({ rightIndex: 0, barsVisible: 120, follow: true });
   const mouseRef = useRef<{ x: number; y: number } | null>(null);
   const dragRef = useRef<{ startX: number; startRight: number } | null>(null);
+  const strikeDragRef = useRef<number | null>(null); // index into strikes
+  const surfaceRef = useRef<HeatmapResult | null>(null);
+  const overlayRef = useRef<StrategyOverlay | null>(null);
   const rafRef = useRef(0);
+
+  // ------------------------------------------------- strategy derivations
+
+  const overlay: StrategyOverlay | null = useMemo(() => {
+    const legs = buildLegs({ chain, expiry, kind, strikes });
+    if (!chain || !expiry) return null;
+    const spot = quote?.mid || chain.spot;
+    const hte = calcHoursToExpiry(expiry);
+    const entry = legs ? positionEntryCost(legs) : 0;
+    const sides =
+      kind === "long_call" || kind === "long_put" ? [1] : [1, -1];
+    // Time stop: today at HH:MM ET, in trading hours from now.
+    const nowEt = new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/New_York",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    }).formatToParts(new Date());
+    const parts = Object.fromEntries(nowEt.map((p) => [p.type, p.value]));
+    const nowMin = Number(parts.hour === "24" ? 0 : parts.hour) * 60 + Number(parts.minute);
+    const [tsH, tsM] = timeStopEt.split(":").map(Number);
+    const timeStopHours = Math.max(0, Math.min((tsH * 60 + tsM - nowMin) / 60, 6.5));
+    return {
+      legs,
+      strikes,
+      strikeSides: sides,
+      snapStrikes: availableStrikes(chain, expiry),
+      hoursToExpiry: hte,
+      timeStopHours,
+      tpPremium: legs && entry > 0 ? entry * (1 + tpPct) : null,
+      slPremium: legs && entry > 0 ? entry * (1 - slPct) : null,
+      entry,
+      sigma: legs ? positionIv(legs) : 0,
+      spot,
+    };
+  }, [chain, expiry, kind, strikes, tpPct, slPct, timeStopEt, quote]);
+
+  overlayRef.current = overlay;
 
   const draw = useCallback(() => {
     cancelAnimationFrame(rafRef.current);
@@ -65,6 +152,7 @@ export function CandlePane() {
       const dpr = window.devicePixelRatio || 1;
       const cssW = wrap.clientWidth;
       const cssH = wrap.clientHeight;
+      if (!cssW || !cssH) return;
       if (canvas.width !== cssW * dpr || canvas.height !== cssH * dpr) {
         canvas.width = cssW * dpr;
         canvas.height = cssH * dpr;
@@ -73,14 +161,54 @@ export function CandlePane() {
       }
       const ctx = canvas.getContext("2d")!;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      render(ctx, computeLayout(cssW, cssH), barsRef.current, viewRef.current, mouseRef.current);
+      render(
+        ctx,
+        computeLayout(cssW, cssH),
+        barsRef.current,
+        viewRef.current,
+        mouseRef.current,
+        overlayRef.current,
+        surfaceRef.current,
+        TF_MS[tf] / 60000,
+        strikeDragRef.current,
+      );
     });
-  }, []);
+  }, [tf]);
 
-  // Data plumbing: perspective view of the focused (symbol, tf) table.
+  // Surface recompute (worker) — remaps on pan/zoom without recompute.
+  const surfaceInputs = useMemo(() => {
+    if (!overlay || !overlay.legs) return null;
+    const risk =
+      overlay.slPremium !== null ? (overlay.entry - overlay.slPremium) * 100 : 100;
+    return {
+      legs: overlay.legs,
+      hoursToExpiry: overlay.hoursToExpiry,
+      spot: overlay.spot,
+      tpPremium: overlay.tpPremium,
+      slPremium: overlay.slPremium,
+      riskDollars: Math.max(risk, 1),
+    };
+  }, [overlay]);
+
+  useHeatmap(surfaceInputs, (result) => {
+    surfaceRef.current = result;
+    draw();
+  });
+
+  useEffect(() => {
+    if (!overlay?.legs) surfaceRef.current = null;
+    draw();
+  }, [overlay, draw]);
+
+  // ------------------------------------------------------- data plumbing
+
   useEffect(() => {
     let disposed = false;
-    let view: { delete(): Promise<void>; on_update(cb: () => void): void; to_columns(): Promise<Record<string, unknown[]>> } | null = null;
+    let view: {
+      delete(): Promise<void>;
+      on_update(cb: () => void): void;
+      to_columns(): Promise<Record<string, unknown[]>>;
+    } | null = null;
 
     focusFeed(symbol, tf);
 
@@ -101,9 +229,9 @@ export function CandlePane() {
             n,
           }
         : EMPTY;
-      const view_ = viewRef.current;
-      if (view_.follow) {
-        view_.rightIndex = Math.max(0, n - 1) + view_.barsVisible * RIGHT_PAD_FRAC;
+      const v = viewRef.current;
+      if (v.follow) {
+        v.rightIndex = Math.max(0, n - 1) + v.barsVisible * RIGHT_PAD_FRAC;
       }
       draw();
     }
@@ -120,7 +248,6 @@ export function CandlePane() {
     })();
 
     const offSnapshot = onSnapshot(() => void pull());
-
     return () => {
       disposed = true;
       offSnapshot();
@@ -129,23 +256,41 @@ export function CandlePane() {
     };
   }, [symbol, tf, draw]);
 
-  // Resize.
   useEffect(() => {
     const observer = new ResizeObserver(draw);
     if (wrapRef.current) observer.observe(wrapRef.current);
     return () => observer.disconnect();
   }, [draw]);
 
-  // Interactions.
+  // ---------------------------------------------------------- interactions
+
+  const hitTestStrike = useCallback((y: number): number | null => {
+    const overlayNow = overlayRef.current;
+    const wrap = wrapRef.current;
+    if (!overlayNow || !overlayNow.strikes.length || !wrap) return null;
+    const layout = computeLayout(wrap.clientWidth, wrap.clientHeight);
+    const domain = currentDomain(barsRef.current, viewRef.current, overlayNow);
+    let best: number | null = null;
+    let bestDist = STRIKE_HIT_PX + 1;
+    overlayNow.strikes.forEach((strike, i) => {
+      const dist = Math.abs(priceToY(strike, domain, layout) - y);
+      if (dist < bestDist) {
+        best = i;
+        bestDist = dist;
+      }
+    });
+    return best;
+  }, []);
+
   const onWheel = useCallback(
     (e: React.WheelEvent) => {
       const view = viewRef.current;
-      const layout = computeLayout(wrapRef.current!.clientWidth, wrapRef.current!.clientHeight);
+      const wrap = wrapRef.current!;
+      const layout = computeLayout(wrap.clientWidth, wrap.clientHeight);
       const rect = canvasRef.current!.getBoundingClientRect();
       const anchor = xToIndex(e.clientX - rect.left, view, layout);
       const factor = e.deltaY > 0 ? 1.15 : 1 / 1.15;
       const next = Math.max(20, Math.min(3000, view.barsVisible * factor));
-      // Keep the bar under the cursor stationary while zooming.
       const frac = (view.rightIndex - anchor) / view.barsVisible;
       view.barsVisible = next;
       view.rightIndex = anchor + frac * next;
@@ -155,35 +300,71 @@ export function CandlePane() {
     [draw],
   );
 
-  const onMouseDown = useCallback((e: React.MouseEvent) => {
-    dragRef.current = { startX: e.clientX, startRight: viewRef.current.rightIndex };
-  }, []);
+  const onMouseDown = useCallback(
+    (e: React.MouseEvent) => {
+      const rect = canvasRef.current!.getBoundingClientRect();
+      const y = e.clientY - rect.top;
+      const strikeIdx = hitTestStrike(y);
+      if (strikeIdx !== null) {
+        strikeDragRef.current = strikeIdx;
+      } else {
+        dragRef.current = { startX: e.clientX, startRight: viewRef.current.rightIndex };
+      }
+    },
+    [hitTestStrike],
+  );
 
   const onMouseMove = useCallback(
     (e: React.MouseEvent) => {
       const rect = canvasRef.current!.getBoundingClientRect();
-      mouseRef.current = { x: e.clientX - rect.left, y: e.clientY - rect.top };
-      const drag = dragRef.current;
-      if (drag) {
-        const layout = computeLayout(wrapRef.current!.clientWidth, wrapRef.current!.clientHeight);
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      mouseRef.current = { x, y };
+      const wrap = wrapRef.current!;
+      const layout = computeLayout(wrap.clientWidth, wrap.clientHeight);
+
+      if (strikeDragRef.current !== null) {
+        const overlayNow = overlayRef.current;
+        if (overlayNow) {
+          const domain = currentDomain(barsRef.current, viewRef.current, overlayNow);
+          const price = yToPrice(y, domain, layout);
+          const snaps = overlayNow.snapStrikes;
+          if (snaps.length) {
+            const snapped = snaps.reduce(
+              (best, s) => (Math.abs(s - price) < Math.abs(best - price) ? s : best),
+              snaps[0],
+            );
+            if (snapped !== overlayNow.strikes[strikeDragRef.current]) {
+              setStrike(strikeDragRef.current, snapped);
+            }
+          }
+        }
+      } else if (dragRef.current) {
         const barW = layout.plotW / viewRef.current.barsVisible;
-        viewRef.current.rightIndex = drag.startRight - (e.clientX - drag.startX) / barW;
+        viewRef.current.rightIndex =
+          dragRef.current.startRight - (e.clientX - dragRef.current.startX) / barW;
         viewRef.current.follow = false;
+      } else {
+        const cursor = hitTestStrike(y) !== null ? "ns-resize" : "crosshair";
+        if (canvasRef.current!.style.cursor !== cursor) {
+          canvasRef.current!.style.cursor = cursor;
+        }
       }
       draw();
     },
-    [draw],
+    [draw, hitTestStrike, setStrike],
   );
 
-  const onMouseUp = useCallback(() => {
+  const endDrag = useCallback(() => {
     dragRef.current = null;
+    strikeDragRef.current = null;
   }, []);
 
   const onMouseLeave = useCallback(() => {
     mouseRef.current = null;
-    dragRef.current = null;
+    endDrag();
     draw();
-  }, [draw]);
+  }, [draw, endDrag]);
 
   const onDoubleClick = useCallback(() => {
     const view = viewRef.current;
@@ -199,7 +380,7 @@ export function CandlePane() {
         onWheel={onWheel}
         onMouseDown={onMouseDown}
         onMouseMove={onMouseMove}
-        onMouseUp={onMouseUp}
+        onMouseUp={endDrag}
         onMouseLeave={onMouseLeave}
         onDoubleClick={onDoubleClick}
       />
@@ -207,7 +388,19 @@ export function CandlePane() {
   );
 }
 
-// ---------------------------------------------------------------- rendering
+// ------------------------------------------------------------- rendering
+
+function currentDomain(bars: Bars, view: ViewState, overlay: StrategyOverlay | null): [number, number] {
+  const base = priceDomain(bars, view);
+  if (!overlay) return base;
+  const levels = [...overlay.strikes];
+  if (overlay.spot) levels.push(overlay.spot);
+  return extendDomain(base, levels);
+}
+
+function futureIndex(hoursFromNow: number, n: number, tfMinutes: number): number {
+  return n - 1 + (hoursFromNow * 60) / tfMinutes;
+}
 
 function render(
   ctx: CanvasRenderingContext2D,
@@ -215,6 +408,10 @@ function render(
   bars: Bars,
   view: ViewState,
   mouse: { x: number; y: number } | null,
+  overlay: StrategyOverlay | null,
+  surface: HeatmapResult | null,
+  tfMinutes: number,
+  draggingStrike: number | null,
 ) {
   ctx.fillStyle = COLORS.bg;
   ctx.fillRect(0, 0, layout.width, layout.height);
@@ -227,16 +424,21 @@ function render(
     return;
   }
 
-  const domain = extendDomain(priceDomain(bars, view), []);
+  const domain = currentDomain(bars, view, overlay);
   const [first, last] = visibleRange(bars, view);
   const barW = layout.plotW / view.barsVisible;
   const bodyW = Math.max(1, Math.min(barW * 0.7, 14));
 
   drawPriceGrid(ctx, layout, domain);
-  drawTimeAxis(ctx, layout, bars, view, first, last);
+  drawTimeAxis(ctx, layout, bars, view, first, last, overlay, tfMinutes);
+
+  // Heatmap first: background layer in the future region.
+  if (overlay?.legs && surface) {
+    drawHeatmap(ctx, layout, bars, view, domain, overlay, surface, tfMinutes);
+  }
+
   drawVolume(ctx, layout, bars, view, first, last);
 
-  // Candles.
   for (let i = first; i <= last; i++) {
     const x = indexToX(i, view, layout);
     if (x < -barW || x > layout.plotW + barW) continue;
@@ -249,21 +451,188 @@ function render(
     ctx.strokeStyle = color;
     ctx.fillStyle = color;
     ctx.lineWidth = 1;
-    // Wick
     ctx.beginPath();
     ctx.moveTo(x, yH);
     ctx.lineTo(x, yL);
     ctx.stroke();
-    // Body
     const top = Math.min(yO, yC);
-    const height = Math.max(1, Math.abs(yC - yO));
-    ctx.fillRect(x - bodyW / 2, top, bodyW, height);
+    ctx.fillRect(x - bodyW / 2, top, bodyW, Math.max(1, Math.abs(yC - yO)));
   }
 
+  if (overlay) drawStrikes(ctx, layout, domain, overlay, draggingStrike);
   drawLastPrice(ctx, layout, bars, domain);
   if (mouse && mouse.x <= layout.plotW && mouse.y <= layout.plotH) {
     drawCrosshair(ctx, layout, bars, view, domain, mouse);
   }
+}
+
+function plColor(pl: number, risk: number): string {
+  // R-normalized diverging scale, capped ±2R.
+  const r = Math.max(Math.min(pl / risk, 2), -2);
+  if (r >= 0) {
+    const t = r / 2;
+    return `rgba(0,${Math.round(120 + 80 * t)},${Math.round(50 + 30 * t)},${0.28 + 0.30 * t})`;
+  }
+  const t = -r / 2;
+  return `rgba(${Math.round(150 + 105 * t)},${Math.round(23 * (1 - t) + 10)},${Math.round(50 * (1 - t) + 18)},${0.28 + 0.30 * t})`;
+}
+
+function drawHeatmap(
+  ctx: CanvasRenderingContext2D,
+  layout: Layout,
+  bars: Bars,
+  view: ViewState,
+  domain: [number, number],
+  overlay: StrategyOverlay,
+  surface: HeatmapResult,
+  tfMinutes: number,
+) {
+  const n = bars.n;
+  const risk = Math.max(
+    overlay.slPremium !== null ? (overlay.entry - overlay.slPremium) * 100 : 100,
+    1,
+  );
+  const x0 = indexToX(n - 1, view, layout);
+  const xExpiry = indexToX(futureIndex(surface.hoursToExpiry, n, tfMinutes), view, layout);
+  if (xExpiry <= x0) return;
+
+  const { priceSteps, timeSteps, priceLo, priceHi, grid } = surface;
+  const colW = (xExpiry - x0) / timeSteps;
+  // Draw columns left->right (now -> expiry).
+  for (let ti = 0; ti < timeSteps; ti++) {
+    const cx0 = x0 + ti * colW;
+    if (cx0 > layout.plotW) break;
+    const cx1 = Math.min(cx0 + colW + 0.5, layout.plotW);
+    if (cx1 < 0) continue;
+    for (let pi = 0; pi < priceSteps; pi++) {
+      const p0 = priceLo + ((priceHi - priceLo) * pi) / (priceSteps - 1);
+      const p1 = priceLo + ((priceHi - priceLo) * (pi + 1)) / (priceSteps - 1);
+      const y0 = priceToY(p1, domain, layout);
+      const y1 = priceToY(p0, domain, layout);
+      if (y1 < 0 || y0 > layout.volTop) continue;
+      ctx.fillStyle = plColor(grid[ti * priceSteps + pi], risk);
+      ctx.fillRect(Math.max(cx0, 0), Math.max(y0, 0), cx1 - Math.max(cx0, 0), Math.min(y1, layout.volTop) - Math.max(y0, 0));
+    }
+  }
+
+  // Contours.
+  const lineAt = (line: Float64Array, color: string, dash: number[]) => {
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.4;
+    ctx.setLineDash(dash);
+    ctx.beginPath();
+    let started = false;
+    for (let ti = 0; ti < timeSteps; ti++) {
+      const s = line[ti];
+      if (!isFinite(s)) {
+        started = false;
+        continue;
+      }
+      const x = x0 + (ti + 0.5) * colW;
+      const y = priceToY(s, domain, layout);
+      if (x < 0 || x > layout.plotW || y < 0 || y > layout.volTop) {
+        started = false;
+        continue;
+      }
+      if (!started) {
+        ctx.moveTo(x, y);
+        started = true;
+      } else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+    ctx.setLineDash([]);
+  };
+  lineAt(surface.breakevenLine, COLORS.breakeven, [2, 3]);
+  lineAt(surface.tpLine, COLORS.tp, [6, 3]);
+  lineAt(surface.slLine, COLORS.sl, [6, 3]);
+
+  // Expiry + time-stop verticals.
+  const vline = (x: number, color: string, label: string) => {
+    if (x < 0 || x > layout.plotW) return;
+    ctx.strokeStyle = color;
+    ctx.setLineDash([4, 4]);
+    ctx.beginPath();
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x, layout.plotH);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = color;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "top";
+    ctx.fillText(label, x, 4);
+  };
+  vline(xExpiry, COLORS.expiry, "EXPIRY");
+  if (overlay.timeStopHours < surface.hoursToExpiry) {
+    vline(
+      indexToX(futureIndex(overlay.timeStopHours, n, tfMinutes), view, layout),
+      COLORS.timeStop,
+      "TIME STOP",
+    );
+  }
+
+  // Terminal density strip along the expiry line (model-implied lognormal).
+  if (overlay.sigma > 0 && overlay.spot > 0 && xExpiry > 0 && xExpiry <= layout.plotW) {
+    const tau = surface.hoursToExpiry / TRADING_HOURS_PER_YEAR;
+    const sq = overlay.sigma * Math.sqrt(tau);
+    if (sq > 0) {
+      const mu = Math.log(overlay.spot) + (0.05 - 0.5 * overlay.sigma ** 2) * tau;
+      const maxW = 46;
+      ctx.fillStyle = "rgba(255,176,0,0.20)";
+      ctx.beginPath();
+      ctx.moveTo(xExpiry, priceToY(domain[1], domain, layout));
+      const samples = 80;
+      let peak = 0;
+      const densities: number[] = [];
+      for (let i = 0; i <= samples; i++) {
+        const p = domain[0] + ((domain[1] - domain[0]) * i) / samples;
+        const d = p > 0 ? normPdf((Math.log(p) - mu) / sq) / (p * sq) : 0;
+        densities.push(d);
+        if (d > peak) peak = d;
+      }
+      for (let i = 0; i <= samples; i++) {
+        const p = domain[0] + ((domain[1] - domain[0]) * i) / samples;
+        const w = peak > 0 ? (densities[i] / peak) * maxW : 0;
+        ctx.lineTo(xExpiry - w, priceToY(p, domain, layout));
+      }
+      ctx.lineTo(xExpiry, priceToY(domain[0], domain, layout));
+      ctx.closePath();
+      ctx.fill();
+    }
+  }
+}
+
+function drawStrikes(
+  ctx: CanvasRenderingContext2D,
+  layout: Layout,
+  domain: [number, number],
+  overlay: StrategyOverlay,
+  draggingStrike: number | null,
+) {
+  overlay.strikes.forEach((strike, i) => {
+    const y = priceToY(strike, domain, layout);
+    if (y < 0 || y > layout.volTop) return;
+    const isShort = overlay.strikeSides[i] < 0;
+    const color = isShort ? COLORS.strikeShort : COLORS.strike;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = draggingStrike === i ? 2.5 : 1.5;
+    ctx.setLineDash(isShort ? [8, 4] : []);
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(layout.plotW, y);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    // Label chip on the left.
+    const label = `${isShort ? "SHORT " : ""}K ${fmtPrice(strike)} ⇕`;
+    ctx.fillStyle = "rgba(0,0,0,0.85)";
+    const w = ctx.measureText(label).width + 12;
+    ctx.fillRect(6, y - 9, w, 18);
+    ctx.strokeStyle = color;
+    ctx.strokeRect(6, y - 9, w, 18);
+    ctx.fillStyle = color;
+    ctx.textAlign = "left";
+    ctx.textBaseline = "middle";
+    ctx.fillText(label, 12, y);
+  });
 }
 
 function niceStep(span: number, maxTicks: number): number {
@@ -299,6 +668,8 @@ function drawTimeAxis(
   view: ViewState,
   first: number,
   last: number,
+  overlay: StrategyOverlay | null,
+  tfMinutes: number,
 ) {
   const targetPx = 90;
   const step = Math.max(1, Math.round((view.barsVisible * targetPx) / layout.plotW));
@@ -315,6 +686,18 @@ function drawTimeAxis(
     const isNewDay = i > 0 && fmtDayET(bars.t[i]) !== fmtDayET(bars.t[i - 1]);
     ctx.fillStyle = isNewDay ? COLORS.last : COLORS.axisText;
     ctx.fillText(isNewDay ? fmtDayET(bars.t[i]) : fmtTimeET(bars.t[i]), x, layout.plotH + 6);
+  }
+  // Future-region ticks: +1h, +2h, ... in trading hours.
+  if (overlay?.legs) {
+    ctx.fillStyle = COLORS.expiry;
+    const hteCeil = Math.ceil(overlay.hoursToExpiry);
+    const hourStep = overlay.hoursToExpiry > 14 ? 6.5 : 1;
+    for (let h = hourStep; h < hteCeil; h += hourStep) {
+      const x = indexToX(futureIndex(h, bars.n, tfMinutes), view, layout);
+      if (x < 0 || x > layout.plotW) continue;
+      const label = hourStep === 6.5 ? `+${Math.round(h / 6.5)}d` : `+${h}h`;
+      ctx.fillText(label, x, layout.plotH + 6);
+    }
   }
 }
 
@@ -383,7 +766,6 @@ function drawCrosshair(
   ctx.stroke();
   ctx.setLineDash([]);
 
-  // Price tag.
   const price = yToPrice(mouse.y, domain, layout);
   ctx.fillStyle = "#222222";
   ctx.fillRect(layout.plotW, mouse.y - 8, layout.axisW, 16);
@@ -392,7 +774,6 @@ function drawCrosshair(
   ctx.textBaseline = "middle";
   ctx.fillText(fmtPrice(price), layout.plotW + 6, mouse.y);
 
-  // OHLCV legend for the hovered bar.
   const index = Math.round(xToIndex(mouse.x, view, layout));
   if (index >= 0 && index < bars.n) {
     const parts = [
@@ -404,10 +785,9 @@ function drawCrosshair(
       "V " + Intl.NumberFormat("en-US").format(bars.v[index]),
     ];
     ctx.fillStyle = "rgba(0,0,0,0.85)";
-    ctx.fillRect(6, 6, 420, 18);
+    ctx.fillRect(6, 6, 430, 18);
     ctx.fillStyle = bars.c[index] >= bars.o[index] ? COLORS.up : COLORS.down;
     ctx.textAlign = "left";
-    ctx.textBaseline = "middle";
     ctx.fillText(parts.join("   "), 12, 15);
   }
 }

@@ -15,6 +15,7 @@ type Handler = (msg: WsMessage) => void;
 type SubSpec =
   | { channel: "bars"; symbol: string; tf: string }
   | { channel: "quote"; symbol: string }
+  | { channel: "plans" }
   | { channel: "oquotes"; symbols: string[] };
 
 const WS_URL = (import.meta.env.VITE_WS_URL ?? "ws://localhost:8000") + "/ws/stream";
@@ -22,6 +23,7 @@ const WS_URL = (import.meta.env.VITE_WS_URL ?? "ws://localhost:8000") + "/ws/str
 function subKey(spec: SubSpec): string {
   if (spec.channel === "bars") return `bars:${spec.symbol}:${spec.tf}`;
   if (spec.channel === "quote") return `quote:${spec.symbol}`;
+  if (spec.channel === "plans") return "plans";
   return `oquotes:${spec.symbols.slice().sort().join(",")}`;
 }
 

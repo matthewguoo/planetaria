@@ -20,9 +20,25 @@ export function onSnapshot(fn: (v: number) => void): () => void {
   return () => snapshotListeners.delete(fn);
 }
 
+// Keep position rows live: plan lifecycle pushes from the server.
+socket.subscribe({ channel: "plans" });
+
 socket.onMessage((msg: WsMessage) => {
   const store = useTradingStore.getState();
   switch (msg.t) {
+    case "plan": {
+      void import("../store/accountStore").then(({ useAccountStore }) => {
+        useAccountStore.getState().applyPlanUpdate(msg.plan as never);
+        void useAccountStore.getState().refreshPositions();
+      });
+      break;
+    }
+    case "plans_snapshot": {
+      void import("../store/accountStore").then(({ useAccountStore }) => {
+        void useAccountStore.getState().refreshPositions();
+      });
+      break;
+    }
     case "bars_snapshot": {
       if (msg.symbol !== current.symbol || msg.tf !== current.tf) return;
       void replaceBars(msg.symbol as string, msg.tf as string, msg.bars as BarRow[]).then(() => {

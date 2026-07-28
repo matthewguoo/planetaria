@@ -95,6 +95,16 @@ async def ws_stream(ws: WebSocket) -> None:
                 elif op == "unsubscribe":
                     leave(topic)
 
+            elif channel == "plans":
+                if op == "subscribe":
+                    join("plans")
+                    plans = await app.state.risk.open_plans()
+                    await ws.send_json(
+                        {"t": "plans_snapshot", "plans": [p.to_dict() for p in plans]}
+                    )
+                elif op == "unsubscribe":
+                    leave("plans")
+
             elif channel == "oquotes":
                 symbols = [s for s in (msg.get("symbols") or []) if s]
                 if not symbols:
