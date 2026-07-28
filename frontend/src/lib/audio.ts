@@ -60,6 +60,11 @@ const MOTIFS: Record<Cue, { notes: [number, number, number][]; type: OscillatorT
   connBack: { notes: [[440, 0, 0.08], [660, 0.09, 0.12]], type: "sine", gain: 0.14 },
 };
 
+// Keep cues audible but well under music/alert level — this is ambient
+// terminal feedback, not an alarm clock.
+const CHIME_MASTER = 0.5;
+const VOICE_VOLUME = 0.65;
+
 let mode: AudioMode = "off";
 let ctx: AudioContext | null = null;
 let unlocked = false;
@@ -111,7 +116,7 @@ function chime(cue: Cue): void {
     const gain = ctx.createGain();
     osc.type = motif.type;
     osc.frequency.value = freq;
-    gain.gain.setValueAtTime(motif.gain, t0 + start);
+    gain.gain.setValueAtTime(motif.gain * CHIME_MASTER, t0 + start);
     gain.gain.exponentialRampToValueAtTime(0.001, t0 + start + dur);
     osc.connect(gain).connect(ctx.destination);
     osc.start(t0 + start);
@@ -126,7 +131,7 @@ export function playCue(cue: Cue): void {
     // Voice trails the chime slightly so they read as one event.
     window.setTimeout(() => {
       const audio = new Audio(VOICE[cue]);
-      audio.volume = 0.9;
+      audio.volume = VOICE_VOLUME;
       void audio.play().catch(() => {});
     }, 180);
   }

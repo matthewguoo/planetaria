@@ -203,7 +203,7 @@ pushed over the plans WebSocket channel: distinct WebAudio chimes plus
 spoken announcements — "Order filled", "Partial fill", "Take profit",
 "Stop loss", "Time stop", "Position closed" (profit and loss get different
 chimes), "Order rejected/canceled", and "Connection lost/restored". Voice
-clips are local synthesized WAVs (`frontend/public/audio/`, espeak-ng) —
+clips are local synthesized WAVs (`frontend/public/audio/`, Piper neural TTS, deep male announcer) —
 fully offline, nothing licensed. The header toggle cycles OFF → FX
 (chimes only) → VOX (chimes + voice), persisted per browser. Snapshots on
 reconnect prime state silently, so history is never replayed as audio;
