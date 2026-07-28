@@ -1,5 +1,29 @@
+import { useEffect, useState } from "react";
+import { cycleAudioMode, getAudioMode, onAudioModeChange } from "../lib/audio";
 import { useTradingStore } from "../store/tradingStore";
 import { useUiStore } from "../store/uiStore";
+
+const AUDIO_LABEL = { off: "🔇 OFF", fx: "🔊 FX", vox: "🔊 VOX" } as const;
+
+function AudioToggle() {
+  const [mode, setMode] = useState(getAudioMode());
+  useEffect(() => onAudioModeChange(setMode), []);
+  return (
+    <button
+      onClick={() => cycleAudioMode()}
+      title={
+        "Trade audio: OFF · FX (chimes) · VOX (chimes + spoken announcements " +
+        "like 'order filled', 'stop loss'). Click anywhere once to unlock browser audio."
+      }
+      className={
+        "px-1.5 py-0.5 text-[11px] tracking-wider " +
+        (mode === "off" ? "text-bb-muted hover:text-bb-amber" : "text-bb-amber")
+      }
+    >
+      {AUDIO_LABEL[mode]}
+    </button>
+  );
+}
 
 function StatusPill() {
   const status = useTradingStore((s) => s.status);
@@ -78,6 +102,7 @@ export function Header() {
             {v.toUpperCase()}
           </button>
         ))}
+        <AudioToggle />
         <StatusPill />
         <span className="border border-bb-border px-2 py-0.5 text-bb-orange">PAPER</span>
       </div>

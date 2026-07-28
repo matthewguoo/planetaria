@@ -177,6 +177,19 @@ the strategy panel. All strikes everywhere are the chain API's actual
 tradeable contracts — rail drags and chain clicks snap to listed strikes
 only, never interpolated prices.
 
+### Audio cues
+
+MetaTrader/tastytrade-style trade audio, driven by real FSM transitions
+pushed over the plans WebSocket channel: distinct WebAudio chimes plus
+spoken announcements — "Order filled", "Partial fill", "Take profit",
+"Stop loss", "Time stop", "Position closed" (profit and loss get different
+chimes), "Order rejected/canceled", and "Connection lost/restored". Voice
+clips are local synthesized WAVs (`frontend/public/audio/`, espeak-ng) —
+fully offline, nothing licensed. The header toggle cycles OFF → FX
+(chimes only) → VOX (chimes + voice), persisted per browser. Snapshots on
+reconnect prime state silently, so history is never replayed as audio;
+manual closes don't announce (you just clicked them).
+
 ### Chart context (MFT layer)
 
 Toggleable indicators (session-anchored VWAP, EMA 9/21, Bollinger 20×2σ)

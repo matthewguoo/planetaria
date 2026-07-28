@@ -3,6 +3,7 @@
  * One active (symbol, tf) bar subscription + one quote subscription at a time.
  */
 
+import { onConnectionState, onPlanUpdate, primePlans } from "./audio";
 import { replaceBars, upsertBar, type BarRow } from "./perspective";
 import { socket, type WsMessage } from "./ws";
 import { useTradingStore, type Quote, type Timeframe } from "../store/tradingStore";
@@ -27,6 +28,7 @@ socket.onMessage((msg: WsMessage) => {
   const store = useTradingStore.getState();
   switch (msg.t) {
     case "plan": {
+      onPlanUpdate(msg.plan as never);
       void import("../store/accountStore").then(({ useAccountStore }) => {
         useAccountStore.getState().applyPlanUpdate(msg.plan as never);
         void useAccountStore.getState().refreshPositions();
@@ -34,6 +36,8 @@ socket.onMessage((msg: WsMessage) => {
       break;
     }
     case "plans_snapshot": {
+      // Learn current statuses silently — reconnects must not replay cues.
+      primePlans((msg.plans as never[]) ?? []);
       void import("../store/accountStore").then(({ useAccountStore }) => {
         void useAccountStore.getState().refreshPositions();
       });
@@ -69,6 +73,7 @@ socket.onMessage((msg: WsMessage) => {
 });
 
 socket.onStateChange((s) => {
+  onConnectionState(s);
   useTradingStore.getState().patchStatus({ connection: s as "connecting" | "open" | "down" });
 });
 // The socket connects at module init and may already be OPEN before this

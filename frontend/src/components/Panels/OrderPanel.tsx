@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { apiError, postOrder } from "../../lib/api";
+import { playCue } from "../../lib/audio";
 import type { Designer } from "../../lib/useDesigner";
 import { useAccountStore } from "../../store/accountStore";
 import { useStrategyStore } from "../../store/strategyStore";
@@ -65,6 +66,9 @@ export function OrderPanel({ designer }: { designer: Designer }) {
       setConfirming(false);
       void refreshPositions();
     } catch (err) {
+      // Server-side risk rejections never create a plan, so no WS cue fires
+      // for them — buzz locally.
+      playCue("rejected");
       setError(apiError(err));
     } finally {
       setSubmitting(false);
