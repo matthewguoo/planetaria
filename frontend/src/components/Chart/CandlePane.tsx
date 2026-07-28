@@ -23,6 +23,8 @@ import {
   realizedVolAnnualized,
 } from "../../lib/indicators";
 import { buildPositionView } from "../../lib/positionView";
+import type { Designer } from "../../lib/useDesigner";
+import { ChartHud } from "./ChartHud";
 import { useHeatmap } from "../../lib/useHeatmap";
 import { useAccountStore } from "../../store/accountStore";
 import { TF_MS, useTradingStore, type IndicatorToggles } from "../../store/tradingStore";
@@ -32,7 +34,6 @@ import {
   buildLegs,
   hoursToExpiry as calcHoursToExpiry,
   smileFromChain,
-  strategyDef,
   useStrategyStore,
 } from "../../store/strategyStore";
 import {
@@ -191,7 +192,7 @@ function computeChipRects(
   return rects;
 }
 
-export function CandlePane() {
+export function CandlePane({ designer }: { designer: Designer }) {
   const symbol = useTradingStore((s) => s.symbol);
   const tf = useTradingStore((s) => s.tf);
   const quote = useTradingStore((s) => s.quote);
@@ -201,6 +202,8 @@ export function CandlePane() {
   const kind = useStrategyStore((s) => s.kind);
   const strikes = useStrategyStore((s) => s.strikes);
   const ratios = useStrategyStore((s) => s.ratios);
+  const legRights = useStrategyStore((s) => s.rights);
+  const legSides = useStrategyStore((s) => s.sides);
   const tpPct = useStrategyStore((s) => s.tpPct);
   const slPct = useStrategyStore((s) => s.slPct);
   const timeStopEt = useStrategyStore((s) => s.timeStopEt);
@@ -290,12 +293,13 @@ export function CandlePane() {
         };
       }
     }
-    const legs = buildLegs({ chain, expiry, kind, strikes, ratios });
+    const legs = buildLegs({
+      chain, expiry, kind, strikes, ratios, rights: legRights, sides: legSides,
+    });
     if (!chain || !expiry) return null;
     const spot = quote?.mid || chain.spot;
     const hte = calcHoursToExpiry(expiry);
     const entry = legs ? positionEntryCost(legs) : 0;
-    const sides = strategyDef(kind).legs.map((l) => l.side);
     // Time stop: today at HH:MM ET, in trading hours from now.
     const nowEt = new Intl.DateTimeFormat("en-US", {
       timeZone: "America/New_York",
@@ -308,13 +312,12 @@ export function CandlePane() {
     const [tsH, tsM] = timeStopEt.split(":").map(Number);
     const timeStopHours = Math.max(0, Math.min((tsH * 60 + tsM - nowMin) / 60, 6.5));
     const priced = legs !== null && Math.abs(entry) >= 0.01;
-    const template = strategyDef(kind).legs;
     return {
       legs,
       strikes,
-      strikeSides: sides,
-      strikeRights: template.map((l) => l.right),
-      ratios: template.map((l, i) => ratios[i] ?? l.ratio),
+      strikeSides: legSides,
+      strikeRights: legRights,
+      ratios: strikes.map((_, i) => ratios[i] ?? 1),
       snapStrikes: availableStrikes(chain, expiry),
       hoursToExpiry: hte,
       timeStopHours,
@@ -336,7 +339,7 @@ export function CandlePane() {
       breakevens:
         legs && spot > 0 ? breakevensForBasis(legs, entry, spot * 0.7, spot * 1.3) : [],
     };
-  }, [chain, expiry, kind, strikes, ratios, tpPct, slPct, timeStopEt, quote, volShift, skewBeta, viewingPlan, pnlMode]);
+  }, [chain, expiry, kind, strikes, ratios, legRights, legSides, tpPct, slPct, timeStopEt, quote, volShift, skewBeta, viewingPlan, pnlMode]);
 
   overlayRef.current = overlay;
 
@@ -775,6 +778,7 @@ export function CandlePane() {
 
   return (
     <div ref={wrapRef} className="relative h-full w-full cursor-crosshair overflow-hidden">
+      <ChartHud designer={designer} barsRef={barsRef} />
       <canvas
         ref={canvasRef}
         onWheel={onWheel}
@@ -859,8 +863,8 @@ function render(
   drawPriceGrid(ctx, layout, domain);
   drawTimeAxis(ctx, layout, bars, view, first, last, overlay, tfMinutes, anchorIdx);
 
-  // Heatmap first: background layer in the future region.
-  if (overlay?.legs && surface) {
+  // Heatmap first: background layer in the future region (HEAT toggle).
+  if (overlay?.legs && surface && indicators.heat) {
     drawHeatmap(ctx, layout, bars, view, domain, overlay, surface, tfMinutes, dragTarget, anchorIdx);
   }
 
@@ -892,7 +896,6 @@ function render(
     drawRail(ctx, layout, domain, overlay, draggingStrike);
   }
   if (overlay?.legs && surface) drawExitLevels(ctx, layout, domain, surface, overlay);
-  drawInfoStrip(ctx, bars, overlay, tfMinutes);
   drawLastPrice(ctx, layout, bars, domain);
   if (mouse && mouse.x <= layout.plotW && mouse.y <= layout.plotH) {
     drawCrosshair(ctx, layout, bars, view, domain, mouse);
@@ -1315,39 +1318,6 @@ function drawIndicators(
   if (indicators.vwap) {
     line(computeVwap(bars), IND_COLORS.vwap, 1.4, [6, 3]);
   }
-}
-
-/** Top-left context readout: ATR (stop-width sanity), realized vol, and the
- * IV-vs-RV spread — the "is premium rich or cheap?" number for options. */
-function drawInfoStrip(
-  ctx: CanvasRenderingContext2D,
-  bars: Bars,
-  overlay: StrategyOverlay | null,
-  tfMinutes: number,
-) {
-  if (!bars.n) return;
-  const atr = computeAtr(bars);
-  const rv = realizedVolAnnualized(bars, 30, tfMinutes);
-  let text = `ATR14 ${fmtPrice(atr)} · RV30 ${(rv * 100).toFixed(1)}%`;
-  let ivRv: number | null = null;
-  if (overlay && overlay.sigma > 0) {
-    ivRv = overlay.sigma - rv;
-    text += ` · IV ${(overlay.sigma * 100).toFixed(1)}% · IV−RV ${ivRv >= 0 ? "+" : ""}${(ivRv * 100).toFixed(1)}pt`;
-  }
-  ctx.font = "10px 'SF Mono', Consolas, monospace";
-  const w = ctx.measureText(text).width + 12;
-  ctx.fillStyle = "rgba(0,0,0,0.75)";
-  ctx.fillRect(6, 26, w, 15);
-  ctx.textAlign = "left";
-  ctx.textBaseline = "middle";
-  ctx.fillStyle = "#999999";
-  ctx.fillText(text, 12, 34);
-  if (ivRv !== null) {
-    // Rich premium (IV >> RV) hurts buyers; cheap premium hurts sellers.
-    ctx.fillStyle = ivRv > 0.03 ? "#FF6D00" : ivRv < -0.03 ? "#00C853" : "#999999";
-    ctx.fillRect(6, 26, 3, 15);
-  }
-  ctx.font = "11px 'SF Mono', Consolas, monospace";
 }
 
 /**

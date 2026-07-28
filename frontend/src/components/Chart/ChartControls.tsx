@@ -58,17 +58,11 @@ function PositionBanner() {
   );
 }
 
-const INDICATORS = [
-  { key: "vwap", label: "VWAP", title: "Session-anchored volume-weighted average price" },
-  { key: "ema", label: "EMA", title: "EMA 9 / EMA 21" },
-  { key: "bb", label: "BB", title: "Bollinger bands 20 × 2σ" },
-] as const;
-
 export function ChartControls() {
   const tf = useTradingStore((s) => s.tf);
   const setTf = useTradingStore((s) => s.setTf);
-  const indicators = useTradingStore((s) => s.indicators);
-  const toggleIndicator = useTradingStore((s) => s.toggleIndicator);
+  const chainOpen = useUiStore((s) => s.chainOpen);
+  const toggleChain = useUiStore((s) => s.toggleChain);
 
   return (
     <div className="flex items-center gap-1 border-b border-bb-border bg-bb-panel px-2 py-1">
@@ -89,21 +83,18 @@ export function ChartControls() {
         </button>
       ))}
       <div className="mx-2 h-4 w-px bg-bb-border" />
-      {INDICATORS.map(({ key, label, title }) => (
-        <button
-          key={key}
-          onClick={() => toggleIndicator(key)}
-          title={title}
-          className={
-            "px-1.5 py-0.5 text-[11px] " +
-            (indicators[key]
-              ? "bg-bb-hover font-semibold text-bb-amber"
-              : "text-bb-muted hover:text-bb-amber")
-          }
-        >
-          {label}
-        </button>
-      ))}
+      <button
+        onClick={toggleChain}
+        title="Options chain — click B/S on a contract to add it as a leg"
+        className={
+          "px-2 py-0.5 text-[11px] tracking-widest " +
+          (chainOpen
+            ? "bg-bb-amber font-semibold text-black"
+            : "text-bb-muted hover:text-bb-amber")
+        }
+      >
+        CHAIN
+      </button>
       <div className="mx-2 h-4 w-px bg-bb-border" />
       <PositionBanner />
       <span className="ml-auto hidden text-[11px] text-bb-muted 2xl:inline">

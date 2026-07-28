@@ -23,16 +23,19 @@ export function StrategyPanel({ designer }: { designer: Designer }) {
   const chainError = useStrategyStore((s) => s.chainError);
   const strikes = useStrategyStore((s) => s.strikes);
   const ratios = useStrategyStore((s) => s.ratios);
+  const rights = useStrategyStore((s) => s.rights);
+  const sides = useStrategyStore((s) => s.sides);
+  const modified = useStrategyStore((s) => s.modified);
   const setStrike = useStrategyStore((s) => s.setStrike);
   const setRatio = useStrategyStore((s) => s.setRatio);
+  const removeLeg = useStrategyStore((s) => s.removeLeg);
 
-  const template = STRATEGIES[kind].legs;
   const snaps = availableStrikes(chain, expiry);
 
   return (
     <div className="panel flex min-w-0 flex-col">
       <div className="panel-title">
-        STRATEGY{designer.demo ? " · DEMO CHAIN" : ""}
+        STRATEGY{modified ? " · CUSTOM" : ""}{designer.demo ? " · DEMO CHAIN" : ""}
       </div>
       <div className="flex min-h-0 flex-1 flex-col">
         <div className="flex items-center gap-1 border-b border-bb-border p-1">
@@ -73,15 +76,15 @@ export function StrategyPanel({ designer }: { designer: Designer }) {
           </div>
         )}
         <div className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto p-2">
-          {template.map((t, i) => (
+          {strikes.map((_, i) => (
             <div key={i} className="flex items-center gap-2">
               <span
                 className={
-                  "w-10 shrink-0 text-[11px] " + (t.side > 0 ? "text-bb-amber" : "text-bb-orange")
+                  "w-10 shrink-0 text-[11px] " + (sides[i] > 0 ? "text-bb-amber" : "text-bb-orange")
                 }
               >
-                {t.side > 0 ? "+" : "−"}
-                {ratios[i] ?? t.ratio} {t.right}
+                {sides[i] > 0 ? "+" : "−"}
+                {ratios[i] ?? 1} {rights[i]}
               </span>
               <select
                 className="min-w-0 flex-1 border border-bb-border bg-black px-1 py-0.5 text-right text-[11px] text-white outline-none"
@@ -98,17 +101,25 @@ export function StrategyPanel({ designer }: { designer: Designer }) {
               <span className="flex shrink-0 gap-px">
                 <button
                   className="border border-bb-border px-1.5 text-[11px] text-bb-muted hover:text-bb-amber"
-                  onClick={() => setRatio(i, (ratios[i] ?? t.ratio) - 1)}
+                  onClick={() => setRatio(i, (ratios[i] ?? 1) - 1)}
                   aria-label={`Leg ${i + 1} fewer contracts`}
                 >
                   −
                 </button>
                 <button
                   className="border border-bb-border px-1.5 text-[11px] text-bb-muted hover:text-bb-amber"
-                  onClick={() => setRatio(i, (ratios[i] ?? t.ratio) + 1)}
+                  onClick={() => setRatio(i, (ratios[i] ?? 1) + 1)}
                   aria-label={`Leg ${i + 1} more contracts`}
                 >
                   +
+                </button>
+                <button
+                  className="border border-bb-border px-1.5 text-[11px] text-bb-muted hover:text-bb-loss disabled:opacity-30"
+                  disabled={strikes.length <= 1}
+                  onClick={() => removeLeg(i)}
+                  aria-label={`Remove leg ${i + 1}`}
+                >
+                  ×
                 </button>
               </span>
             </div>
@@ -125,7 +136,7 @@ export function StrategyPanel({ designer }: { designer: Designer }) {
             </span>
           </div>
           <div className="text-[9px] leading-tight text-bb-muted">
-            drag strikes on the chart rail · payoff renders on-chart
+            drag strikes on the rail · CHAIN panel adds legs · payoff on-chart
           </div>
         </div>
       </div>

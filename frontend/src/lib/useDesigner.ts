@@ -56,6 +56,8 @@ export function useDesigner(): Designer {
   const kind = useStrategyStore((s) => s.kind);
   const strikes = useStrategyStore((s) => s.strikes);
   const ratios = useStrategyStore((s) => s.ratios);
+  const rights = useStrategyStore((s) => s.rights);
+  const sides = useStrategyStore((s) => s.sides);
   const tpPct = useStrategyStore((s) => s.tpPct);
   const slPct = useStrategyStore((s) => s.slPct);
   const qtyOverride = useStrategyStore((s) => s.qty);
@@ -64,7 +66,7 @@ export function useDesigner(): Designer {
   const account = useAccountStore((s) => s.account);
 
   return useMemo(() => {
-    const legs = buildLegs({ chain, expiry, kind, strikes, ratios });
+    const legs = buildLegs({ chain, expiry, kind, strikes, ratios, rights, sides });
     const spot = quote?.mid || chain?.spot || 0;
     const equity = account?.equity ?? 0;
     const risk = account?.risk;
@@ -171,5 +173,5 @@ export function useDesigner(): Designer {
       probabilities,
       equity,
     };
-  }, [chain, expiry, kind, strikes, ratios, tpPct, slPct, qtyOverride, timeStopEt, quote, account]);
+  }, [chain, expiry, kind, strikes, ratios, rights, sides, tpPct, slPct, qtyOverride, timeStopEt, quote, account]);
 }

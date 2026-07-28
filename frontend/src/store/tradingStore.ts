@@ -18,7 +18,13 @@ export const TF_MS: Record<Timeframe, number> = {
   "1h": 3_600_000,
 };
 
-export type IndicatorToggles = { vwap: boolean; ema: boolean; bb: boolean };
+export type IndicatorToggles = {
+  heat: boolean; // P/L heatmap surface
+  sim: boolean; // on-chart probability / Monte Carlo stats
+  vwap: boolean;
+  ema: boolean;
+  bb: boolean;
+};
 
 type TradingState = {
   symbol: string;
@@ -38,7 +44,7 @@ export const useTradingStore = create<TradingState>((set) => ({
   tf: "1m",
   quote: null,
   status: { configured: false, demo: false, redis: false, stream_age_s: null, connection: "connecting" },
-  indicators: { vwap: true, ema: false, bb: false },
+  indicators: { heat: true, sim: true, vwap: true, ema: false, bb: false },
   setSymbol: (symbol) => set({ symbol: symbol.toUpperCase(), quote: null }),
   setTf: (tf) => set({ tf }),
   setQuote: (quote) => set({ quote }),

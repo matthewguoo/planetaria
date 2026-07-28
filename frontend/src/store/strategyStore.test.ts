@@ -13,6 +13,7 @@ import {
   defaultRatios,
   defaultStrikes,
   STRATEGIES,
+  useStrategyStore,
   type Chain,
   type StrategyKind,
 } from "./strategyStore";
@@ -195,5 +196,80 @@ describe("smile-aware scenario pricing (sticky moneyness)", () => {
     expect(positionValueSmile(legs, 462, 0, 450, smiles)).toBeCloseTo(
       payoffAtExpiry(legs, 462) + positionEntryCost(legs), 9,
     );
+  });
+});
+
+describe("custom leg composition (chain-panel clicks)", () => {
+  const chain = syntheticChain();
+  const expiry = chain.expirations[0];
+
+  function freshStore() {
+    const store = useStrategyStore.getState();
+    useStrategyStore.setState({
+      chain,
+      expiry,
+      kind: "long_call",
+      strikes: [452.5],
+      ratios: [1],
+      rights: ["C"],
+      sides: [1],
+      modified: false,
+    });
+    return store;
+  }
+
+  it("addLeg appends a new leg and marks the composition custom", () => {
+    freshStore();
+    useStrategyStore.getState().addLeg({ right: "P", side: -1, strike: 447.5 });
+    const s = useStrategyStore.getState();
+    expect(s.strikes).toEqual([452.5, 447.5]);
+    expect(s.rights).toEqual(["C", "P"]);
+    expect(s.sides).toEqual([1, -1]);
+    expect(s.modified).toBe(true);
+    const legs = buildLegs({
+      chain, expiry, kind: s.kind,
+      strikes: s.strikes, ratios: s.ratios, rights: s.rights, sides: s.sides,
+    });
+    expect(legs).not.toBeNull();
+    expect(legs![1].side).toBe(-1);
+    expect(legs![1].right).toBe("P");
+  });
+
+  it("re-adding an identical leg stacks ratio instead of duplicating", () => {
+    freshStore();
+    useStrategyStore.getState().addLeg({ right: "C", side: 1, strike: 452.5 });
+    const s = useStrategyStore.getState();
+    expect(s.strikes).toEqual([452.5]);
+    expect(s.ratios).toEqual([2]);
+  });
+
+  it("caps at 4 legs (MLEG limit)", () => {
+    freshStore();
+    for (const k of [447.5, 450, 455, 457.5]) {
+      useStrategyStore.getState().addLeg({ right: "P", side: -1, strike: k });
+    }
+    expect(useStrategyStore.getState().strikes).toHaveLength(4);
+  });
+
+  it("removeLeg splices all parallel arrays and never drops below one leg", () => {
+    freshStore();
+    useStrategyStore.getState().addLeg({ right: "P", side: -1, strike: 447.5 });
+    useStrategyStore.getState().removeLeg(0);
+    const s = useStrategyStore.getState();
+    expect(s.strikes).toEqual([447.5]);
+    expect(s.rights).toEqual(["P"]);
+    expect(s.sides).toEqual([-1]);
+    useStrategyStore.getState().removeLeg(0);
+    expect(useStrategyStore.getState().strikes).toHaveLength(1);
+  });
+
+  it("selecting a preset resets the custom composition", () => {
+    freshStore();
+    useStrategyStore.getState().addLeg({ right: "P", side: -1, strike: 447.5 });
+    useStrategyStore.getState().setKind("iron_condor");
+    const s = useStrategyStore.getState();
+    expect(s.modified).toBe(false);
+    expect(s.strikes).toHaveLength(4);
+    expect(s.sides).toEqual([1, -1, -1, 1]);
   });
 });

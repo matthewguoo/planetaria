@@ -185,10 +185,16 @@ type StrategyState = {
   chainError: string | null;
   expiry: string | null;
   kind: StrategyKind;
-  /** chosen strike per leg (parallel to STRATEGIES[kind].legs) */
+  /** chosen strike per leg (parallel arrays below) */
   strikes: number[];
-  /** per-leg contract ratio (parallel to legs; template default until edited) */
+  /** per-leg contract ratio */
   ratios: number[];
+  /** per-leg right/side — regenerated from the preset template, then freely
+   * editable via the chain panel (custom compositions). */
+  rights: ("C" | "P")[];
+  sides: (1 | -1)[];
+  /** true once the leg set deviates from the selected preset */
+  modified: boolean;
   qty: number; // desired contract sets (0 = auto from sizing)
   tpPct: number; // TP as fraction of |entry premium| gained (1.0 = +100%)
   slPct: number; // SL as fraction of |entry premium| lost (0.5 = -50%)
@@ -203,6 +209,9 @@ type StrategyState = {
   setKind: (kind: StrategyKind) => void;
   setStrike: (index: number, strike: number) => void;
   setRatio: (index: number, ratio: number) => void;
+  /** Chain-panel click: add (or stack onto) a leg. Max 4 legs (MLEG limit). */
+  addLeg: (leg: { right: "C" | "P"; side: 1 | -1; strike: number }) => void;
+  removeLeg: (index: number) => void;
   setTpPct: (v: number) => void;
   setSlPct: (v: number) => void;
   setTimeStopEt: (v: string) => void;
@@ -230,6 +239,16 @@ export function defaultRatios(kind: StrategyKind): number[] {
   return STRATEGIES[kind].legs.map((leg) => leg.ratio);
 }
 
+function templateArrays(kind: StrategyKind): {
+  rights: ("C" | "P")[];
+  sides: (1 | -1)[];
+} {
+  return {
+    rights: STRATEGIES[kind].legs.map((l) => l.right),
+    sides: STRATEGIES[kind].legs.map((l) => l.side),
+  };
+}
+
 export const useStrategyStore = create<StrategyState>((set, get) => ({
   chain: null,
   chainError: null,
@@ -237,6 +256,9 @@ export const useStrategyStore = create<StrategyState>((set, get) => ({
   kind: "long_call",
   strikes: [],
   ratios: defaultRatios("long_call"),
+  rights: templateArrays("long_call").rights,
+  sides: templateArrays("long_call").sides,
+  modified: false,
   qty: 0,
   tpPct: 1.0,
   slPct: 0.5,
@@ -254,20 +276,23 @@ export const useStrategyStore = create<StrategyState>((set, get) => ({
         state.expiry && data.expirations.includes(state.expiry)
           ? state.expiry
           : data.expirations[0] ?? null;
-      let strikes = state.strikes;
-      let ratios = state.ratios;
-      const template = STRATEGIES[state.kind].legs;
+      let { strikes, ratios, rights, sides, modified } = state;
       const chainStrikes = new Set(
         data.contracts.filter((c) => c.expiry === expiry).map((c) => c.strike),
       );
-      if (
-        strikes.length !== template.length ||
-        !strikes.every((s) => chainStrikes.has(s))
-      ) {
+      const valid =
+        strikes.length > 0 &&
+        strikes.length === ratios.length &&
+        strikes.length === rights.length &&
+        strikes.length === sides.length &&
+        strikes.every((s) => chainStrikes.has(s));
+      if (!valid) {
         strikes = expiry ? defaultStrikes(data, expiry, state.kind) : [];
         ratios = defaultRatios(state.kind);
+        ({ rights, sides } = templateArrays(state.kind));
+        modified = false;
       }
-      set({ chain: data, chainError: null, expiry, strikes, ratios });
+      set({ chain: data, chainError: null, expiry, strikes, ratios, rights, sides, modified });
     } catch (err) {
       set({ chainError: String((err as Error).message ?? err) });
     }
@@ -279,6 +304,8 @@ export const useStrategyStore = create<StrategyState>((set, get) => ({
       expiry,
       strikes: chain ? defaultStrikes(chain, expiry, kind) : [],
       ratios: defaultRatios(kind),
+      ...templateArrays(kind),
+      modified: false,
     });
   },
   setKind: (kind) => {
@@ -287,6 +314,8 @@ export const useStrategyStore = create<StrategyState>((set, get) => ({
       kind,
       strikes: chain && expiry ? defaultStrikes(chain, expiry, kind) : [],
       ratios: defaultRatios(kind),
+      ...templateArrays(kind),
+      modified: false,
     });
   },
   setStrike: (index, strike) =>
@@ -300,6 +329,38 @@ export const useStrategyStore = create<StrategyState>((set, get) => ({
       const ratios = [...s.ratios];
       ratios[index] = Math.max(1, Math.min(Math.round(ratio), 9));
       return { ratios };
+    }),
+  addLeg: ({ right, side, strike }) =>
+    set((s) => {
+      // Stack onto an identical leg first (ratio up to 9).
+      const existing = s.strikes.findIndex(
+        (k, i) => k === strike && s.rights[i] === right && s.sides[i] === side,
+      );
+      if (existing >= 0) {
+        const ratios = [...s.ratios];
+        ratios[existing] = Math.min((ratios[existing] ?? 1) + 1, 9);
+        return { ratios, modified: true };
+      }
+      if (s.strikes.length >= 4) return {}; // MLEG order limit
+      return {
+        strikes: [...s.strikes, strike],
+        ratios: [...s.ratios, 1],
+        rights: [...s.rights, right],
+        sides: [...s.sides, side],
+        modified: true,
+      };
+    }),
+  removeLeg: (index) =>
+    set((s) => {
+      if (s.strikes.length <= 1) return {}; // never drop below one leg
+      const drop = <T,>(arr: T[]) => arr.filter((_, i) => i !== index);
+      return {
+        strikes: drop(s.strikes),
+        ratios: drop(s.ratios),
+        rights: drop(s.rights),
+        sides: drop(s.sides),
+        modified: true,
+      };
     }),
   setTpPct: (v) => set({ tpPct: Math.max(0.05, Math.min(v, 10)) }),
   setSlPct: (v) => set({ slPct: Math.max(0.05, Math.min(v, 0.95)) }),
@@ -341,30 +402,44 @@ export function findContract(
   );
 }
 
-/** Build priced legs for the current selection; null if incomplete. */
+/** Build priced legs for the current selection; null if incomplete.
+ * rights/sides override the preset template (custom chain-built positions);
+ * without them the preset template applies. */
 export function buildLegs(state: {
   chain: Chain | null;
   expiry: string | null;
   kind: StrategyKind;
   strikes: number[];
   ratios?: number[];
+  rights?: ("C" | "P")[];
+  sides?: (1 | -1)[];
 }): StrategyLeg[] | null {
   const { chain, expiry, kind, strikes } = state;
+  if (!chain || !expiry || !strikes.length) return null;
   const template = STRATEGIES[kind].legs;
-  if (!chain || !expiry || strikes.length !== template.length) return null;
-  const ratios = state.ratios && state.ratios.length === template.length
-    ? state.ratios
-    : template.map((l) => l.ratio);
+  const custom =
+    state.rights &&
+    state.sides &&
+    state.rights.length === strikes.length &&
+    state.sides.length === strikes.length;
+  if (!custom && strikes.length !== template.length) return null;
+  const rights = custom ? state.rights! : template.map((l) => l.right);
+  const sides = custom ? state.sides! : template.map((l) => l.side);
+  const ratios =
+    state.ratios && state.ratios.length === strikes.length
+      ? state.ratios
+      : custom
+        ? strikes.map(() => 1)
+        : template.map((l) => l.ratio);
   const legs: StrategyLeg[] = [];
-  for (let i = 0; i < template.length; i++) {
-    const t = template[i];
-    const contract = findContract(chain, expiry, t.right, strikes[i]);
+  for (let i = 0; i < strikes.length; i++) {
+    const contract = findContract(chain, expiry, rights[i], strikes[i]);
     if (!contract || contract.mid <= 0 || contract.iv <= 0) return null;
     legs.push({
-      right: t.right,
+      right: rights[i],
       strike: strikes[i],
       qty: ratios[i],
-      side: t.side,
+      side: sides[i],
       entry: contract.mid,
       iv: contract.iv,
       symbol: contract.symbol,

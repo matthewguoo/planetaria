@@ -2,9 +2,9 @@ import { useEffect, useState } from "react";
 import { AccountPage } from "./components/Account/AccountPage";
 import { Header } from "./components/Header";
 import { CandlePane } from "./components/Chart/CandlePane";
+import { ChainPanel } from "./components/Chart/ChainPanel";
 import { ChartControls } from "./components/Chart/ChartControls";
 import { OrderPanel } from "./components/Panels/OrderPanel";
-import { ProbabilityPanel } from "./components/Panels/ProbabilityPanel";
 import { SizingPanel } from "./components/Panels/SizingPanel";
 import { StrategyPanel } from "./components/Panels/StrategyPanel";
 import { PositionsDrawer } from "./components/Positions/PositionsDrawer";
@@ -77,6 +77,7 @@ export default function App() {
   useDataPumps();
   const designer = useDesigner();
   const view = useUiStore((s) => s.view);
+  const chainOpen = useUiStore((s) => s.chainOpen);
 
   if (locked && !UNLOCKED) return <ViewportLockout />;
 
@@ -90,17 +91,23 @@ export default function App() {
         <>
           <main className="panel flex min-h-0 flex-1 flex-col">
             <ChartControls />
-            <div className="min-h-0 flex-1">
-              <CandlePane />
+            <div className="flex min-h-0 flex-1">
+              <div className="relative min-h-0 min-w-0 flex-1">
+                <CandlePane designer={designer} />
+              </div>
+              {chainOpen && (
+                <aside className="w-72 shrink-0 border-l border-bb-border">
+                  <ChainPanel />
+                </aside>
+              )}
             </div>
           </main>
 
           <PositionsDrawer />
 
-          <section className="grid max-h-[45vh] shrink-0 auto-rows-[16rem] grid-cols-2 gap-px overflow-y-auto xl:grid-cols-4">
+          <section className="grid max-h-[40vh] shrink-0 auto-rows-[16rem] grid-cols-2 gap-px overflow-y-auto xl:grid-cols-3">
             <StrategyPanel designer={designer} />
             <SizingPanel designer={designer} />
-            <ProbabilityPanel designer={designer} />
             <OrderPanel designer={designer} />
           </section>
         </>

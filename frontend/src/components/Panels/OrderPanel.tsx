@@ -19,6 +19,7 @@ function etToUtcIso(timeEt: string): string {
 export function OrderPanel({ designer }: { designer: Designer }) {
   const symbol = useTradingStore((s) => s.symbol);
   const kind = useStrategyStore((s) => s.kind);
+  const modified = useStrategyStore((s) => s.modified);
   const tpPct = useStrategyStore((s) => s.tpPct);
   const slPct = useStrategyStore((s) => s.slPct);
   const setTpPct = useStrategyStore((s) => s.setTpPct);
@@ -42,7 +43,7 @@ export function OrderPanel({ designer }: { designer: Designer }) {
     try {
       const plan = await postOrder({
         underlying: symbol,
-        strategy: kind,
+        strategy: modified ? "custom" : kind,
         legs: designer.legs.map((leg) => ({
           symbol: leg.symbol,
           right: leg.right,
@@ -197,7 +198,7 @@ export function OrderPanel({ designer }: { designer: Designer }) {
         <div className="absolute inset-0 z-30 flex flex-col gap-1 bg-black/95 p-2 text-[11px]">
           <div className="text-bb-amber">CONFIRM PAPER ORDER</div>
           <div className="text-white">
-            {symbol} {kind.replace("_", " ").toUpperCase()} × {designer.qty}
+            {symbol} {(modified ? "custom" : kind).replace("_", " ").toUpperCase()} × {designer.qty}
           </div>
           <div data-numeric className="text-bb-muted">
             {designer.entry < 0 ? "credit" : "debit"} {designer.entry.toFixed(2)} · TP{" "}

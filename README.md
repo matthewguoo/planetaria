@@ -148,6 +148,27 @@ cd frontend && npm test                # TS/Python parity + presets + sizing
 cd frontend && npm run build           # typecheck + production build
 ```
 
+### On-chart HUD, chain, and sim
+
+The upper-left HUD lives on the chart itself: chips switch overlays
+(HEAT · SIM · VWAP · EMA · BB), an IV% shock input and skew-β checkbox
+drive the scenario model, and a stats line shows ATR / RV / IV / IV−RV.
+With SIM on, the Monte Carlo exit simulator renders directly in the HUD —
+EV after friction, win rate, exit-reason split (TP/SL/time/expiry),
+P5·P50·P95 outcomes, average time-in-trade — alongside the analytic
+P(profit), touch probabilities, and R:R. There is no separate probability
+panel; everything reads in context over the candles.
+
+The CHAIN toggle opens a live options chain for the active expiry
+(calls | strike | puts, mid + IV per side, ATM row highlighted). Clicking
+B or S on a contract adds it to the currently formulated position as a
+long/short leg; clicking the same contract again stacks its ratio. Legs
+compose freely across the preset templates (max 4, MLEG limit) — once
+edited the strategy is tagged CUSTOM, and each leg can be removed from
+the strategy panel. All strikes everywhere are the chain API's actual
+tradeable contracts — rail drags and chain clicks snap to listed strikes
+only, never interpolated prices.
+
 ### Chart context (MFT layer)
 
 Toggleable indicators (session-anchored VWAP, EMA 9/21, Bollinger 20×2σ)
