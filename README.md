@@ -62,10 +62,27 @@ grouped per underlying into a managed plan with TP/SL/time-stop enforcement.
 All common single-expiry structures are built in: long call/put, debit and
 credit verticals, straddles/strangles (long and short), iron condor, iron
 butterfly, call/put butterflies, cash-secured put. Presets are declarative
-leg templates (strike offsets from ATM); strikes are editable by dragging
-the horizontal strike lines on the chart or the vertical rails in the payoff
-designer, and per-leg contract ratios are editable on the rail chips. Every
-edit re-prices the P/L heatmap live.
+leg templates (strike offsets from ATM). Everything is edited ON the chart:
+strikes are horizontal lines dragged directly or via handles on the vertical
+rail, per-leg contract ratios via the −/+ zones on each strike chip, the
+TP and SL exits by dragging their premium contour lines (synced with the %
+inputs in the ORDER panel), and the force-exit time by dragging the TIME
+STOP vertical. The region past the time stop is dimmed — a dead zone the
+exit enforcer never lets the position reach. Every edit re-prices the P/L
+heatmap, contours, and the right-edge payoff profile live.
+
+### Model accuracy beyond BSM
+
+Plain BSM freezes each leg's IV, which misprices scenarios where the
+underlying moves (the smile moves with spot in reality). Scenario pricing
+here is **smile-aware**: leg IVs are re-read from the live chain smile
+under a sticky-moneyness assumption (IV as a function of K/S) as the
+scenario price moves, degrading gracefully to frozen-IV BSM when the smile
+is unavailable. The heatmap, TP/SL contours, hover P/L, and payoff profile
+all share this pricing function, and the expiry payoff itself is intrinsic
+value — model-free — so the surface converges to exact P/L at expiry.
+Remaining known assumptions (risk-neutral drift, no jumps, no early
+assignment) are surfaced in the probability panel's assumptions note.
 
 ## Run (dev)
 

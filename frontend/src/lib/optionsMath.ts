@@ -87,6 +87,73 @@ export function impliedVol(
   return 0.5 * (lo + hi);
 }
 
+/**
+ * Volatility smile support — the post-BSM correction for "price moved, so
+ * frozen-IV payoffs are wrong". points are [strike, iv] from the live chain,
+ * sorted by strike. Scenario IV uses STICKY MONEYNESS: the smile is a
+ * function of K/S, so when spot moves from spot0 to S, a leg struck at K
+ * reads the today-smile at the moneyness-equivalent strike K * spot0 / S.
+ * With no usable smile (fewer than 2 points) it degrades to the leg's
+ * frozen IV — classic sticky-strike BSM.
+ */
+export type SmilePoint = [number, number]; // [strike, iv]
+export type Smiles = { C: SmilePoint[]; P: SmilePoint[] };
+
+export function smileIv(points: SmilePoint[], strike: number): number | null {
+  if (points.length < 2) return null;
+  if (strike <= points[0][0]) return points[0][1];
+  if (strike >= points[points.length - 1][0]) return points[points.length - 1][1];
+  for (let i = 1; i < points.length; i++) {
+    if (strike <= points[i][0]) {
+      const [k0, v0] = points[i - 1];
+      const [k1, v1] = points[i];
+      const frac = (strike - k0) / (k1 - k0 || 1);
+      return v0 + frac * (v1 - v0);
+    }
+  }
+  return points[points.length - 1][1];
+}
+
+export function scenarioIv(
+  leg: Leg,
+  S: number,
+  spot0: number,
+  smiles: Smiles | null,
+): number {
+  if (!smiles || S <= 0 || spot0 <= 0) return leg.iv;
+  const points = leg.right === "C" ? smiles.C : smiles.P;
+  const iv = smileIv(points, (leg.strike * spot0) / S);
+  return iv !== null && iv > 0.005 ? iv : leg.iv;
+}
+
+/** Position value with smile-aware scenario vols (falls back to frozen IV). */
+export function positionValueSmile(
+  legs: Leg[],
+  S: number,
+  tau: number,
+  spot0: number,
+  smiles: Smiles | null,
+  r: number = RISK_FREE,
+): number {
+  let total = 0;
+  for (const leg of legs) {
+    const iv = scenarioIv(leg, S, spot0, smiles);
+    total += leg.side * leg.qty * bsPrice(S, leg.strike, tau, iv, leg.right, r);
+  }
+  return total;
+}
+
+export function positionPlSmile(
+  legs: Leg[],
+  S: number,
+  tau: number,
+  spot0: number,
+  smiles: Smiles | null,
+  r: number = RISK_FREE,
+): number {
+  return positionValueSmile(legs, S, tau, spot0, smiles, r) - positionEntryCost(legs);
+}
+
 export function positionValue(legs: Leg[], S: number, tau: number, r: number = RISK_FREE): number {
   let total = 0;
   for (const leg of legs) total += leg.side * leg.qty * bsPrice(S, leg.strike, tau, leg.iv, leg.right, r);

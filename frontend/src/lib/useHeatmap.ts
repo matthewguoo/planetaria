@@ -6,7 +6,7 @@
 
 import { useEffect, useRef } from "react";
 import type { HeatmapRequest, HeatmapResult } from "./heatmap.worker";
-import { positionIv, TRADING_HOURS_PER_YEAR, type Leg } from "./optionsMath";
+import { positionIv, TRADING_HOURS_PER_YEAR, type Leg, type Smiles } from "./optionsMath";
 
 export type SurfaceInputs = {
   legs: Leg[] | null;
@@ -15,6 +15,7 @@ export type SurfaceInputs = {
   tpPremium: number | null;
   slPremium: number | null;
   riskDollars: number;
+  smiles: Smiles | null;
 };
 
 export function useHeatmap(inputs: SurfaceInputs | null, onResult: (r: HeatmapResult) => void) {
@@ -40,16 +41,21 @@ export function useHeatmap(inputs: SurfaceInputs | null, onResult: (r: HeatmapRe
 
   useEffect(() => {
     if (!inputs || !inputs.legs || !inputs.legs.length || inputs.spot <= 0) return;
-    const { legs, hoursToExpiry, spot, tpPremium, slPremium, riskDollars } = inputs;
+    const { legs, hoursToExpiry, spot, tpPremium, slPremium, riskDollars, smiles } = inputs;
 
-    // Quantize spot to 0.1% so quote jitter doesn't thrash the worker.
+    // Quantize spot to 0.1% so quote jitter doesn't thrash the worker; round
+    // smile vols to 3dp so 10s chain refreshes only recompute on real moves.
     const qSpot = Math.round(spot * 1000) / 1000;
+    const smileKey = smiles
+      ? [smiles.C, smiles.P].map((pts) => pts.map(([k, v]) => `${k}:${v.toFixed(3)}`).join(","))
+      : null;
     const key = JSON.stringify([
-      legs.map((l) => [l.right, l.strike, l.side, l.entry, l.iv]),
+      legs.map((l) => [l.right, l.strike, l.side, l.qty, l.entry, l.iv]),
       Math.round(hoursToExpiry * 100),
       Math.round(qSpot / (spot * 0.001)),
       tpPremium,
       slPremium,
+      smileKey,
     ]);
     if (key === lastKeyRef.current) return;
     lastKeyRef.current = key;
@@ -75,6 +81,8 @@ export function useHeatmap(inputs: SurfaceInputs | null, onResult: (r: HeatmapRe
       tpPremium,
       slPremium,
       riskDollars,
+      spot0: qSpot,
+      smiles,
     };
     workerRef.current?.postMessage(request);
   }, [inputs]);

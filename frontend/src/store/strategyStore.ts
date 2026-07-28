@@ -351,6 +351,22 @@ export function hoursToExpiry(expiry: string): number {
   return tradingHoursToExpiry(expiry, Date.now());
 }
 
+/** Per-right IV smile [strike, iv] for the active expiry, from live quotes. */
+export function smileFromChain(
+  chain: Chain | null,
+  expiry: string | null,
+): { C: [number, number][]; P: [number, number][] } | null {
+  if (!chain || !expiry) return null;
+  const build = (right: "C" | "P"): [number, number][] =>
+    chain.contracts
+      .filter((c) => c.expiry === expiry && c.right === right && c.iv > 0.005)
+      .map((c) => [c.strike, c.iv] as [number, number])
+      .sort((a, b) => a[0] - b[0]);
+  const smiles = { C: build("C"), P: build("P") };
+  if (smiles.C.length < 2 && smiles.P.length < 2) return null;
+  return smiles;
+}
+
 /** Strikes available for the active expiry, sorted. */
 export function availableStrikes(chain: Chain | null, expiry: string | null): number[] {
   if (!chain || !expiry) return [];

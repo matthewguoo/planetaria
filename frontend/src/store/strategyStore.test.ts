@@ -153,3 +153,47 @@ describe("credit-aware sizing", () => {
     expect(computeSizingClient(legs, 25_000, 0.02, 2.5, 0.25).contracts).toBe(0);
   });
 });
+
+describe("smile-aware scenario pricing (sticky moneyness)", () => {
+  const smiles = {
+    C: [[430, 0.30], [440, 0.25], [450, 0.20], [460, 0.24], [470, 0.29]] as [number, number][],
+    P: [[430, 0.32], [440, 0.26], [450, 0.21], [460, 0.25], [470, 0.30]] as [number, number][],
+  };
+  const leg: Leg = { right: "C", strike: 460, qty: 1, side: 1, entry: 2, iv: 0.24 };
+
+  it("interpolates the smile linearly and clamps at the wings", async () => {
+    const { smileIv } = await import("../lib/optionsMath");
+    expect(smileIv(smiles.C, 450)).toBeCloseTo(0.2, 9);
+    expect(smileIv(smiles.C, 455)).toBeCloseTo(0.22, 9);
+    expect(smileIv(smiles.C, 400)).toBeCloseTo(0.3, 9); // below range -> clamp
+    expect(smileIv(smiles.C, 500)).toBeCloseTo(0.29, 9); // above range -> clamp
+    expect(smileIv([[450, 0.2]], 450)).toBeNull(); // <2 points unusable
+  });
+
+  it("at spot0 the scenario IV matches today's smile at the leg strike", async () => {
+    const { scenarioIv } = await import("../lib/optionsMath");
+    expect(scenarioIv(leg, 450, 450, smiles)).toBeCloseTo(0.24, 9);
+  });
+
+  it("when spot rallies, the strike rolls DOWN the moneyness smile", async () => {
+    const { scenarioIv } = await import("../lib/optionsMath");
+    // Spot 450 -> 460: leg struck 460 now sits ATM-equivalent (460*450/460=450).
+    expect(scenarioIv(leg, 460, 450, smiles)).toBeCloseTo(0.2, 2);
+    // No smile -> frozen leg IV (plain BSM).
+    expect(scenarioIv(leg, 460, 450, null)).toBeCloseTo(0.24, 9);
+  });
+
+  it("smile-aware value differs from frozen-IV value off-spot but agrees at expiry", async () => {
+    const { positionValueSmile, positionValue, payoffAtExpiry, positionEntryCost } =
+      await import("../lib/optionsMath");
+    const legs = [leg];
+    const tau = 6.5 / (252 * 6.5);
+    const frozen = positionValue(legs, 462, tau);
+    const smiled = positionValueSmile(legs, 462, tau, 450, smiles);
+    expect(smiled).not.toBeCloseTo(frozen, 4); // the correction is real
+    // At tau=0 both collapse to intrinsic — the payoff anchor is model-free.
+    expect(positionValueSmile(legs, 462, 0, 450, smiles)).toBeCloseTo(
+      payoffAtExpiry(legs, 462) + positionEntryCost(legs), 9,
+    );
+  });
+});

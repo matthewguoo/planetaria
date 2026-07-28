@@ -7,9 +7,11 @@ import {
   payoffAtExpiry,
   positionEntryCost,
   positionIv,
-  positionPl,
+  positionPlSmile,
+  positionValueSmile,
   TRADING_HOURS_PER_YEAR,
   type Leg,
+  type Smiles,
 } from "../../lib/optionsMath";
 import { useHeatmap } from "../../lib/useHeatmap";
 import { TF_MS, useTradingStore } from "../../store/tradingStore";
@@ -17,6 +19,7 @@ import {
   availableStrikes,
   buildLegs,
   hoursToExpiry as calcHoursToExpiry,
+  smileFromChain,
   strategyDef,
   useStrategyStore,
 } from "../../store/strategyStore";
@@ -87,10 +90,33 @@ type StrategyOverlay = {
   timeStopHours: number;
   tpPremium: number | null;
   slPremium: number | null;
+  tpPct: number;
+  slPct: number;
   entry: number;
   sigma: number;
   spot: number;
+  smiles: Smiles | null;
 };
+
+type DragTarget =
+  | { kind: "strike"; i: number }
+  | { kind: "tp" }
+  | { kind: "sl" }
+  | { kind: "timestop" };
+
+function currentEtMinutes(): number {
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/New_York",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    })
+      .formatToParts(new Date())
+      .map((p) => [p.type, p.value]),
+  );
+  return Number(parts.hour === "24" ? 0 : parts.hour) * 60 + Number(parts.minute);
+}
 
 type ChipRect = { i: number; x: number; y: number; w: number; label: string };
 
@@ -138,6 +164,9 @@ export function CandlePane() {
   const timeStopEt = useStrategyStore((s) => s.timeStopEt);
   const setStrike = useStrategyStore((s) => s.setStrike);
   const setRatio = useStrategyStore((s) => s.setRatio);
+  const setTpPct = useStrategyStore((s) => s.setTpPct);
+  const setSlPct = useStrategyStore((s) => s.setSlPct);
+  const setTimeStopEt = useStrategyStore((s) => s.setTimeStopEt);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -145,7 +174,7 @@ export function CandlePane() {
   const viewRef = useRef<ViewState>({ rightIndex: 0, barsVisible: 120, follow: true });
   const mouseRef = useRef<{ x: number; y: number } | null>(null);
   const dragRef = useRef<{ startX: number; startRight: number } | null>(null);
-  const strikeDragRef = useRef<number | null>(null); // index into strikes
+  const dragTargetRef = useRef<DragTarget | null>(null);
   const surfaceRef = useRef<HeatmapResult | null>(null);
   const overlayRef = useRef<StrategyOverlay | null>(null);
   const rafRef = useRef(0);
@@ -184,9 +213,12 @@ export function CandlePane() {
       // Signed premium axis: TP above entry, SL below — credit-safe.
       tpPremium: priced ? entry + Math.abs(entry) * tpPct : null,
       slPremium: priced ? entry - Math.abs(entry) * slPct : null,
+      tpPct,
+      slPct,
       entry,
       sigma: legs ? positionIv(legs) : 0,
       spot,
+      smiles: smileFromChain(chain, expiry),
     };
   }, [chain, expiry, kind, strikes, ratios, tpPct, slPct, timeStopEt, quote]);
 
@@ -219,7 +251,7 @@ export function CandlePane() {
         overlayRef.current,
         surfaceRef.current,
         TF_MS[tf] / 60000,
-        strikeDragRef.current,
+        dragTargetRef.current,
       );
     });
   }, [tf]);
@@ -236,6 +268,7 @@ export function CandlePane() {
       tpPremium: overlay.tpPremium,
       slPremium: overlay.slPremium,
       riskDollars: Math.max(risk, 1),
+      smiles: overlay.smiles,
     };
   }, [overlay]);
 
@@ -351,6 +384,36 @@ export function CandlePane() {
     return best;
   }, []);
 
+  /** Exit boundaries: TP/SL premium contours and the time-stop vertical. */
+  const hitTestExit = useCallback((x: number, y: number): "tp" | "sl" | "timestop" | null => {
+    const overlayNow = overlayRef.current;
+    const surface = surfaceRef.current;
+    const wrap = wrapRef.current;
+    if (!overlayNow?.legs || !surface || !wrap) return null;
+    const layout = computeLayout(wrap.clientWidth, wrap.clientHeight);
+    const domain = currentDomain(barsRef.current, viewRef.current, overlayNow);
+    const view = viewRef.current;
+    const n = barsRef.current.n;
+    const tfMinutes = TF_MS[useTradingStore.getState().tf] / 60000;
+    if (y > layout.volTop) return null;
+    const xTs = indexToX(futureIndex(overlayNow.timeStopHours, n, tfMinutes), view, layout);
+    if (Math.abs(x - xTs) <= 6) return "timestop";
+    const x0 = indexToX(n - 1, view, layout);
+    const xExp = indexToX(futureIndex(surface.hoursToExpiry, n, tfMinutes), view, layout);
+    if (x < x0 || x > xExp || xExp <= x0) return null;
+    const ti = Math.max(
+      0,
+      Math.min(Math.round(((x - x0) / (xExp - x0)) * (surface.timeSteps - 1)), surface.timeSteps - 1),
+    );
+    const near = (line: Float64Array): boolean => {
+      const s = line[ti];
+      return isFinite(s) && Math.abs(priceToY(s, domain, layout) - y) <= 6;
+    };
+    if (near(surface.tpLine)) return "tp";
+    if (near(surface.slLine)) return "sl";
+    return null;
+  }, []);
+
   /** Strike chip zones: − / + edit the leg's contract ratio, middle drags. */
   const hitTestChip = useCallback(
     (x: number, y: number): { i: number; zone: "minus" | "plus" | "drag" } | null => {
@@ -404,18 +467,28 @@ export function CandlePane() {
         } else if (chip.zone === "plus") {
           setRatio(chip.i, (ratios[chip.i] ?? 1) + 1);
         } else {
-          strikeDragRef.current = chip.i;
+          dragTargetRef.current = { kind: "strike", i: chip.i };
         }
         return;
       }
-      const strikeIdx = hitTestRail(x, y) ?? hitTestStrike(y);
+      const rail = hitTestRail(x, y);
+      if (rail !== null) {
+        dragTargetRef.current = { kind: "strike", i: rail };
+        return;
+      }
+      const exit = hitTestExit(x, y);
+      if (exit !== null) {
+        dragTargetRef.current = { kind: exit };
+        return;
+      }
+      const strikeIdx = hitTestStrike(y);
       if (strikeIdx !== null) {
-        strikeDragRef.current = strikeIdx;
+        dragTargetRef.current = { kind: "strike", i: strikeIdx };
       } else {
         dragRef.current = { startX: e.clientX, startRight: viewRef.current.rightIndex };
       }
     },
-    [hitTestChip, hitTestRail, hitTestStrike, setRatio],
+    [hitTestChip, hitTestRail, hitTestExit, hitTestStrike, setRatio],
   );
 
   const onMouseMove = useCallback(
@@ -427,19 +500,60 @@ export function CandlePane() {
       const wrap = wrapRef.current!;
       const layout = computeLayout(wrap.clientWidth, wrap.clientHeight);
 
-      if (strikeDragRef.current !== null) {
+      if (dragTargetRef.current !== null) {
+        const target = dragTargetRef.current;
         const overlayNow = overlayRef.current;
         if (overlayNow) {
           const domain = currentDomain(barsRef.current, viewRef.current, overlayNow);
-          const price = yToPrice(y, domain, layout);
-          const snaps = overlayNow.snapStrikes;
-          if (snaps.length) {
-            const snapped = snaps.reduce(
-              (best, s) => (Math.abs(s - price) < Math.abs(best - price) ? s : best),
-              snaps[0],
+          if (target.kind === "strike") {
+            const price = yToPrice(y, domain, layout);
+            const snaps = overlayNow.snapStrikes;
+            if (snaps.length) {
+              const snapped = snaps.reduce(
+                (best, s) => (Math.abs(s - price) < Math.abs(best - price) ? s : best),
+                snaps[0],
+              );
+              if (snapped !== overlayNow.strikes[target.i]) {
+                setStrike(target.i, snapped);
+              }
+            }
+          } else if (target.kind === "timestop") {
+            // Drag the force-exit time horizontally; snapped to 5 minutes,
+            // clamped inside [now+5m, 15:55 ET] and before expiry.
+            const n = barsRef.current.n;
+            const tfMinutes = TF_MS[useTradingStore.getState().tf] / 60000;
+            const idx = xToIndex(x, viewRef.current, layout);
+            const hours = ((idx - (n - 1)) * tfMinutes) / 60;
+            const nowMin = currentEtMinutes();
+            const maxMin = Math.min(15 * 60 + 55, nowMin + overlayNow.hoursToExpiry * 60);
+            const targetMin = Math.max(
+              nowMin + 5,
+              Math.min(Math.round((nowMin + hours * 60) / 5) * 5, maxMin),
             );
-            if (snapped !== overlayNow.strikes[strikeDragRef.current]) {
-              setStrike(strikeDragRef.current, snapped);
+            const hh = String(Math.floor(targetMin / 60)).padStart(2, "0");
+            const mm = String(targetMin % 60).padStart(2, "0");
+            setTimeStopEt(`${hh}:${mm}`);
+          } else if (overlayNow.legs && Math.abs(overlayNow.entry) >= 0.01) {
+            // TP/SL drag: invert price@time back to a premium level with the
+            // SAME smile-aware pricing the contours use, then store as %.
+            const surface = surfaceRef.current;
+            const n = barsRef.current.n;
+            const tfMinutes = TF_MS[useTradingStore.getState().tf] / 60000;
+            const hte = surface?.hoursToExpiry ?? overlayNow.hoursToExpiry;
+            const idx = xToIndex(x, viewRef.current, layout);
+            const hours = Math.max(0, Math.min(((idx - (n - 1)) * tfMinutes) / 60, hte));
+            const tau = Math.max(hte - hours, 0) / TRADING_HOURS_PER_YEAR;
+            const price = yToPrice(y, domain, layout);
+            if (price > 0) {
+              const premium = positionValueSmile(
+                overlayNow.legs, price, tau, overlayNow.spot, overlayNow.smiles,
+              );
+              const entry = overlayNow.entry;
+              if (target.kind === "tp") {
+                setTpPct((premium - entry) / Math.abs(entry));
+              } else {
+                setSlPct((entry - premium) / Math.abs(entry));
+              }
             }
           }
         }
@@ -450,25 +564,32 @@ export function CandlePane() {
         viewRef.current.follow = false;
       } else {
         const chip = hitTestChip(x, y);
+        const exit = chip ? null : hitTestExit(x, y);
         const cursor = chip
           ? chip.zone === "drag"
             ? "ns-resize"
             : "pointer"
-          : hitTestRail(x, y) !== null || hitTestStrike(y) !== null
+          : hitTestRail(x, y) !== null
             ? "ns-resize"
-            : "crosshair";
+            : exit === "timestop"
+              ? "ew-resize"
+              : exit !== null
+                ? "ns-resize"
+                : hitTestStrike(y) !== null
+                  ? "ns-resize"
+                  : "crosshair";
         if (canvasRef.current!.style.cursor !== cursor) {
           canvasRef.current!.style.cursor = cursor;
         }
       }
       draw();
     },
-    [draw, hitTestChip, hitTestRail, hitTestStrike, setStrike],
+    [draw, hitTestChip, hitTestRail, hitTestExit, hitTestStrike, setStrike, setTpPct, setSlPct, setTimeStopEt],
   );
 
   const endDrag = useCallback(() => {
     dragRef.current = null;
-    strikeDragRef.current = null;
+    dragTargetRef.current = null;
   }, []);
 
   const onMouseLeave = useCallback(() => {
@@ -522,8 +643,9 @@ function render(
   overlay: StrategyOverlay | null,
   surface: HeatmapResult | null,
   tfMinutes: number,
-  draggingStrike: number | null,
+  dragTarget: DragTarget | null,
 ) {
+  const draggingStrike = dragTarget?.kind === "strike" ? dragTarget.i : null;
   ctx.fillStyle = COLORS.bg;
   ctx.fillRect(0, 0, layout.width, layout.height);
   ctx.font = "11px 'SF Mono', Consolas, monospace";
@@ -545,7 +667,7 @@ function render(
 
   // Heatmap first: background layer in the future region.
   if (overlay?.legs && surface) {
-    drawHeatmap(ctx, layout, bars, view, domain, overlay, surface, tfMinutes);
+    drawHeatmap(ctx, layout, bars, view, domain, overlay, surface, tfMinutes, dragTarget);
   }
 
   drawVolume(ctx, layout, bars, view, first, last);
@@ -605,9 +727,12 @@ function drawPlTooltip(
   const price = yToPrice(mouse.y, domain, layout);
   if (price <= 0) return;
   const tau = Math.max(surface.hoursToExpiry - hours, 0) / TRADING_HOURS_PER_YEAR;
-  const pl = positionPl(overlay.legs!, price, tau) * 100;
+  const pl = positionPlSmile(overlay.legs!, price, tau, overlay.spot, overlay.smiles) * 100;
   const hLabel = hours >= 6.5 ? `+${(hours / 6.5).toFixed(1)}d` : `+${hours.toFixed(1)}h`;
-  const txt = `S ${fmtPrice(price)}  ${hLabel}  P/L ${pl >= 0 ? "+" : "-"}$${Math.abs(pl).toFixed(0)}/set`;
+  const pastStop = hours > overlay.timeStopHours + 1e-9;
+  const txt =
+    `S ${fmtPrice(price)}  ${hLabel}  P/L ${pl >= 0 ? "+" : "-"}$${Math.abs(pl).toFixed(0)}/set` +
+    (pastStop ? "  · past time stop" : "");
   const w = ctx.measureText(txt).width + 12;
   let bx = mouse.x + 14;
   if (bx + w > layout.plotW) bx = mouse.x - w - 14;
@@ -684,6 +809,7 @@ function drawHeatmap(
   overlay: StrategyOverlay,
   surface: HeatmapResult,
   tfMinutes: number,
+  dragTarget: DragTarget | null,
 ) {
   const n = bars.n;
   const risk = Math.max(
@@ -712,14 +838,26 @@ function drawHeatmap(
 
   const { timeSteps } = surface;
   const colW = (xExpiry - x0) / timeSteps;
+  const xTs = indexToX(
+    futureIndex(Math.min(overlay.timeStopHours, surface.hoursToExpiry), n, tfMinutes),
+    view, layout,
+  );
 
-  // Contours.
-  const lineAt = (line: Float64Array, color: string, dash: number[]) => {
+  // EXIT BOUNDARY: everything right of the time stop is a dead zone — the
+  // enforcer force-closes there, so that P/L can never be realized.
+  if (xTs < xExpiry) {
+    ctx.fillStyle = "rgba(0,0,0,0.55)";
+    ctx.fillRect(Math.max(xTs, 0), 0, Math.min(xExpiry, layout.plotW) - Math.max(xTs, 0), layout.volTop);
+  }
+
+  // Contours (drag the TP/SL lines to move the exits; % inputs stay synced).
+  const lineAt = (line: Float64Array, color: string, dash: number[], width = 1.4) => {
     ctx.strokeStyle = color;
-    ctx.lineWidth = 1.4;
+    ctx.lineWidth = width;
     ctx.setLineDash(dash);
     ctx.beginPath();
     let started = false;
+    let last: [number, number] | null = null;
     for (let ti = 0; ti < timeSteps; ti++) {
       const s = line[ti];
       if (!isFinite(s)) {
@@ -736,37 +874,62 @@ function drawHeatmap(
         ctx.moveTo(x, y);
         started = true;
       } else ctx.lineTo(x, y);
+      last = [x, y];
     }
     ctx.stroke();
     ctx.setLineDash([]);
+    return last;
+  };
+  const label = (at: [number, number] | null, text: string, color: string) => {
+    if (!at) return;
+    ctx.font = "10px 'SF Mono', Consolas, monospace";
+    const w = ctx.measureText(text).width + 8;
+    const bx = Math.min(Math.max(at[0] - w - 4, 0), layout.plotW - w);
+    const by = Math.min(Math.max(at[1] - 15, 0), layout.volTop - 13);
+    ctx.fillStyle = "rgba(0,0,0,0.85)";
+    ctx.fillRect(bx, by, w, 13);
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 0.8;
+    ctx.strokeRect(bx, by, w, 13);
+    ctx.fillStyle = color;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(text, bx + w / 2, by + 6.5);
+    ctx.font = "11px 'SF Mono', Consolas, monospace";
   };
   lineAt(surface.breakevenLine, COLORS.breakeven, [2, 3]);
-  lineAt(surface.tpLine, COLORS.tp, [6, 3]);
-  lineAt(surface.slLine, COLORS.sl, [6, 3]);
+  const tpEnd = lineAt(
+    surface.tpLine, COLORS.tp, [6, 3], dragTarget?.kind === "tp" ? 2.6 : 1.6,
+  );
+  const slEnd = lineAt(
+    surface.slLine, COLORS.sl, [6, 3], dragTarget?.kind === "sl" ? 2.6 : 1.6,
+  );
+  if (overlay.tpPremium !== null) {
+    label(tpEnd, `TP ${overlay.tpPremium.toFixed(2)} (+${Math.round(overlay.tpPct * 100)}%) ⇕`, COLORS.tp);
+  }
+  if (overlay.slPremium !== null) {
+    label(slEnd, `SL ${overlay.slPremium.toFixed(2)} (−${Math.round(overlay.slPct * 100)}%) ⇕`, COLORS.sl);
+  }
 
   // Expiry + time-stop verticals.
-  const vline = (x: number, color: string, label: string) => {
+  const vline = (x: number, color: string, text: string, width = 1) => {
     if (x < 0 || x > layout.plotW) return;
     ctx.strokeStyle = color;
+    ctx.lineWidth = width;
     ctx.setLineDash([4, 4]);
     ctx.beginPath();
     ctx.moveTo(x, 0);
     ctx.lineTo(x, layout.plotH);
     ctx.stroke();
     ctx.setLineDash([]);
+    ctx.lineWidth = 1;
     ctx.fillStyle = color;
     ctx.textAlign = "center";
     ctx.textBaseline = "top";
-    ctx.fillText(label, x, 4);
+    ctx.fillText(text, x, 4);
   };
   vline(xExpiry, COLORS.expiry, "EXPIRY");
-  if (overlay.timeStopHours < surface.hoursToExpiry) {
-    vline(
-      indexToX(futureIndex(overlay.timeStopHours, n, tfMinutes), view, layout),
-      COLORS.timeStop,
-      "TIME STOP",
-    );
-  }
+  vline(xTs, COLORS.timeStop, "⇔ TIME STOP", dragTarget?.kind === "timestop" ? 2.4 : 1.2);
 
   // Terminal density strip along the expiry line (model-implied lognormal).
   if (overlay.sigma > 0 && overlay.spot > 0 && xExpiry > 0 && xExpiry <= layout.plotW) {
@@ -898,7 +1061,8 @@ function drawPayoffProfile(
   for (let i = 0; i <= steps; i++) {
     const p = lo + ((hi - lo) * i) / steps;
     const e = payoffAtExpiry(overlay.legs, Math.max(p, 0.01)) * 100;
-    const n = positionPl(overlay.legs, Math.max(p, 0.01), tau) * 100;
+    const n =
+      positionPlSmile(overlay.legs, Math.max(p, 0.01), tau, overlay.spot, overlay.smiles) * 100;
     expPl.push(e);
     nowPl.push(n);
     maxAbs = Math.max(maxAbs, Math.abs(e), Math.abs(n));
