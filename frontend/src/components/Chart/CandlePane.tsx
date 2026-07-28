@@ -4,6 +4,7 @@ import { focusFeed, onSnapshot } from "../../lib/barFeed";
 import type { HeatmapResult } from "../../lib/heatmap.worker";
 import {
   normPdf,
+  payoffAtExpiry,
   positionEntryCost,
   positionIv,
   positionPl,
@@ -67,11 +68,20 @@ const EMPTY: Bars = {
 
 const RIGHT_PAD_FRAC = 0.08;
 const STRIKE_HIT_PX = 6;
+/** Width of the on-chart payoff profile lane pinned to the right edge of the
+ * plot (shares the chart's price axis; expiry + now P/L vs price). */
+const PROFILE_W = 68;
+const RAIL_HIT_PX = 9;
+const CHIP_X = 6;
+const CHIP_H = 18;
+const CHIP_ZONE = 14; // width of the − / + click zones on a strike chip
 
 type StrategyOverlay = {
   legs: (Leg & { symbol: string })[] | null;
   strikes: number[];
   strikeSides: number[]; // +1 long leg, -1 short leg (for coloring)
+  strikeRights: ("C" | "P")[];
+  ratios: number[];
   snapStrikes: number[];
   hoursToExpiry: number;
   timeStopHours: number;
@@ -81,6 +91,37 @@ type StrategyOverlay = {
   sigma: number;
   spot: number;
 };
+
+type ChipRect = { i: number; x: number; y: number; w: number; label: string };
+
+function chipLabel(overlay: StrategyOverlay, i: number): string {
+  const side = overlay.strikeSides[i] > 0 ? "+" : "−";
+  const ratio = overlay.ratios[i] ?? 1;
+  return `${side}${ratio} ${overlay.strikeRights[i] ?? ""}${fmtPrice(overlay.strikes[i])}`;
+}
+
+/** Chip rectangles for every visible strike, staggered so same-price legs
+ * (straddles) stay individually clickable. Shared by render + hit tests. */
+function computeChipRects(
+  ctx: CanvasRenderingContext2D,
+  layout: Layout,
+  domain: [number, number],
+  overlay: StrategyOverlay,
+): ChipRect[] {
+  const rects: ChipRect[] = [];
+  overlay.strikes.forEach((strike, i) => {
+    const y = priceToY(strike, domain, layout);
+    if (y < 0 || y > layout.volTop) return;
+    const label = chipLabel(overlay, i);
+    const w = ctx.measureText(label).width + CHIP_ZONE * 2 + 8;
+    let x = CHIP_X;
+    for (const r of rects) {
+      if (Math.abs(r.y - y) < CHIP_H && x < r.x + r.w + 4) x = r.x + r.w + 4;
+    }
+    rects.push({ i, x, y, w, label });
+  });
+  return rects;
+}
 
 export function CandlePane() {
   const symbol = useTradingStore((s) => s.symbol);
@@ -96,6 +137,7 @@ export function CandlePane() {
   const slPct = useStrategyStore((s) => s.slPct);
   const timeStopEt = useStrategyStore((s) => s.timeStopEt);
   const setStrike = useStrategyStore((s) => s.setStrike);
+  const setRatio = useStrategyStore((s) => s.setRatio);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -129,10 +171,13 @@ export function CandlePane() {
     const [tsH, tsM] = timeStopEt.split(":").map(Number);
     const timeStopHours = Math.max(0, Math.min((tsH * 60 + tsM - nowMin) / 60, 6.5));
     const priced = legs !== null && Math.abs(entry) >= 0.01;
+    const template = strategyDef(kind).legs;
     return {
       legs,
       strikes,
       strikeSides: sides,
+      strikeRights: template.map((l) => l.right),
+      ratios: template.map((l, i) => ratios[i] ?? l.ratio),
       snapStrikes: availableStrikes(chain, expiry),
       hoursToExpiry: hte,
       timeStopHours,
@@ -286,6 +331,48 @@ export function CandlePane() {
     return best;
   }, []);
 
+  /** Drag handles where each strike line crosses the vertical rail. */
+  const hitTestRail = useCallback((x: number, y: number): number | null => {
+    const overlayNow = overlayRef.current;
+    const wrap = wrapRef.current;
+    if (!overlayNow || !overlayNow.strikes.length || !wrap) return null;
+    const layout = computeLayout(wrap.clientWidth, wrap.clientHeight);
+    if (Math.abs(x - (layout.plotW - PROFILE_W)) > RAIL_HIT_PX) return null;
+    const domain = currentDomain(barsRef.current, viewRef.current, overlayNow);
+    let best: number | null = null;
+    let bestDist = RAIL_HIT_PX + 1;
+    overlayNow.strikes.forEach((strike, i) => {
+      const dist = Math.abs(priceToY(strike, domain, layout) - y);
+      if (dist < bestDist) {
+        best = i;
+        bestDist = dist;
+      }
+    });
+    return best;
+  }, []);
+
+  /** Strike chip zones: − / + edit the leg's contract ratio, middle drags. */
+  const hitTestChip = useCallback(
+    (x: number, y: number): { i: number; zone: "minus" | "plus" | "drag" } | null => {
+      const overlayNow = overlayRef.current;
+      const wrap = wrapRef.current;
+      const canvas = canvasRef.current;
+      if (!overlayNow || !overlayNow.strikes.length || !wrap || !canvas) return null;
+      const layout = computeLayout(wrap.clientWidth, wrap.clientHeight);
+      const domain = currentDomain(barsRef.current, viewRef.current, overlayNow);
+      const ctx = canvas.getContext("2d")!;
+      ctx.font = "11px 'SF Mono', Consolas, monospace";
+      for (const rect of computeChipRects(ctx, layout, domain, overlayNow)) {
+        if (x < rect.x || x > rect.x + rect.w || Math.abs(y - rect.y) > CHIP_H / 2) continue;
+        if (x <= rect.x + CHIP_ZONE) return { i: rect.i, zone: "minus" };
+        if (x >= rect.x + rect.w - CHIP_ZONE) return { i: rect.i, zone: "plus" };
+        return { i: rect.i, zone: "drag" };
+      }
+      return null;
+    },
+    [],
+  );
+
   const onWheel = useCallback(
     (e: React.WheelEvent) => {
       const view = viewRef.current;
@@ -307,15 +394,28 @@ export function CandlePane() {
   const onMouseDown = useCallback(
     (e: React.MouseEvent) => {
       const rect = canvasRef.current!.getBoundingClientRect();
+      const x = e.clientX - rect.left;
       const y = e.clientY - rect.top;
-      const strikeIdx = hitTestStrike(y);
+      const chip = hitTestChip(x, y);
+      if (chip) {
+        const ratios = overlayRef.current?.ratios ?? [];
+        if (chip.zone === "minus") {
+          setRatio(chip.i, (ratios[chip.i] ?? 1) - 1);
+        } else if (chip.zone === "plus") {
+          setRatio(chip.i, (ratios[chip.i] ?? 1) + 1);
+        } else {
+          strikeDragRef.current = chip.i;
+        }
+        return;
+      }
+      const strikeIdx = hitTestRail(x, y) ?? hitTestStrike(y);
       if (strikeIdx !== null) {
         strikeDragRef.current = strikeIdx;
       } else {
         dragRef.current = { startX: e.clientX, startRight: viewRef.current.rightIndex };
       }
     },
-    [hitTestStrike],
+    [hitTestChip, hitTestRail, hitTestStrike, setRatio],
   );
 
   const onMouseMove = useCallback(
@@ -349,14 +449,21 @@ export function CandlePane() {
           dragRef.current.startRight - (e.clientX - dragRef.current.startX) / barW;
         viewRef.current.follow = false;
       } else {
-        const cursor = hitTestStrike(y) !== null ? "ns-resize" : "crosshair";
+        const chip = hitTestChip(x, y);
+        const cursor = chip
+          ? chip.zone === "drag"
+            ? "ns-resize"
+            : "pointer"
+          : hitTestRail(x, y) !== null || hitTestStrike(y) !== null
+            ? "ns-resize"
+            : "crosshair";
         if (canvasRef.current!.style.cursor !== cursor) {
           canvasRef.current!.style.cursor = cursor;
         }
       }
       draw();
     },
-    [draw, hitTestStrike, setStrike],
+    [draw, hitTestChip, hitTestRail, hitTestStrike, setStrike],
   );
 
   const endDrag = useCallback(() => {
@@ -463,7 +570,11 @@ function render(
     ctx.fillRect(x - bodyW / 2, top, bodyW, Math.max(1, Math.abs(yC - yO)));
   }
 
-  if (overlay) drawStrikes(ctx, layout, domain, overlay, draggingStrike);
+  if (overlay) {
+    drawPayoffProfile(ctx, layout, domain, overlay);
+    drawStrikes(ctx, layout, domain, overlay, draggingStrike);
+    drawRail(ctx, layout, domain, overlay, draggingStrike);
+  }
   drawLastPrice(ctx, layout, bars, domain);
   if (mouse && mouse.x <= layout.plotW && mouse.y <= layout.plotH) {
     drawCrosshair(ctx, layout, bars, view, domain, mouse);
@@ -695,12 +806,12 @@ function drawStrikes(
   overlay: StrategyOverlay,
   draggingStrike: number | null,
 ) {
+  // Lines first (chips render on top, staggered for same-strike legs).
   overlay.strikes.forEach((strike, i) => {
     const y = priceToY(strike, domain, layout);
     if (y < 0 || y > layout.volTop) return;
     const isShort = overlay.strikeSides[i] < 0;
-    const color = isShort ? COLORS.strikeShort : COLORS.strike;
-    ctx.strokeStyle = color;
+    ctx.strokeStyle = isShort ? COLORS.strikeShort : COLORS.strike;
     ctx.lineWidth = draggingStrike === i ? 2.5 : 1.5;
     ctx.setLineDash(isShort ? [8, 4] : []);
     ctx.beginPath();
@@ -708,18 +819,140 @@ function drawStrikes(
     ctx.lineTo(layout.plotW, y);
     ctx.stroke();
     ctx.setLineDash([]);
-    // Label chip on the left.
-    const label = `${isShort ? "SHORT " : ""}K ${fmtPrice(strike)} ⇕`;
-    ctx.fillStyle = "rgba(0,0,0,0.85)";
-    const w = ctx.measureText(label).width + 12;
-    ctx.fillRect(6, y - 9, w, 18);
-    ctx.strokeStyle = color;
-    ctx.strokeRect(6, y - 9, w, 18);
-    ctx.fillStyle = color;
-    ctx.textAlign = "left";
-    ctx.textBaseline = "middle";
-    ctx.fillText(label, 12, y);
   });
+  // Chips: [−] ±ratio right strike [+] — click zones edit contracts, the
+  // middle (or the line/rail handle) drags the strike.
+  for (const rect of computeChipRects(ctx, layout, domain, overlay)) {
+    const isShort = overlay.strikeSides[rect.i] < 0;
+    const color = isShort ? COLORS.strikeShort : COLORS.strike;
+    ctx.fillStyle = "rgba(0,0,0,0.88)";
+    ctx.fillRect(rect.x, rect.y - CHIP_H / 2, rect.w, CHIP_H);
+    ctx.strokeStyle = color;
+    ctx.lineWidth = draggingStrike === rect.i ? 1.8 : 1;
+    ctx.strokeRect(rect.x, rect.y - CHIP_H / 2, rect.w, CHIP_H);
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillStyle = COLORS.axisText;
+    ctx.fillText("−", rect.x + CHIP_ZONE / 2 + 1, rect.y);
+    ctx.fillText("+", rect.x + rect.w - CHIP_ZONE / 2 - 1, rect.y);
+    ctx.fillStyle = color;
+    ctx.fillText(rect.label, rect.x + rect.w / 2, rect.y);
+  }
+}
+
+/** Vertical rail: the drag track for strike handles, at the payoff lane's
+ * left edge so handles sit right next to the profile they reshape. */
+function drawRail(
+  ctx: CanvasRenderingContext2D,
+  layout: Layout,
+  domain: [number, number],
+  overlay: StrategyOverlay,
+  draggingStrike: number | null,
+) {
+  const railX = layout.plotW - PROFILE_W;
+  ctx.strokeStyle = "#2a2a2a";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(railX, 0);
+  ctx.lineTo(railX, layout.volTop);
+  ctx.stroke();
+  overlay.strikes.forEach((strike, i) => {
+    const y = priceToY(strike, domain, layout);
+    if (y < 0 || y > layout.volTop) return;
+    const isShort = overlay.strikeSides[i] < 0;
+    const color = isShort ? COLORS.strikeShort : COLORS.strike;
+    const r = draggingStrike === i ? 7 : 5;
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.moveTo(railX, y - r);
+    ctx.lineTo(railX + r, y);
+    ctx.lineTo(railX, y + r);
+    ctx.lineTo(railX - r, y);
+    ctx.closePath();
+    ctx.fill();
+    ctx.strokeStyle = COLORS.bg;
+    ctx.stroke();
+  });
+}
+
+/** Payoff profile integrated into the chart: a lane on the right edge that
+ * shares the price axis. P/L extends horizontally from the zero line —
+ * expiry payoff (amber, green/red filled) and theoretical now-value (blue). */
+function drawPayoffProfile(
+  ctx: CanvasRenderingContext2D,
+  layout: Layout,
+  domain: [number, number],
+  overlay: StrategyOverlay,
+) {
+  if (!overlay.legs) return;
+  const laneX = layout.plotW - PROFILE_W;
+  ctx.fillStyle = "rgba(0,0,0,0.5)";
+  ctx.fillRect(laneX, 0, PROFILE_W, layout.volTop);
+
+  const tau = Math.max(overlay.hoursToExpiry, 0) / TRADING_HOURS_PER_YEAR;
+  const steps = 120;
+  const [lo, hi] = domain;
+  const expPl: number[] = [];
+  const nowPl: number[] = [];
+  let maxAbs = 1;
+  for (let i = 0; i <= steps; i++) {
+    const p = lo + ((hi - lo) * i) / steps;
+    const e = payoffAtExpiry(overlay.legs, Math.max(p, 0.01)) * 100;
+    const n = positionPl(overlay.legs, Math.max(p, 0.01), tau) * 100;
+    expPl.push(e);
+    nowPl.push(n);
+    maxAbs = Math.max(maxAbs, Math.abs(e), Math.abs(n));
+  }
+  const zeroX = laneX + PROFILE_W / 2;
+  const xOf = (v: number) => zeroX + (v / maxAbs) * (PROFILE_W / 2 - 4);
+  const yOf = (i: number) => priceToY(lo + ((hi - lo) * i) / steps, domain, layout);
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(laneX, 0, PROFILE_W, layout.volTop);
+  ctx.clip();
+
+  // Green/red fill between the zero line and the expiry curve.
+  for (let i = 0; i < steps; i++) {
+    const v = expPl[i];
+    const y0 = yOf(i + 1);
+    const y1 = yOf(i);
+    const x = xOf(v);
+    ctx.fillStyle = v >= 0 ? "rgba(0,200,83,0.30)" : "rgba(255,23,68,0.30)";
+    ctx.fillRect(Math.min(zeroX, x), y0, Math.abs(x - zeroX), Math.max(y1 - y0, 0.5));
+  }
+  // Zero line.
+  ctx.strokeStyle = "#3a3a3a";
+  ctx.setLineDash([2, 3]);
+  ctx.beginPath();
+  ctx.moveTo(zeroX, 0);
+  ctx.lineTo(zeroX, layout.volTop);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  // Curves.
+  const strokeCurve = (values: number[], color: string, dash: number[]) => {
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.4;
+    ctx.setLineDash(dash);
+    ctx.beginPath();
+    for (let i = 0; i <= steps; i++) {
+      const x = xOf(values[i]);
+      const y = yOf(i);
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+    ctx.setLineDash([]);
+  };
+  strokeCurve(nowPl, "#2196F3", [4, 3]);
+  strokeCurve(expPl, COLORS.strike, []);
+  ctx.restore();
+
+  // Lane header.
+  ctx.fillStyle = COLORS.axisText;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "top";
+  ctx.fillText("P/L", laneX + PROFILE_W / 2, 3);
 }
 
 function niceStep(span: number, maxTicks: number): number {
