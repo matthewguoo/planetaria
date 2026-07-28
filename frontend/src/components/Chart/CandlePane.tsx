@@ -4,7 +4,6 @@ import { focusFeed, onSnapshot } from "../../lib/barFeed";
 import type { HeatmapResult } from "../../lib/heatmap.worker";
 import {
   normPdf,
-  payoffAtExpiry,
   positionEntryCost,
   positionIv,
   positionPlSmile,
@@ -71,9 +70,8 @@ const EMPTY: Bars = {
 
 const RIGHT_PAD_FRAC = 0.08;
 const STRIKE_HIT_PX = 6;
-/** Width of the on-chart payoff profile lane pinned to the right edge of the
- * plot (shares the chart's price axis; expiry + now P/L vs price). */
-const PROFILE_W = 68;
+/** Inset of the strike-handle rail from the plot's right edge. */
+const RAIL_INSET = 16;
 const RAIL_HIT_PX = 9;
 const CHIP_X = 6;
 const CHIP_H = 18;
@@ -171,9 +169,21 @@ export function CandlePane() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
   const barsRef = useRef<Bars>(EMPTY);
-  const viewRef = useRef<ViewState>({ rightIndex: 0, barsVisible: 120, follow: true });
+  const viewRef = useRef<ViewState>({
+    rightIndex: 0,
+    barsVisible: 120,
+    follow: true,
+    yDomain: null,
+  });
   const mouseRef = useRef<{ x: number; y: number } | null>(null);
-  const dragRef = useRef<{ startX: number; startRight: number } | null>(null);
+  const dragRef = useRef<{
+    startX: number;
+    startY: number;
+    startRight: number;
+    startDomain: [number, number];
+    vActive: boolean;
+  } | null>(null);
+  const axisDragRef = useRef<{ startY: number; domain: [number, number] } | null>(null);
   const dragTargetRef = useRef<DragTarget | null>(null);
   const surfaceRef = useRef<HeatmapResult | null>(null);
   const overlayRef = useRef<StrategyOverlay | null>(null);
@@ -370,7 +380,7 @@ export function CandlePane() {
     const wrap = wrapRef.current;
     if (!overlayNow || !overlayNow.strikes.length || !wrap) return null;
     const layout = computeLayout(wrap.clientWidth, wrap.clientHeight);
-    if (Math.abs(x - (layout.plotW - PROFILE_W)) > RAIL_HIT_PX) return null;
+    if (Math.abs(x - (layout.plotW - RAIL_INSET)) > RAIL_HIT_PX) return null;
     const domain = currentDomain(barsRef.current, viewRef.current, overlayNow);
     let best: number | null = null;
     let bestDist = RAIL_HIT_PX + 1;
@@ -442,8 +452,21 @@ export function CandlePane() {
       const wrap = wrapRef.current!;
       const layout = computeLayout(wrap.clientWidth, wrap.clientHeight);
       const rect = canvasRef.current!.getBoundingClientRect();
-      const anchor = xToIndex(e.clientX - rect.left, view, layout);
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
       const factor = e.deltaY > 0 ? 1.15 : 1 / 1.15;
+      if (x > layout.plotW && y <= layout.plotH) {
+        // Wheel over the price axis: vertical scale around the cursor price.
+        const domain = currentDomain(barsRef.current, view, overlayRef.current);
+        const anchor = yToPrice(y, domain, layout);
+        view.yDomain = [
+          anchor - (anchor - domain[0]) * factor,
+          anchor + (domain[1] - anchor) * factor,
+        ];
+        draw();
+        return;
+      }
+      const anchor = xToIndex(x, view, layout);
       const next = Math.max(20, Math.min(3000, view.barsVisible * factor));
       const frac = (view.rightIndex - anchor) / view.barsVisible;
       view.barsVisible = next;
@@ -459,6 +482,16 @@ export function CandlePane() {
       const rect = canvasRef.current!.getBoundingClientRect();
       const x = e.clientX - rect.left;
       const y = e.clientY - rect.top;
+      const wrap = wrapRef.current!;
+      const layout = computeLayout(wrap.clientWidth, wrap.clientHeight);
+      if (x > layout.plotW && y <= layout.plotH) {
+        // Grab the price axis: vertical scale drag.
+        axisDragRef.current = {
+          startY: y,
+          domain: currentDomain(barsRef.current, viewRef.current, overlayRef.current),
+        };
+        return;
+      }
       const chip = hitTestChip(x, y);
       if (chip) {
         const ratios = overlayRef.current?.ratios ?? [];
@@ -485,7 +518,13 @@ export function CandlePane() {
       if (strikeIdx !== null) {
         dragTargetRef.current = { kind: "strike", i: strikeIdx };
       } else {
-        dragRef.current = { startX: e.clientX, startRight: viewRef.current.rightIndex };
+        dragRef.current = {
+          startX: e.clientX,
+          startY: e.clientY,
+          startRight: viewRef.current.rightIndex,
+          startDomain: currentDomain(barsRef.current, viewRef.current, overlayRef.current),
+          vActive: viewRef.current.yDomain !== null,
+        };
       }
     },
     [hitTestChip, hitTestRail, hitTestExit, hitTestStrike, setRatio],
@@ -557,27 +596,46 @@ export function CandlePane() {
             }
           }
         }
+      } else if (axisDragRef.current) {
+        // Price-axis drag: stretch the vertical scale around the domain center.
+        const { startY, domain } = axisDragRef.current;
+        const factor = Math.exp((y - startY) / 200);
+        const center = (domain[0] + domain[1]) / 2;
+        const half = ((domain[1] - domain[0]) / 2) * factor;
+        if (half > 1e-9) viewRef.current.yDomain = [center - half, center + half];
       } else if (dragRef.current) {
+        const drag = dragRef.current;
         const barW = layout.plotW / viewRef.current.barsVisible;
-        viewRef.current.rightIndex =
-          dragRef.current.startRight - (e.clientX - dragRef.current.startX) / barW;
+        viewRef.current.rightIndex = drag.startRight - (e.clientX - drag.startX) / barW;
         viewRef.current.follow = false;
+        // Vertical pan engages past a small threshold so ordinary horizontal
+        // pans keep auto-fit; once engaged the price scale goes manual.
+        const dy = e.clientY - drag.startY;
+        if (!drag.vActive && Math.abs(dy) > 8) drag.vActive = true;
+        if (drag.vActive) {
+          const [lo, hi] = drag.startDomain;
+          const shift = (dy * (hi - lo)) / layout.volTop;
+          viewRef.current.yDomain = [lo + shift, hi + shift];
+        }
       } else {
-        const chip = hitTestChip(x, y);
-        const exit = chip ? null : hitTestExit(x, y);
-        const cursor = chip
-          ? chip.zone === "drag"
-            ? "ns-resize"
-            : "pointer"
-          : hitTestRail(x, y) !== null
-            ? "ns-resize"
-            : exit === "timestop"
-              ? "ew-resize"
-              : exit !== null
-                ? "ns-resize"
-                : hitTestStrike(y) !== null
+        const overAxis = x > layout.plotW && y <= layout.plotH;
+        const chip = overAxis ? null : hitTestChip(x, y);
+        const exit = chip || overAxis ? null : hitTestExit(x, y);
+        const cursor = overAxis
+          ? "ns-resize"
+          : chip
+            ? chip.zone === "drag"
+              ? "ns-resize"
+              : "pointer"
+            : hitTestRail(x, y) !== null
+              ? "ns-resize"
+              : exit === "timestop"
+                ? "ew-resize"
+                : exit !== null
                   ? "ns-resize"
-                  : "crosshair";
+                  : hitTestStrike(y) !== null
+                    ? "ns-resize"
+                    : "crosshair";
         if (canvasRef.current!.style.cursor !== cursor) {
           canvasRef.current!.style.cursor = cursor;
         }
@@ -589,6 +647,7 @@ export function CandlePane() {
 
   const endDrag = useCallback(() => {
     dragRef.current = null;
+    axisDragRef.current = null;
     dragTargetRef.current = null;
   }, []);
 
@@ -601,6 +660,7 @@ export function CandlePane() {
   const onDoubleClick = useCallback(() => {
     const view = viewRef.current;
     view.follow = true;
+    view.yDomain = null; // back to auto-fit
     view.rightIndex = Math.max(0, barsRef.current.n - 1) + view.barsVisible * RIGHT_PAD_FRAC;
     draw();
   }, [draw]);
@@ -623,6 +683,9 @@ export function CandlePane() {
 // ------------------------------------------------------------- rendering
 
 function currentDomain(bars: Bars, view: ViewState, overlay: StrategyOverlay | null): [number, number] {
+  // Manual vertical scale (axis wheel/drag or chart vertical pan) wins;
+  // double-click restores auto-fit.
+  if (view.yDomain) return view.yDomain;
   const base = priceDomain(bars, view);
   if (!overlay) return base;
   const levels = [...overlay.strikes];
@@ -693,7 +756,6 @@ function render(
   }
 
   if (overlay) {
-    drawPayoffProfile(ctx, layout, domain, overlay);
     drawStrikes(ctx, layout, domain, overlay, draggingStrike);
     drawRail(ctx, layout, domain, overlay, draggingStrike);
   }
@@ -1003,8 +1065,8 @@ function drawStrikes(
   }
 }
 
-/** Vertical rail: the drag track for strike handles, at the payoff lane's
- * left edge so handles sit right next to the profile they reshape. */
+/** Vertical rail: the drag track for strike handles, just inside the price
+ * axis so handles read directly against the scale. */
 function drawRail(
   ctx: CanvasRenderingContext2D,
   layout: Layout,
@@ -1012,7 +1074,7 @@ function drawRail(
   overlay: StrategyOverlay,
   draggingStrike: number | null,
 ) {
-  const railX = layout.plotW - PROFILE_W;
+  const railX = layout.plotW - RAIL_INSET;
   ctx.strokeStyle = "#2a2a2a";
   ctx.lineWidth = 1;
   ctx.beginPath();
@@ -1036,87 +1098,6 @@ function drawRail(
     ctx.strokeStyle = COLORS.bg;
     ctx.stroke();
   });
-}
-
-/** Payoff profile integrated into the chart: a lane on the right edge that
- * shares the price axis. P/L extends horizontally from the zero line —
- * expiry payoff (amber, green/red filled) and theoretical now-value (blue). */
-function drawPayoffProfile(
-  ctx: CanvasRenderingContext2D,
-  layout: Layout,
-  domain: [number, number],
-  overlay: StrategyOverlay,
-) {
-  if (!overlay.legs) return;
-  const laneX = layout.plotW - PROFILE_W;
-  ctx.fillStyle = "rgba(0,0,0,0.5)";
-  ctx.fillRect(laneX, 0, PROFILE_W, layout.volTop);
-
-  const tau = Math.max(overlay.hoursToExpiry, 0) / TRADING_HOURS_PER_YEAR;
-  const steps = 120;
-  const [lo, hi] = domain;
-  const expPl: number[] = [];
-  const nowPl: number[] = [];
-  let maxAbs = 1;
-  for (let i = 0; i <= steps; i++) {
-    const p = lo + ((hi - lo) * i) / steps;
-    const e = payoffAtExpiry(overlay.legs, Math.max(p, 0.01)) * 100;
-    const n =
-      positionPlSmile(overlay.legs, Math.max(p, 0.01), tau, overlay.spot, overlay.smiles) * 100;
-    expPl.push(e);
-    nowPl.push(n);
-    maxAbs = Math.max(maxAbs, Math.abs(e), Math.abs(n));
-  }
-  const zeroX = laneX + PROFILE_W / 2;
-  const xOf = (v: number) => zeroX + (v / maxAbs) * (PROFILE_W / 2 - 4);
-  const yOf = (i: number) => priceToY(lo + ((hi - lo) * i) / steps, domain, layout);
-
-  ctx.save();
-  ctx.beginPath();
-  ctx.rect(laneX, 0, PROFILE_W, layout.volTop);
-  ctx.clip();
-
-  // Green/red fill between the zero line and the expiry curve.
-  for (let i = 0; i < steps; i++) {
-    const v = expPl[i];
-    const y0 = yOf(i + 1);
-    const y1 = yOf(i);
-    const x = xOf(v);
-    ctx.fillStyle = v >= 0 ? "rgba(0,200,83,0.30)" : "rgba(255,23,68,0.30)";
-    ctx.fillRect(Math.min(zeroX, x), y0, Math.abs(x - zeroX), Math.max(y1 - y0, 0.5));
-  }
-  // Zero line.
-  ctx.strokeStyle = "#3a3a3a";
-  ctx.setLineDash([2, 3]);
-  ctx.beginPath();
-  ctx.moveTo(zeroX, 0);
-  ctx.lineTo(zeroX, layout.volTop);
-  ctx.stroke();
-  ctx.setLineDash([]);
-  // Curves.
-  const strokeCurve = (values: number[], color: string, dash: number[]) => {
-    ctx.strokeStyle = color;
-    ctx.lineWidth = 1.4;
-    ctx.setLineDash(dash);
-    ctx.beginPath();
-    for (let i = 0; i <= steps; i++) {
-      const x = xOf(values[i]);
-      const y = yOf(i);
-      if (i === 0) ctx.moveTo(x, y);
-      else ctx.lineTo(x, y);
-    }
-    ctx.stroke();
-    ctx.setLineDash([]);
-  };
-  strokeCurve(nowPl, "#2196F3", [4, 3]);
-  strokeCurve(expPl, COLORS.strike, []);
-  ctx.restore();
-
-  // Lane header.
-  ctx.fillStyle = COLORS.axisText;
-  ctx.textAlign = "center";
-  ctx.textBaseline = "top";
-  ctx.fillText("P/L", laneX + PROFILE_W / 2, 3);
 }
 
 function niceStep(span: number, maxTicks: number): number {

@@ -24,7 +24,7 @@ export function ChartControls() {
         </button>
       ))}
       <span className="ml-auto text-[11px] text-bb-muted">
-        WHEEL zoom · DRAG pan · DBLCLICK follow
+        WHEEL zoom · AXIS wheel/drag y-scale · DRAG pan · DBLCLICK reset
       </span>
     </div>
   );

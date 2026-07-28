@@ -26,6 +26,8 @@ export type ViewState = {
   barsVisible: number;
   /** Auto-scroll to keep the newest bar in view as data arrives. */
   follow: boolean;
+  /** Manual price scale; null = auto-fit to visible bars (+ overlay levels). */
+  yDomain: [number, number] | null;
 };
 
 export type Layout = {

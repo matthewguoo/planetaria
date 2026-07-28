@@ -69,7 +69,9 @@ TP and SL exits by dragging their premium contour lines (synced with the %
 inputs in the ORDER panel), and the force-exit time by dragging the TIME
 STOP vertical. The region past the time stop is dimmed — a dead zone the
 exit enforcer never lets the position reach. Every edit re-prices the P/L
-heatmap, contours, and the right-edge payoff profile live.
+heatmap and its contours live. The chart scales both ways: wheel/drag on
+the price axis for vertical scale, vertical chart drag to pan price, and
+double-click to restore auto-fit.
 
 ### Model accuracy beyond BSM
 
@@ -78,8 +80,8 @@ underlying moves (the smile moves with spot in reality). Scenario pricing
 here is **smile-aware**: leg IVs are re-read from the live chain smile
 under a sticky-moneyness assumption (IV as a function of K/S) as the
 scenario price moves, degrading gracefully to frozen-IV BSM when the smile
-is unavailable. The heatmap, TP/SL contours, hover P/L, and payoff profile
-all share this pricing function, and the expiry payoff itself is intrinsic
+is unavailable. The heatmap, TP/SL contours, and hover P/L all share this
+pricing function, and the expiry payoff itself is intrinsic
 value — model-free — so the surface converges to exact P/L at expiry.
 Remaining known assumptions (risk-neutral drift, no jumps, no early
 assignment) are surfaced in the probability panel's assumptions note.
