@@ -168,6 +168,11 @@ export function OrderPanel({ designer }: { designer: Designer }) {
             LIVE 🔒
           </button>
         </div>
+        {designer.warnings.map((warning) => (
+          <div key={warning} className="text-[9px] leading-tight text-bb-orange" title={warning}>
+            ⚠ {warning}
+          </div>
+        ))}
         {designer.instantExit && (
           <div
             className="text-[10px] leading-tight text-bb-loss"

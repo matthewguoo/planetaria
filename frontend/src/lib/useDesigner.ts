@@ -6,11 +6,18 @@
 
 import { useMemo } from "react";
 import { computeProbabilitiesClient, computeSizingClient } from "./analytics";
-import { positionEntryCost, positionValue, TRADING_HOURS_PER_YEAR } from "./optionsMath";
+import {
+  positionEntryCost,
+  positionValue,
+  TRADING_HOURS_PER_YEAR,
+  type Smiles,
+} from "./optionsMath";
 import { useAccountStore } from "../store/accountStore";
 import {
   buildLegs,
   hoursToExpiry as calcHte,
+  smileFromChain,
+  timeStopHoursFromEt,
   useStrategyStore,
   type StrategyLeg,
 } from "../store/strategyStore";
@@ -28,6 +35,14 @@ export type Designer = {
   /** Non-null when the CURRENT model value already sits at/beyond an exit —
    * entering now would be closed by the enforcer immediately. */
   instantExit: "tp" | "sl" | null;
+  /** Live chain smile for the active expiry (scenario model input). */
+  smiles: Smiles | null;
+  /** Trading hours from now until the configured time stop. */
+  timeStopHours: number;
+  /** Estimated round-trip bid/ask cost, dollars per contract-set. */
+  frictionPerSet: number;
+  /** Discrete risks a P/L surface can't show (assignment, pin). */
+  warnings: string[];
   qty: number;
   autoQty: number;
   sizing: ReturnType<typeof computeSizingClient> | null;
@@ -44,6 +59,7 @@ export function useDesigner(): Designer {
   const tpPct = useStrategyStore((s) => s.tpPct);
   const slPct = useStrategyStore((s) => s.slPct);
   const qtyOverride = useStrategyStore((s) => s.qty);
+  const timeStopEt = useStrategyStore((s) => s.timeStopEt);
   const quote = useTradingStore((s) => s.quote);
   const account = useAccountStore((s) => s.account);
 
@@ -52,6 +68,8 @@ export function useDesigner(): Designer {
     const spot = quote?.mid || chain?.spot || 0;
     const equity = account?.equity ?? 0;
     const risk = account?.risk;
+    const smiles = smileFromChain(chain, expiry);
+    const timeStopHours = timeStopHoursFromEt(timeStopEt);
     const empty: Designer = {
       ready: false,
       demo: chain?.demo ?? false,
@@ -62,6 +80,10 @@ export function useDesigner(): Designer {
       tpPremium: null,
       slPremium: null,
       instantExit: null,
+      smiles,
+      timeStopHours,
+      frictionPerSet: 0,
+      warnings: [],
       qty: 0,
       autoQty: 0,
       sizing: null,
@@ -98,6 +120,29 @@ export function useDesigner(): Designer {
     const autoQty = sizing.contracts;
     const qty = qtyOverride > 0 ? Math.min(qtyOverride, Math.max(autoQty, 0)) : autoQty;
 
+    // Round-trip bid/ask friction per contract-set: half-spread paid on the
+    // way in AND the way out, per leg, weighted by ratio.
+    const frictionPerSet =
+      legs.reduce((acc, leg) => acc + leg.qty * leg.halfSpread * 2, 0) * 100;
+
+    // Discrete risks no surface can show — flag them instead.
+    const warnings: string[] = [];
+    for (const leg of legs) {
+      if (leg.side >= 0) continue;
+      const intrinsic = Math.max(leg.right === "C" ? spot - leg.strike : leg.strike - spot, 0);
+      if (intrinsic > 0 && leg.entry - intrinsic < 0.05) {
+        warnings.push(
+          `early assignment risk: short ${leg.strike}${leg.right} is ITM with ≈no extrinsic value`,
+        );
+      }
+      if (hte <= 6.5 && Math.abs(spot - leg.strike) / spot < 0.003) {
+        warnings.push(`pin risk: short ${leg.strike}${leg.right} sits at spot into expiry`);
+      }
+    }
+    if (hte > 6.5) {
+      warnings.push("overnight gap risk: stops cannot protect across sessions");
+    }
+
     return {
       ready: true,
       demo: chain?.demo ?? false,
@@ -108,11 +153,15 @@ export function useDesigner(): Designer {
       tpPremium,
       slPremium,
       instantExit,
+      smiles,
+      timeStopHours,
+      frictionPerSet,
+      warnings,
       qty,
       autoQty,
       sizing,
       probabilities,
       equity,
     };
-  }, [chain, expiry, kind, strikes, ratios, tpPct, slPct, qtyOverride, quote, account]);
+  }, [chain, expiry, kind, strikes, ratios, tpPct, slPct, qtyOverride, timeStopEt, quote, account]);
 }

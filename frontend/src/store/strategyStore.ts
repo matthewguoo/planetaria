@@ -178,7 +178,7 @@ export function strategyDef(kind: StrategyKind): StrategyDef {
   return STRATEGIES[kind];
 }
 
-export type StrategyLeg = Leg & { symbol: string; expiry: string };
+export type StrategyLeg = Leg & { symbol: string; expiry: string; halfSpread: number };
 
 type StrategyState = {
   chain: Chain | null;
@@ -193,6 +193,10 @@ type StrategyState = {
   tpPct: number; // TP as fraction of |entry premium| gained (1.0 = +100%)
   slPct: number; // SL as fraction of |entry premium| lost (0.5 = -50%)
   timeStopEt: string; // "HH:MM"
+  /** Scenario IV shock, relative (+0.2 = all vols 20% richer). */
+  volShift: number;
+  /** Apply skew-derived directional vol response (down-move => vol up). */
+  skewBeta: boolean;
 
   loadChain: (underlying: string) => Promise<void>;
   setExpiry: (expiry: string) => void;
@@ -203,6 +207,8 @@ type StrategyState = {
   setSlPct: (v: number) => void;
   setTimeStopEt: (v: string) => void;
   setQty: (v: number) => void;
+  setVolShift: (v: number) => void;
+  setSkewBeta: (v: boolean) => void;
 };
 
 function nearestStrike(strikes: number[], target: number): number {
@@ -235,6 +241,8 @@ export const useStrategyStore = create<StrategyState>((set, get) => ({
   tpPct: 1.0,
   slPct: 0.5,
   timeStopEt: "15:50",
+  volShift: 0,
+  skewBeta: true,
 
   loadChain: async (underlying: string) => {
     try {
@@ -297,7 +305,26 @@ export const useStrategyStore = create<StrategyState>((set, get) => ({
   setSlPct: (v) => set({ slPct: Math.max(0.05, Math.min(v, 0.95)) }),
   setTimeStopEt: (v) => set({ timeStopEt: v }),
   setQty: (v) => set({ qty: Math.max(0, Math.min(v, 100)) }),
+  setVolShift: (v) => set({ volShift: Math.max(-0.5, Math.min(v, 0.5)) }),
+  setSkewBeta: (v) => set({ skewBeta: v }),
 }));
+
+/** Trading hours from now until today's HH:MM ET (clamped to [0, 6.5]). */
+export function timeStopHoursFromEt(timeStopEt: string): number {
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/New_York",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    })
+      .formatToParts(new Date())
+      .map((p) => [p.type, p.value]),
+  );
+  const nowMin = Number(parts.hour === "24" ? 0 : parts.hour) * 60 + Number(parts.minute);
+  const [h, m] = timeStopEt.split(":").map(Number);
+  return Math.max(0, Math.min((h * 60 + m - nowMin) / 60, 6.5));
+}
 
 // ------------------------------------------------------------ derivations
 
@@ -342,6 +369,10 @@ export function buildLegs(state: {
       iv: contract.iv,
       symbol: contract.symbol,
       expiry,
+      halfSpread:
+        contract.ask > contract.bid && contract.bid > 0
+          ? (contract.ask - contract.bid) / 2
+          : Math.max(contract.mid * 0.05, 0.01), // no two-sided quote: assume 10% width
     });
   }
   return legs;

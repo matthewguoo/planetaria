@@ -3,13 +3,15 @@ import { barsTable } from "../../lib/perspective";
 import { focusFeed, onSnapshot } from "../../lib/barFeed";
 import type { HeatmapResult } from "../../lib/heatmap.worker";
 import {
+  makeScenarioModel,
   normPdf,
   positionEntryCost,
   positionIv,
-  positionPlSmile,
-  positionValueSmile,
+  positionPlModel,
+  positionValueModel,
   TRADING_HOURS_PER_YEAR,
   type Leg,
+  type ScenarioModel,
   type Smiles,
 } from "../../lib/optionsMath";
 import { useHeatmap } from "../../lib/useHeatmap";
@@ -94,6 +96,11 @@ type StrategyOverlay = {
   sigma: number;
   spot: number;
   smiles: Smiles | null;
+  volShift: number;
+  skewBeta: boolean;
+  /** Precomputed scenario model — the ONE pricing function shared by the
+   * surface, contours, tooltip, and exit-drag inverse mapping. */
+  model: ScenarioModel;
 };
 
 type DragTarget =
@@ -160,6 +167,8 @@ export function CandlePane() {
   const tpPct = useStrategyStore((s) => s.tpPct);
   const slPct = useStrategyStore((s) => s.slPct);
   const timeStopEt = useStrategyStore((s) => s.timeStopEt);
+  const volShift = useStrategyStore((s) => s.volShift);
+  const skewBeta = useStrategyStore((s) => s.skewBeta);
   const setStrike = useStrategyStore((s) => s.setStrike);
   const setRatio = useStrategyStore((s) => s.setRatio);
   const setTpPct = useStrategyStore((s) => s.setTpPct);
@@ -229,8 +238,11 @@ export function CandlePane() {
       sigma: legs ? positionIv(legs) : 0,
       spot,
       smiles: smileFromChain(chain, expiry),
+      volShift,
+      skewBeta,
+      model: makeScenarioModel(smileFromChain(chain, expiry), spot, volShift, skewBeta),
     };
-  }, [chain, expiry, kind, strikes, ratios, tpPct, slPct, timeStopEt, quote]);
+  }, [chain, expiry, kind, strikes, ratios, tpPct, slPct, timeStopEt, quote, volShift, skewBeta]);
 
   overlayRef.current = overlay;
 
@@ -279,6 +291,8 @@ export function CandlePane() {
       slPremium: overlay.slPremium,
       riskDollars: Math.max(risk, 1),
       smiles: overlay.smiles,
+      volShift: overlay.volShift,
+      skewBeta: overlay.skewBeta,
     };
   }, [overlay]);
 
@@ -584,9 +598,7 @@ export function CandlePane() {
             const tau = Math.max(hte - hours, 0) / TRADING_HOURS_PER_YEAR;
             const price = yToPrice(y, domain, layout);
             if (price > 0) {
-              const premium = positionValueSmile(
-                overlayNow.legs, price, tau, overlayNow.spot, overlayNow.smiles,
-              );
+              const premium = positionValueModel(overlayNow.legs, price, tau, overlayNow.model);
               const entry = overlayNow.entry;
               if (target.kind === "tp") {
                 setTpPct((premium - entry) / Math.abs(entry));
@@ -809,7 +821,7 @@ function drawPlTooltip(
   const price = yToPrice(mouse.y, domain, layout);
   if (price <= 0) return;
   const tau = Math.max(surface.hoursToExpiry - hours, 0) / TRADING_HOURS_PER_YEAR;
-  const pl = positionPlSmile(overlay.legs!, price, tau, overlay.spot, overlay.smiles) * 100;
+  const pl = positionPlModel(overlay.legs!, price, tau, overlay.model) * 100;
   const hLabel = hours >= 6.5 ? `+${(hours / 6.5).toFixed(1)}d` : `+${hours.toFixed(1)}h`;
   const pastStop = hours > overlay.timeStopHours + 1e-9;
   const txt =

@@ -80,11 +80,33 @@ underlying moves (the smile moves with spot in reality). Scenario pricing
 here is **smile-aware**: leg IVs are re-read from the live chain smile
 under a sticky-moneyness assumption (IV as a function of K/S) as the
 scenario price moves, degrading gracefully to frozen-IV BSM when the smile
-is unavailable. The heatmap, TP/SL contours, and hover P/L all share this
-pricing function, and the expiry payoff itself is intrinsic
-value — model-free — so the surface converges to exact P/L at expiry.
-Remaining known assumptions (risk-neutral drift, no jumps, no early
-assignment) are surfaced in the probability panel's assumptions note.
+is unavailable. On top of that:
+
+- **IV shock** control: a parallel relative vol shock (±50%) applied to
+  every scenario vol — stress vega ("what if IV crushes after the event?")
+  across the surface, contours, and simulation together.
+- **Skew beta**: a directional vol response derived from the chain's OWN
+  skew slope (dIV/dlnK near ATM), so selloffs raise scenario vols and
+  rallies crush them — the empirical index behavior pure smile-riding
+  misses. Toggleable.
+- **Monte Carlo exit simulator** (worker, 2000 seeded GBM paths in trading
+  time): applies the EXACT enforcer exit rules along each path — TP as a
+  limit fill at the threshold, SL at the first observed breach including
+  gap-through (realizing the worse price), hard time stop, expiry payoff —
+  net of round-trip bid/ask friction. Reports realized-P/L EV, win rate,
+  exit mix (TP/SL/time), percentiles, and average time in trade. This is
+  the path-dependent truth the path-independent surface cannot show.
+- **Friction accounting**: per-leg half-spreads (from live quotes) charged
+  in and out; shown in sizing and baked into the MC distribution.
+- **Discrete-risk warnings**: early-assignment risk on short ITM legs with
+  no extrinsic value, pin risk at short strikes into expiry, and overnight
+  gap-risk disclosure on multi-day positions.
+
+The heatmap, TP/SL contours, hover P/L, exit-drag mapping, and MC engine
+all share one scenario pricing function, and the expiry payoff itself is
+intrinsic value — model-free — so the surface converges to exact P/L at
+expiry. Remaining assumptions (risk-neutral drift, diffusion-only paths)
+stay disclosed in the probability panel's assumptions note.
 
 ## Run (dev)
 

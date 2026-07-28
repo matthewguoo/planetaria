@@ -68,6 +68,11 @@ export function SizingPanel({ designer }: { designer: Designer }) {
               label="BP USED"
               value={`${(designer.equity && sizing.contracts > 0 ? ((sizing.entryCost / sizing.contracts) * designer.qty / designer.equity) * 100 : 0).toFixed(1)}%`}
             />
+            <Row
+              label="EST. FRICTION"
+              value={`-$${(designer.frictionPerSet * designer.qty).toFixed(0)}`}
+              cls="text-bb-orange"
+            />
             <Row label="EQUITY" value={`$${designer.equity.toLocaleString("en-US", { maximumFractionDigits: 0 })}`} />
             {sizing.reasons.map((reason) => (
               <div key={reason} className="text-[10px] leading-tight text-bb-orange" title={reason}>

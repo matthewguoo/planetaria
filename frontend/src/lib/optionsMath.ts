@@ -126,6 +126,96 @@ export function scenarioIv(
   return iv !== null && iv > 0.005 ? iv : leg.iv;
 }
 
+/**
+ * Full scenario model = sticky-moneyness smile + two optional corrections:
+ * - volShift: parallel relative IV shock (+0.2 = vols 20% richer) — the
+ *   "what if IV crushes / spikes" axis BSM has no answer for.
+ * - skew beta: a directional vol response derived from the chain's OWN skew
+ *   slope (dIV/dlnK near ATM). Equity skews are negative, so a down-move
+ *   raises scenario vols and a rally crushes them — the empirical index
+ *   behavior that pure smile-riding misses.
+ */
+export type ScenarioModel = {
+  spot0: number;
+  smiles: Smiles | null;
+  volShift: number;
+  slopeC: number | null;
+  slopeP: number | null;
+};
+
+/** Least-squares dIV/dlnK over smile points within ±6% of spot. */
+export function atmSkewSlope(points: SmilePoint[], spot0: number): number | null {
+  if (spot0 <= 0) return null;
+  const pts = points.filter(
+    ([k, v]) => k > 0 && v > 0 && Math.abs(Math.log(k / spot0)) < 0.06,
+  );
+  if (pts.length < 3) return null;
+  let sx = 0;
+  let sy = 0;
+  let sxx = 0;
+  let sxy = 0;
+  for (const [k, v] of pts) {
+    const x = Math.log(k);
+    sx += x;
+    sy += v;
+    sxx += x * x;
+    sxy += x * v;
+  }
+  const n = pts.length;
+  const denom = n * sxx - sx * sx;
+  if (Math.abs(denom) < 1e-12) return null;
+  return (n * sxy - sx * sy) / denom;
+}
+
+export function makeScenarioModel(
+  smiles: Smiles | null,
+  spot0: number,
+  volShift = 0,
+  applySkewBeta = false,
+): ScenarioModel {
+  return {
+    spot0,
+    smiles,
+    volShift,
+    slopeC: applySkewBeta && smiles ? atmSkewSlope(smiles.C, spot0) : null,
+    slopeP: applySkewBeta && smiles ? atmSkewSlope(smiles.P, spot0) : null,
+  };
+}
+
+export function scenarioIvModel(leg: Leg, S: number, m: ScenarioModel): number {
+  let iv = scenarioIv(leg, S, m.spot0, m.smiles);
+  const slope = leg.right === "C" ? m.slopeC : m.slopeP;
+  if (slope !== null && S > 0 && m.spot0 > 0) {
+    iv += slope * Math.log(S / m.spot0);
+  }
+  iv *= 1 + m.volShift;
+  return Math.min(Math.max(iv, 0.01), 5);
+}
+
+export function positionValueModel(
+  legs: Leg[],
+  S: number,
+  tau: number,
+  m: ScenarioModel,
+  r: number = RISK_FREE,
+): number {
+  let total = 0;
+  for (const leg of legs) {
+    total += leg.side * leg.qty * bsPrice(S, leg.strike, tau, scenarioIvModel(leg, S, m), leg.right, r);
+  }
+  return total;
+}
+
+export function positionPlModel(
+  legs: Leg[],
+  S: number,
+  tau: number,
+  m: ScenarioModel,
+  r: number = RISK_FREE,
+): number {
+  return positionValueModel(legs, S, tau, m, r) - positionEntryCost(legs);
+}
+
 /** Position value with smile-aware scenario vols (falls back to frozen IV). */
 export function positionValueSmile(
   legs: Leg[],

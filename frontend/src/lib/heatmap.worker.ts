@@ -13,8 +13,9 @@
 
 import {
   TRADING_HOURS_PER_YEAR,
+  makeScenarioModel,
   positionEntryCost,
-  positionValueSmile,
+  positionValueModel,
   type Leg,
   type Smiles,
 } from "./optionsMath";
@@ -33,6 +34,10 @@ export type HeatmapRequest = {
   /** current spot (smile anchor) and live smile; null => frozen-IV BSM */
   spot0: number;
   smiles: Smiles | null;
+  /** relative IV shock (+0.2 = vols 20% richer) */
+  volShift: number;
+  /** apply skew-derived directional vol response */
+  skewBeta: boolean;
 };
 
 export type HeatmapResult = {
@@ -78,7 +83,8 @@ self.onmessage = (event: MessageEvent<HeatmapRequest>) => {
   const slLine = new Float64Array(timeSteps);
   const entry = positionEntryCost(legs);
 
-  const value = (s: number, tau: number) => positionValueSmile(legs, s, tau, spot0, smiles);
+  const model = makeScenarioModel(smiles, spot0, req.volShift, req.skewBeta);
+  const value = (s: number, tau: number) => positionValueModel(legs, s, tau, model);
 
   let minPl = Infinity;
   let maxPl = -Infinity;
