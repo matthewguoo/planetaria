@@ -55,6 +55,38 @@ def bs_delta(S: float, K: float, tau: float, sigma: float, right: str, r: float 
     return norm_cdf(d1) if right == "C" else norm_cdf(d1) - 1.0
 
 
+def bs_greeks(S: float, K: float, tau: float, sigma: float, right: str,
+              r: float = RISK_FREE) -> dict:
+    """Per-share BS greeks in display-friendly units:
+    delta (shares), gamma (per $), theta_day ($ per TRADING day),
+    vega_pt ($ per 1 vol POINT), rho_pct ($ per +1% rate)."""
+    if S <= 0 or tau <= 0 or sigma <= 0:
+        return {"delta": bs_delta(S, K, tau, sigma, right, r),
+                "gamma": 0.0, "theta_day": 0.0, "vega_pt": 0.0, "rho_pct": 0.0}
+    sq = sigma * math.sqrt(tau)
+    d1 = (math.log(S / K) + (r + 0.5 * sigma * sigma) * tau) / sq
+    d2 = d1 - sq
+    pdf = norm_pdf(d1)
+    disc = math.exp(-r * tau)
+    delta = norm_cdf(d1) if right == "C" else norm_cdf(d1) - 1.0
+    gamma = pdf / (S * sq)
+    vega = S * pdf * math.sqrt(tau)  # per 1.00 of vol
+    decay = -(S * pdf * sigma) / (2.0 * math.sqrt(tau))
+    if right == "C":
+        theta = decay - r * K * disc * norm_cdf(d2)
+        rho = K * tau * disc * norm_cdf(d2)  # per 1.00 of rate
+    else:
+        theta = decay + r * K * disc * norm_cdf(-d2)
+        rho = -K * tau * disc * norm_cdf(-d2)
+    return {
+        "delta": delta,
+        "gamma": gamma,
+        "theta_day": theta / 252.0,
+        "vega_pt": vega / 100.0,
+        "rho_pct": rho / 100.0,
+    }
+
+
 def implied_vol(price: float, S: float, K: float, tau: float, right: str, r: float = RISK_FREE) -> float | None:
     """Bisection IV solve; None when the quote is outside no-arbitrage bounds."""
     if tau <= 0 or price <= 0 or S <= 0:

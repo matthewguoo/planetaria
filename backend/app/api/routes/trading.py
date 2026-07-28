@@ -50,6 +50,17 @@ async def account(request: Request) -> dict:
     return {**acct, "risk": risk, "day_realized_pnl": realized}
 
 
+@router.get("/account/risk")
+async def account_risk(request: Request) -> dict:
+    """Portfolio risk snapshot: at-stop dollars/percent (simple and
+    correlation-adjusted), aggregate greeks incl. rate sensitivity, and
+    per-underlying beta/correlation factor rows."""
+    try:
+        return await request.app.state.portfolio_risk.snapshot()
+    except Exception as exc:
+        raise HTTPException(502, f"risk snapshot failed: {exc}")
+
+
 @router.put("/settings/risk")
 async def update_risk(request: Request, patch: dict) -> dict:
     try:

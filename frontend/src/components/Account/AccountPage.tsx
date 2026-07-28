@@ -12,8 +12,11 @@ import {
   cancelOpenOrder,
   closePosition,
   getAccountHistory,
+  getAccountRisk,
   getHistory,
   getOpenOrders,
+  planStopRisk,
+  type AccountRisk,
   type OpenOrder,
   type Plan,
   type PortfolioHistory,
@@ -37,6 +40,117 @@ function StatCard({ label, value, cls }: { label: string; value: string; cls?: s
       <span data-numeric className={"text-lg " + (cls ?? "text-white")}>
         {value}
       </span>
+    </div>
+  );
+}
+
+const fmtSigned = (v: number) =>
+  `${v >= 0 ? "+" : "-"}$${Math.abs(v).toLocaleString("en-US", { maximumFractionDigits: 0 })}`;
+
+/** Portfolio factor exposures + correlation structure of open underlyings. */
+function RiskPanel({ risk }: { risk: AccountRisk | null }) {
+  if (!risk || risk.total.open_plans === 0) return null;
+  const g = risk.greeks;
+  const metrics: [string, string, string, string][] = [
+    // [label, value, cls, tooltip]
+    ["AT RISK", `${fmtUsd(risk.total.risk_dollars)}${risk.total.risk_pct != null ? ` · ${risk.total.risk_pct.toFixed(1)}%` : ""}`,
+     "text-bb-orange", "Sum of every open position's loss at its stop"],
+    ["CORR-ADJ", `${fmtUsd(risk.total.corr_risk_dollars)}${risk.total.corr_risk_pct != null ? ` · ${risk.total.corr_risk_pct.toFixed(1)}%` : ""}`,
+     "text-bb-orange", "sqrt(r'ρr) over underlying return correlations — what the stops are worth as ONE portfolio bet. Equals the simple sum when everything is perfectly correlated."],
+    ["CONCENTRATION", `${risk.total.concentration_pct.toFixed(0)}%`, "text-bb-amber",
+     "Largest single underlying's share of total stop risk"],
+    ["NET Δ$", fmtSigned(g.delta_dollars), pnlCls(g.delta_dollars),
+     "Net delta dollars: P/L per +100% underlying move; sign = direction"],
+    ["β-WTD Δ$ (SPY)", fmtSigned(g.beta_weighted_delta_dollars), pnlCls(g.beta_weighted_delta_dollars),
+     "Delta dollars scaled by each underlying's beta to SPY — the portfolio's effective equity-market exposure"],
+    ["VEGA /pt", fmtSigned(g.vega_per_pt), pnlCls(g.vega_per_pt),
+     "P/L per +1 vol point across all legs"],
+    ["THETA /day", fmtSigned(g.theta_per_day), pnlCls(g.theta_per_day),
+     "P/L per trading day of pure time decay"],
+    ["RHO /1%", fmtSigned(g.rho_per_pct), pnlCls(g.rho_per_pct),
+     "Interest-rate sensitivity: P/L per +1% risk-free rate (options rho). See ρ(RATES) below for the empirical rate correlation of each underlying."],
+  ];
+  return (
+    <div className="panel flex shrink-0 flex-col">
+      <div className="panel-title">
+        PORTFOLIO RISK
+        {!risk.history_ok && (
+          <span className="ml-2 text-[9px] text-bb-orange" title="Daily return history unreachable — pairwise correlations default to 1 (no diversification credit)">
+            · CORRELATIONS UNAVAILABLE (ρ=1 ASSUMED)
+          </span>
+        )}
+      </div>
+      <div className="grid grid-cols-4 gap-px border-b border-bb-border/50 xl:grid-cols-8">
+        {metrics.map(([label, value, cls, tip]) => (
+          <div key={label} className="flex flex-col gap-0.5 p-2" title={tip}>
+            <span className="text-[9px] tracking-wider text-bb-muted">{label}</span>
+            <span data-numeric className={"text-[12px] " + cls}>{value}</span>
+          </div>
+        ))}
+      </div>
+      <div className="flex flex-wrap gap-x-8 gap-y-1 p-2">
+        <table className="border-collapse text-[11px]">
+          <thead className="text-[9px] text-bb-muted">
+            <tr>
+              <th className="px-2 py-0.5 text-left">UNDERLYING</th>
+              <th className="px-2 py-0.5 text-right">RISK</th>
+              <th className="px-2 py-0.5 text-right">RISK%</th>
+              <th className="px-2 py-0.5 text-right" title="Beta vs SPY (60d daily returns)">β SPY</th>
+              <th className="px-2 py-0.5 text-right" title="Correlation vs SPY daily returns">ρ SPY</th>
+              <th className="px-2 py-0.5 text-right" title="Correlation vs daily 10y-treasury-yield changes (^TNX)">ρ RATES</th>
+              <th className="px-2 py-0.5 text-right">Δ$</th>
+            </tr>
+          </thead>
+          <tbody>
+            {risk.underlyings.map((u) => (
+              <tr key={u.symbol} className="border-t border-bb-border/40">
+                <td className="px-2 py-0.5 text-white">{u.symbol}</td>
+                <td data-numeric className="px-2 py-0.5 text-right text-bb-orange">{fmtUsd(u.risk_dollars)}</td>
+                <td data-numeric className="px-2 py-0.5 text-right text-bb-orange">
+                  {u.risk_pct != null ? `${u.risk_pct.toFixed(1)}%` : "—"}
+                </td>
+                <td data-numeric className="px-2 py-0.5 text-right">{u.beta_spy?.toFixed(2) ?? "—"}</td>
+                <td data-numeric className="px-2 py-0.5 text-right">{u.corr_spy?.toFixed(2) ?? "—"}</td>
+                <td data-numeric className="px-2 py-0.5 text-right">{u.corr_rate?.toFixed(2) ?? "—"}</td>
+                <td data-numeric className={"px-2 py-0.5 text-right " + pnlCls(u.delta_dollars)}>
+                  {fmtSigned(u.delta_dollars)}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {risk.matrix.symbols.length > 1 && (
+          <table className="border-collapse text-[10px]" title="Pairwise correlation of daily returns (60d)">
+            <thead className="text-[9px] text-bb-muted">
+              <tr>
+                <th className="px-1.5 py-0.5 text-left">ρ</th>
+                {risk.matrix.symbols.map((s) => (
+                  <th key={s} className="px-1.5 py-0.5 text-right">{s}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {risk.matrix.symbols.map((row, i) => (
+                <tr key={row} className="border-t border-bb-border/40">
+                  <td className="px-1.5 py-0.5 text-bb-muted">{row}</td>
+                  {risk.matrix.rho[i].map((v, j) => (
+                    <td
+                      key={j}
+                      data-numeric
+                      className={
+                        "px-1.5 py-0.5 text-right " +
+                        (v == null ? "text-bb-muted" : Math.abs(v) > 0.7 && i !== j ? "text-bb-orange" : "text-white")
+                      }
+                    >
+                      {v == null ? "—" : v.toFixed(2)}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
     </div>
   );
 }
@@ -123,6 +237,7 @@ export function AccountPage() {
   const [period, setPeriod] = useState("1M");
   const [orders, setOrders] = useState<OpenOrder[] | null>(null);
   const [closed, setClosed] = useState<Plan[] | null>(null);
+  const [risk, setRisk] = useState<AccountRisk | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
@@ -132,12 +247,14 @@ export function AccountPage() {
       getOpenOrders(),
       getHistory(),
       refreshPositions(),
+      getAccountRisk(),
     ]);
     if (results[0].status === "fulfilled") setHistory(results[0].value);
     else setHistory({ timestamps: [], equity: [], profit_loss: [], base_value: null });
     if (results[1].status === "fulfilled") setOrders(results[1].value);
     else setOrders([]);
     if (results[2].status === "fulfilled") setClosed(results[2].value);
+    if (results[4].status === "fulfilled") setRisk(results[4].value);
     const failed = results.find((r) => r.status === "rejected");
     if (failed) setError(apiError((failed as PromiseRejectedResult).reason));
   }, [period, refreshPositions]);
@@ -156,7 +273,7 @@ export function AccountPage() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-px overflow-y-auto">
-      <div className="grid shrink-0 grid-cols-2 gap-px md:grid-cols-3 xl:grid-cols-6">
+      <div className="grid shrink-0 grid-cols-2 gap-px md:grid-cols-4 xl:grid-cols-7">
         <StatCard label="EQUITY" value={fmtUsd(account?.equity)} />
         <StatCard label="CASH" value={fmtUsd(account?.cash)} />
         <StatCard label="BUYING POWER" value={fmtUsd(account?.buying_power)} />
@@ -166,6 +283,28 @@ export function AccountPage() {
           cls={pnlCls(account?.day_realized_pnl)}
         />
         <StatCard label="OPEN UNRLZD" value={fmtUsd(unrealized, true)} cls={pnlCls(unrealized)} />
+        <div
+          className="panel flex flex-col gap-1 p-3"
+          title={
+            "Account % lost if EVERY open position exits at its stop loss.\n" +
+            "CORR = correlation-adjusted (positions in correlated underlyings " +
+            "don't diversify — three index ETF longs are ~one bet)."
+          }
+        >
+          <span className="text-[10px] tracking-widest text-bb-muted">AT RISK @ SL</span>
+          <span data-numeric className="text-lg text-bb-orange">
+            {risk?.total.risk_pct != null
+              ? `${risk.total.risk_pct.toFixed(1)}%`
+              : risk
+                ? fmtUsd(risk.total.risk_dollars)
+                : "—"}
+            {risk?.total.corr_risk_pct != null && (
+              <span className="ml-1 text-[10px] text-bb-muted">
+                CORR {risk.total.corr_risk_pct.toFixed(1)}%
+              </span>
+            )}
+          </span>
+        </div>
         <StatCard
           label="STATUS"
           value={`${account?.status ?? "—"} · DT ${account?.daytrade_count ?? "—"}`}
@@ -196,6 +335,8 @@ export function AccountPage() {
         </div>
       </div>
 
+      <RiskPanel risk={risk} />
+
       <div className="panel flex min-h-[10rem] shrink-0 flex-col">
         <div className="panel-title">
           POSITIONS ({positions.length}
@@ -211,6 +352,9 @@ export function AccountPage() {
               <th className="px-2 py-1 text-right">MARK</th>
               <th className="px-2 py-1 text-right">UNRLZD</th>
               <th className="px-2 py-1 text-right">TP / SL</th>
+              <th className="px-2 py-1 text-right" title="Account % lost if this position exits at its stop loss">
+                RISK%
+              </th>
               <th className="px-2 py-1 text-right">ACTIONS</th>
             </tr>
           </thead>
@@ -238,6 +382,13 @@ export function AccountPage() {
                 <td data-numeric className="px-2 py-1 text-right">
                   <span className="text-bb-profit">{p.tp_premium.toFixed(2)}</span> /{" "}
                   <span className="text-bb-loss">{p.sl_premium.toFixed(2)}</span>
+                </td>
+                <td
+                  data-numeric
+                  className="px-2 py-1 text-right text-bb-orange"
+                  title={`-$${planStopRisk(p).toFixed(0)} at stop`}
+                >
+                  {account?.equity ? `${((planStopRisk(p) / account.equity) * 100).toFixed(1)}%` : "—"}
                 </td>
                 <td className="px-2 py-1 text-right">
                   <button
@@ -282,6 +433,9 @@ export function AccountPage() {
                   {fmtUsd(p.unrealized_pl, true)}
                 </td>
                 <td className="px-2 py-1 text-right text-bb-muted">—</td>
+                <td className="px-2 py-1 text-right text-bb-muted" title="No stop loss — adopt to define one">
+                  —
+                </td>
                 <td className="px-2 py-1 text-right">
                   {p.occ && (
                     <button
@@ -303,7 +457,7 @@ export function AccountPage() {
             ))}
             {!positions.length && !untracked.length && (
               <tr>
-                <td colSpan={8} className="px-2 py-4 text-center text-bb-muted">
+                <td colSpan={9} className="px-2 py-4 text-center text-bb-muted">
                   no open positions
                 </td>
               </tr>

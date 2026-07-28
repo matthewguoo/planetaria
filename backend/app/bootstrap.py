@@ -47,6 +47,9 @@ async def startup(app: FastAPI, settings: Settings) -> None:
     app.state.risk = risk
     app.state.trade = trade
     app.state.enforcer = enforcer
+    from app.services.portfolio_risk import PortfolioRisk
+
+    app.state.portfolio_risk = PortfolioRisk(trade, market)
     app.state.trading_stream = None
     app.state.trading_stream_task = None
 
@@ -102,6 +105,8 @@ async def shutdown(app: FastAPI) -> None:
         except Exception:
             pass
     await state.market.stop()
+    if getattr(state, "portfolio_risk", None):
+        await state.portfolio_risk.close()
     await state.db.close()
     await state.redis.close()
     log.info("shutdown complete")

@@ -129,6 +129,61 @@ export type OpenOrder = {
   legs: { symbol: string; side: string; ratio: number }[];
 };
 
+export type AccountRisk = {
+  asof: number;
+  equity: number;
+  history_ok: boolean;
+  total: {
+    risk_dollars: number;
+    risk_pct: number | null;
+    corr_risk_dollars: number;
+    corr_risk_pct: number | null;
+    concentration_pct: number;
+    open_plans: number;
+  };
+  greeks: {
+    delta_dollars: number;
+    beta_weighted_delta_dollars: number;
+    vega_per_pt: number;
+    theta_per_day: number;
+    rho_per_pct: number;
+  };
+  per_plan: {
+    id: string;
+    underlying: string;
+    status: string;
+    risk_dollars: number;
+    risk_pct: number | null;
+  }[];
+  underlyings: {
+    symbol: string;
+    risk_dollars: number;
+    risk_pct: number | null;
+    beta_spy: number | null;
+    corr_spy: number | null;
+    corr_rate: number | null;
+    delta_dollars: number;
+  }[];
+  matrix: { symbols: string[]; rho: (number | null)[][] };
+};
+
+export const getAccountRisk = () =>
+  api.get<AccountRisk>("/api/account/risk").then((r) => r.data);
+
+/** Client-side mirror of the server's plan_stop_risk: dollars lost if this
+ * plan exits exactly at its stop. */
+export function planStopRisk(plan: {
+  fill_premium?: number | null;
+  entry_limit: number;
+  sl_premium: number;
+  filled_qty?: number | null;
+  qty: number;
+}): number {
+  const basis = plan.fill_premium ?? plan.entry_limit;
+  const qty = plan.filled_qty ?? plan.qty;
+  return Math.max(basis - plan.sl_premium, 0) * 100 * Math.max(qty, 0);
+}
+
 export const getAccountHistory = (period = "1M", timeframe = "1D") =>
   api
     .get<PortfolioHistory>("/api/account/history", { params: { period, timeframe } })

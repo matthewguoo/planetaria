@@ -5,6 +5,7 @@ import {
   closePosition,
   flattenAll,
   getHistory,
+  planStopRisk,
   putRisk,
   tightenExits,
   type Plan,
@@ -32,6 +33,21 @@ function etTime(iso: string): string {
     minute: "2-digit",
     hour12: false,
   }).format(new Date(iso));
+}
+
+/** Account % lost if this plan exits at its stop (client-side calc). */
+function RiskCell({ plan }: { plan: Plan }) {
+  const equity = useAccountStore((s) => s.account?.equity);
+  const dollars = planStopRisk(plan);
+  return (
+    <td
+      data-numeric
+      className="px-2 py-1 text-right text-bb-orange"
+      title={`-$${dollars.toFixed(0)} if stopped out`}
+    >
+      {equity ? `${((dollars / equity) * 100).toFixed(1)}%` : "—"}
+    </td>
+  );
 }
 
 function PositionRow({ plan }: { plan: Plan }) {
@@ -98,6 +114,7 @@ function PositionRow({ plan }: { plan: Plan }) {
       </td>
       <td data-numeric className="px-2 py-1 text-right text-bb-profit">{plan.tp_premium.toFixed(2)}</td>
       <td data-numeric className="px-2 py-1 text-right text-bb-loss">{plan.sl_premium.toFixed(2)}</td>
+      <RiskCell plan={plan} />
       <td data-numeric className="px-2 py-1 text-right text-bb-orange">{etTime(plan.time_stop_utc)}</td>
       <td className="px-2 py-1 text-right" onClick={(e) => e.stopPropagation()}>
         <span className="inline-flex gap-1">
@@ -158,7 +175,7 @@ function UntrackedRow({ pos }: { pos: UntrackedPosition }) {
       <td data-numeric className={"px-2 py-1 text-right " + pnlCls(pos.unrealized_pl)}>
         {fmtUsd(pos.unrealized_pl, true)}
       </td>
-      <td className="px-2 py-1 text-center text-bb-muted" colSpan={3}>
+      <td className="px-2 py-1 text-center text-bb-muted" colSpan={4}>
         no exit plan — adopt to enable TP/SL/time-stop enforcement
       </td>
       <td className="px-2 py-1 text-right">
@@ -237,6 +254,9 @@ function PositionsTab() {
                 <th className="px-2 py-1 text-right">UNRLZD</th>
                 <th className="px-2 py-1 text-right">TP</th>
                 <th className="px-2 py-1 text-right">SL</th>
+                <th className="px-2 py-1 text-right" title="Account % lost if this position exits at its stop">
+                  RISK%
+                </th>
                 <th className="px-2 py-1 text-right">T-STOP</th>
                 <th className="px-2 py-1 text-right">ACTIONS</th>
               </tr>

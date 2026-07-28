@@ -56,6 +56,15 @@ export function SizingPanel({ designer }: { designer: Designer }) {
               cls="text-bb-loss"
             />
             <Row
+              label="ACCT RISK @ SL"
+              value={
+                designer.equity > 0
+                  ? `${((sizing.perContractRisk * designer.qty) / designer.equity * 100).toFixed(2)}%`
+                  : "—"
+              }
+              cls="text-bb-orange"
+            />
+            <Row
               label="STRUCTURAL MAX"
               value={
                 sizing.contracts > 0

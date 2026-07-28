@@ -177,6 +177,25 @@ the strategy panel. All strikes everywhere are the chain API's actual
 tradeable contracts — rail drags and chain clicks snap to listed strikes
 only, never interpolated prices.
 
+### Portfolio risk (account page)
+
+`GET /api/account/risk` + a PORTFOLIO RISK panel on the account page:
+
+- **AT RISK @ SL** — account $ and % lost if every open position exits at
+  its stop, shown as a stat card, per-position (RISK% column in both
+  positions tables and the ACCT RISK row in sizing before you place), and
+  per-underlying.
+- **Correlation-adjusted risk** — `sqrt(r'ρr)` over pairwise daily-return
+  correlations of the open underlyings (60d, keyless public data): three
+  correlated index ETF positions are priced as ~one bet, not three.
+  Unknown correlations default to ρ=1 (no diversification credit), and
+  the panel says when history was unreachable. Plus a concentration
+  readout and the full correlation matrix (|ρ|>0.7 highlighted).
+- **Factor exposures** — aggregate net Δ$, SPY-beta-weighted Δ$ (each
+  underlying's empirical 60d beta), vega per vol point, theta per trading
+  day, and rho: P/L per +1% interest rates, alongside each underlying's
+  empirical correlation to daily 10y-yield changes (^TNX).
+
 ### Audio cues
 
 MetaTrader/tastytrade-style trade audio, driven by real FSM transitions
