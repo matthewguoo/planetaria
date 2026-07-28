@@ -60,18 +60,22 @@ function PositionRow({ plan }: { plan: Plan }) {
         {plan.underlying}
         <span className="ml-1 text-[10px] text-bb-muted">{legsLabel}</span>
       </td>
-      <td data-numeric className="px-2 py-1 text-right">{plan.qty}</td>
+      <td data-numeric className="px-2 py-1 text-right">
+        {plan.status === "partially_filled" && plan.filled_qty
+          ? `${plan.filled_qty}/${plan.qty}`
+          : plan.qty}
+      </td>
       <td className="px-2 py-1 text-center">
         <span
           className={
             plan.status === "filled"
               ? "text-bb-profit"
-              : plan.status === "exiting"
+              : plan.status === "exiting" || plan.status === "partially_filled"
                 ? "text-bb-orange"
                 : "text-bb-muted"
           }
         >
-          {plan.status.toUpperCase()}
+          {plan.status === "partially_filled" ? "PARTIAL" : plan.status.toUpperCase()}
         </span>
       </td>
       <td data-numeric className="px-2 py-1 text-right">{(plan.fill_premium ?? plan.entry_limit).toFixed(2)}</td>

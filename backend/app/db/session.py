@@ -13,6 +13,27 @@ log = logging.getLogger("app.db")
 
 SQLITE_FALLBACK = "sqlite+aiosqlite:///./trader.db"
 
+# Additive columns introduced after the initial schema. create_all() only
+# creates missing TABLES, so pre-existing databases need these ALTERs (a
+# lightweight stand-in for full Alembic migrations; both engines support it).
+_ADDITIVE_COLUMNS = {
+    "trade_plans": {"filled_qty": "INTEGER"},
+}
+
+
+def _ensure_columns(conn) -> None:
+    from sqlalchemy import inspect
+
+    inspector = inspect(conn)
+    for table, columns in _ADDITIVE_COLUMNS.items():
+        if table not in inspector.get_table_names():
+            continue
+        existing = {col["name"] for col in inspector.get_columns(table)}
+        for name, ddl_type in columns.items():
+            if name not in existing:
+                conn.exec_driver_sql(f"ALTER TABLE {table} ADD COLUMN {name} {ddl_type}")
+                log.info("migrated: added %s.%s", table, name)
+
 
 class Database:
     def __init__(self):
@@ -28,6 +49,7 @@ class Database:
                 engine = create_async_engine(candidate, pool_pre_ping=True)
                 async with engine.begin() as conn:
                     await conn.run_sync(Base.metadata.create_all)
+                    await conn.run_sync(_ensure_columns)
                 self.engine = engine
                 self.url = candidate
                 self.session_factory = async_sessionmaker(engine, expire_on_commit=False)

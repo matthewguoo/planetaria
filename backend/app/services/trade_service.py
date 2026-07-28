@@ -20,6 +20,12 @@ from alpaca.trading.requests import (
 
 from app.models.trade import OPEN_STATUSES, TradePlan
 from app.services.alpaca import AlpacaService
+from app.services.plan_fsm import (
+    TERMINAL_STATES,
+    PlanEvent,
+    PlanState,
+    PlanStateMachine,
+)
 
 log = logging.getLogger("app.trade")
 
@@ -71,6 +77,7 @@ class TradeService:
         self.alpaca = alpaca
         self.market = market
         self.risk = risk
+        self.fsm = PlanStateMachine(db, market.broadcast)
         self.enforcer = None  # set by ExitEnforcer at startup (circular)
         self._account_cache: tuple[float, dict] | None = None
         self._positions_cache: tuple[float, list[dict]] | None = None
@@ -205,6 +212,7 @@ class TradeService:
                     sl_premium=round(entry - abs(entry) * sl_pct, 4),
                     time_stop_utc=time_stop_utc,
                     status="filled",
+                    filled_qty=sets,
                     fill_premium=round(entry, 4),
                     notes="adopted from broker positions",
                 )
@@ -288,10 +296,12 @@ class TradeService:
         try:
             order = await self._submit_entry(plan)
         except Exception as exc:
-            await self._update_plan(plan.id, status="rejected", notes=str(exc))
+            await self.fsm.apply(plan.id, PlanEvent.ENTRY_REJECTED, notes=str(exc))
             raise ValueError(f"order rejected: {exc}")
 
-        await self._update_plan(plan.id, status="submitted", entry_order_id=str(order.id))
+        await self.fsm.apply(
+            plan.id, PlanEvent.ENTRY_SUBMITTED, entry_order_id=str(order.id)
+        )
         if self.enforcer:
             await self.enforcer.arm(plan.id)
         log.info("plan %s submitted (%s x%d, order %s)", plan.id, plan.strategy, qty, order.id)
@@ -348,14 +358,10 @@ class TradeService:
             return plan
 
     async def _update_plan(self, plan_id: str, **fields) -> TradePlan:
-        async with self.db.session() as session:
-            plan = await session.get(TradePlan, plan_id)
-            for key, value in fields.items():
-                setattr(plan, key, value)
-            await session.commit()
-            await session.refresh(plan)
-        self.market.broadcast.publish("plans", {"t": "plan", "plan": plan.to_dict()})
-        return plan
+        """Field-only update (exit tightening, notes). State changes must go
+        through self.fsm.apply — this method never touches `status`."""
+        assert "status" not in fields, "state changes go through the FSM"
+        return await self.fsm.update_fields(plan_id, **fields)
 
     def _fill_value(self, plan: TradePlan, avg: float | None, *, is_entry: bool) -> float | None:
         """Normalize a broker fill price into position-value terms (signed,
@@ -380,7 +386,12 @@ class TradeService:
         return -avg
 
     async def on_trade_update(self, update) -> None:
-        """TradingStream handler (fills for entry AND exit orders)."""
+        """TradingStream handler: maps broker order events onto FSM events.
+
+        All lifecycle legality lives in the FSM's transition table — this
+        method only translates. Duplicate or out-of-order broker events land
+        on absent (state, event) pairs and are ignored by construction.
+        """
         try:
             order = update.order
             order_id = str(order.id)
@@ -408,48 +419,50 @@ class TradeService:
                 plan.id, "entry" if is_entry else "exit", event, avg, filled_qty,
             )
 
-            if event == "fill":
-                if is_entry:
-                    await self._update_plan(plan.id, status="filled", fill_premium=avg)
-                    if self.enforcer:
-                        await self.enforcer.arm(plan.id)
-                else:
-                    realized = None
-                    if avg is not None and plan.fill_premium is not None:
-                        realized = round((avg - plan.fill_premium) * 100 * plan.qty, 2)
-                    await self._update_plan(
-                        plan.id, status="closed", exit_premium=avg, realized_pnl=realized
-                    )
-                    if self.enforcer:
-                        self.enforcer.disarm(plan.id)
-            elif event == "partial_fill":
-                # Record the running average so a later cancel still knows the
-                # real cost basis of whatever DID fill.
-                if is_entry and avg is not None:
-                    await self._update_plan(plan.id, fill_premium=avg)
+            fsm_event: PlanEvent | None = None
+            fields: dict = {}
+            if event == "fill" and is_entry:
+                fsm_event = PlanEvent.ENTRY_FILLED
+                fields = {"fill_premium": avg, "filled_qty": filled_qty or plan.qty}
+            elif event == "fill":
+                realized = None
+                if avg is not None and plan.fill_premium is not None:
+                    realized = round((avg - plan.fill_premium) * 100 * plan.effective_qty, 2)
+                fsm_event = PlanEvent.EXIT_FILLED
+                fields = {"exit_premium": avg, "realized_pnl": realized}
+            elif event == "partial_fill" and is_entry:
+                fsm_event = PlanEvent.ENTRY_PARTIAL_FILL
+                fields = {"fill_premium": avg, "filled_qty": filled_qty}
             elif event in ("canceled", "expired", "rejected"):
-                if is_entry:
-                    if filled_qty > 0:
-                        # Entry died with a partial position on the books:
-                        # shrink the plan to what filled and keep managing it.
-                        log.warning(
-                            "plan %s entry %s after partial fill (%d/%d) - managing partial",
-                            plan.id, event, filled_qty, plan.qty,
-                        )
-                        await self._update_plan(
-                            plan.id, status="filled", qty=filled_qty,
-                            fill_premium=avg if avg is not None else plan.fill_premium,
-                            notes=f"entry {event} after partial fill {filled_qty}",
-                        )
-                        if self.enforcer:
-                            await self.enforcer.arm(plan.id)
-                    else:
-                        await self._update_plan(plan.id, status="cancelled", notes=f"entry {event}")
-                        if self.enforcer:
-                            self.enforcer.disarm(plan.id)
+                if is_entry and filled_qty > 0:
+                    # Entry died with a partial position: shrink to what
+                    # filled and manage it as a filled plan.
+                    fsm_event = PlanEvent.ENTRY_CANCELLED_PARTIAL
+                    fields = {
+                        "qty": filled_qty,
+                        "filled_qty": filled_qty,
+                        "fill_premium": avg if avg is not None else plan.fill_premium,
+                        "notes": f"entry {event} after partial fill {filled_qty}",
+                    }
+                elif is_entry:
+                    fsm_event = (
+                        PlanEvent.ENTRY_REJECTED if event == "rejected" else PlanEvent.ENTRY_CANCELLED
+                    )
+                    fields = {"notes": f"entry {event}"}
                 else:
-                    # Exit order failed - monitor/escalation will resubmit.
-                    await self._update_plan(plan.id, exit_order_id=None)
+                    fsm_event = PlanEvent.EXIT_ORDER_DEAD
+                    fields = {"exit_order_id": None}
+            if fsm_event is None:
+                return  # informational event (new/accepted/replaced)
+
+            result = await self.fsm.apply(plan.id, fsm_event, **fields)
+            if not result.applied:
+                return
+            # Effects, driven by the state actually ENTERED:
+            if result.target in (PlanState.FILLED, PlanState.PARTIALLY_FILLED) and self.enforcer:
+                await self.enforcer.arm(plan.id)
+            elif result.target in TERMINAL_STATES and self.enforcer:
+                self.enforcer.disarm(plan.id)
         except Exception:
             log.exception("trade update handling failed")
 
@@ -469,7 +482,7 @@ class TradeService:
             leg = legs[0]
             common = dict(
                 symbol=leg["symbol"],
-                qty=plan.qty * leg.get("ratio", 1),
+                qty=plan.effective_qty * leg.get("ratio", 1),
                 side=OrderSide.SELL if leg["side"] > 0 else OrderSide.BUY,
                 position_intent=(
                     PositionIntent.SELL_TO_CLOSE if leg["side"] > 0 else PositionIntent.BUY_TO_CLOSE
@@ -497,7 +510,7 @@ class TradeService:
             ]
             common = dict(
                 order_class=OrderClass.MLEG,
-                qty=plan.qty,
+                qty=plan.effective_qty,
                 time_in_force=TimeInForce.DAY,
                 legs=mleg_legs,
             )
@@ -507,15 +520,18 @@ class TradeService:
                 else LimitOrderRequest(**common, limit_price=round_tick(-limit_price))
             )
         order = await self.alpaca.call(self.alpaca.trading.submit_order, request)
-        await self._update_plan(
-            plan.id, status="exiting", exit_order_id=str(order.id), exit_reason=reason
+        await self.fsm.apply(
+            plan.id,
+            PlanEvent.EXIT_SUBMITTED,
+            exit_order_id=str(order.id),
+            exit_reason=reason,
         )
 
     async def cancel_order(self, order_id: str) -> None:
         await self.alpaca.call(self.alpaca.trading.cancel_order_by_id, order_id)
 
     async def cancel_entry(self, plan: TradePlan) -> None:
-        if plan.entry_order_id and plan.status == "submitted":
+        if plan.entry_order_id and plan.status in ("submitted", "partially_filled"):
             try:
                 await self.cancel_order(plan.entry_order_id)
             except Exception as exc:

@@ -42,7 +42,9 @@ export const useAccountStore = create<AccountState>((set) => ({
 
   applyPlanUpdate: (plan) =>
     set((state) => {
-      const open = ["planned", "submitted", "filled", "exiting"].includes(plan.status);
+      const open = ["planned", "submitted", "partially_filled", "filled", "exiting"].includes(
+        plan.status,
+      );
       const rest = state.positions.filter((p) => p.id !== plan.id);
       return { positions: open ? [...rest, plan] : rest };
     }),

@@ -13,7 +13,10 @@ import logging
 from datetime import datetime, timezone
 
 from app.models.trade import OPEN_STATUSES, TradePlan, as_utc
+from app.services.plan_fsm import MONITOR_STATES, PlanEvent
 from app.services.trade_service import TradeService, position_mid_from_quotes, round_tick
+
+MONITOR_STATUSES = {s.value for s in MONITOR_STATES}
 
 log = logging.getLogger("app.enforcer")
 
@@ -39,36 +42,64 @@ class ExitEnforcer:
                 if plan.status == "planned" and not plan.entry_order_id:
                     # Crashed between plan commit and order submit: no order
                     # ever reached the broker, so nothing to manage.
-                    await self.trade._update_plan(
-                        plan.id, status="cancelled", notes="orphaned planned row (no order submitted)"
+                    await self.trade.fsm.apply(
+                        plan.id, PlanEvent.ENTRY_CANCELLED,
+                        notes="orphaned planned row (no order submitted)",
                     )
                     continue
                 # Refresh entry order status in case fills happened while down.
-                if plan.status == "submitted" and plan.entry_order_id:
+                if plan.status in ("submitted", "partially_filled") and plan.entry_order_id:
                     status = await self.trade.order_status(plan.entry_order_id)
                     if status == "filled":
                         order = await self.trade.alpaca.call(
                             self.trade.alpaca.trading.get_order_by_id, plan.entry_order_id
                         )
-                        avg = float(order.filled_avg_price or plan.entry_limit)
-                        await self.trade._update_plan(plan.id, status="filled", fill_premium=avg)
+                        raw = float(order.filled_avg_price or 0) or None
+                        avg = self.trade._fill_value(plan, raw, is_entry=True)
+                        await self.trade.fsm.apply(
+                            plan.id, PlanEvent.ENTRY_FILLED,
+                            fill_premium=avg if avg is not None else plan.entry_limit,
+                            filled_qty=int(float(order.filled_qty or plan.qty)),
+                        )
                     elif status in ("canceled", "expired", "rejected"):
-                        await self.trade._update_plan(plan.id, status="cancelled",
-                                                      notes=f"entry {status} while offline")
-                        continue
+                        order = await self.trade.alpaca.call(
+                            self.trade.alpaca.trading.get_order_by_id, plan.entry_order_id
+                        )
+                        filled_qty = int(float(order.filled_qty or 0))
+                        if filled_qty > 0:
+                            await self.trade.fsm.apply(
+                                plan.id, PlanEvent.ENTRY_CANCELLED_PARTIAL,
+                                qty=filled_qty, filled_qty=filled_qty,
+                                notes=f"entry {status} after partial fill (offline)",
+                            )
+                        else:
+                            await self.trade.fsm.apply(
+                                plan.id, PlanEvent.ENTRY_CANCELLED,
+                                notes=f"entry {status} while offline",
+                            )
+                            continue
                 if plan.status == "exiting" and plan.exit_order_id:
                     status = await self.trade.order_status(plan.exit_order_id)
                     if status == "filled":
                         order = await self.trade.alpaca.call(
                             self.trade.alpaca.trading.get_order_by_id, plan.exit_order_id
                         )
-                        avg = float(order.filled_avg_price or 0) or None
+                        raw = float(order.filled_avg_price or 0) or None
+                        avg = self.trade._fill_value(plan, raw, is_entry=False)
                         realized = None
                         if avg is not None and plan.fill_premium is not None:
-                            realized = round((avg - plan.fill_premium) * 100 * plan.qty, 2)
-                        await self.trade._update_plan(plan.id, status="closed",
-                                                      exit_premium=avg, realized_pnl=realized)
+                            realized = round(
+                                (avg - plan.fill_premium) * 100 * plan.effective_qty, 2
+                            )
+                        await self.trade.fsm.apply(
+                            plan.id, PlanEvent.EXIT_FILLED,
+                            exit_premium=avg, realized_pnl=realized,
+                        )
                         continue
+                    if status in ("canceled", "expired", "rejected"):
+                        await self.trade.fsm.apply(
+                            plan.id, PlanEvent.EXIT_ORDER_DEAD, exit_order_id=None
+                        )
                 await self.arm(plan.id)
             except Exception:
                 log.exception("reconcile failed for plan %s", plan.id)
@@ -126,8 +157,11 @@ class ExitEnforcer:
                     if plan.status not in OPEN_STATUSES:
                         return
                     timeout = (as_utc(plan.time_stop_utc) - datetime.now(timezone.utc)).total_seconds()
-                    if timeout <= 0 and plan.status == "filled":
+                    if timeout <= 0 and plan.status in MONITOR_STATUSES:
                         log.warning("TIME STOP hit for plan %s", plan.id)
+                        if plan.status == "partially_filled":
+                            # Stop the rest from filling, then close what did.
+                            await self.trade.cancel_entry(plan)
                         await self._execute_exit(plan_id, "time_stop")
                         return
                     if timeout <= 0 and plan.status == "submitted":
@@ -142,7 +176,7 @@ class ExitEnforcer:
                         msg = await asyncio.wait_for(queue.get(), timeout=min(max(timeout, 0.1), 15.0))
                     except asyncio.TimeoutError:
                         continue
-                    if msg.get("t") != "oquote" or plan.status != "filled":
+                    if msg.get("t") != "oquote" or plan.status not in MONITOR_STATUSES:
                         continue
                     quotes = {s: self.market.latest_quote(s) for s in symbols}
                     mid = position_mid_from_quotes(plan.legs, quotes)
@@ -224,7 +258,9 @@ class ExitEnforcer:
                 if status == "filled":
                     continue  # trade-update handler will close the plan
                 if status in ("canceled", "expired", "rejected"):
-                    await self.trade._update_plan(plan_id, exit_order_id=None)
+                    await self.trade.fsm.apply(
+                        plan_id, PlanEvent.EXIT_ORDER_DEAD, exit_order_id=None
+                    )
             if not (await self.trade.get_plan(plan_id)).exit_order_id:
                 log.warning("exit order dead for %s - resubmitting market close", plan_id)
                 try:
@@ -242,7 +278,9 @@ class ExitEnforcer:
         if plan.status == "submitted":
             await self.trade.cancel_entry(plan)
             return
-        if plan.status in ("filled", "exiting"):
+        if plan.status in ("partially_filled", "filled", "exiting"):
+            if plan.status == "partially_filled":
+                await self.trade.cancel_entry(plan)
             self.disarm(plan_id)
             await self._execute_exit(plan_id, "manual")
             # Re-arm a watchdog in case the exit order dies.

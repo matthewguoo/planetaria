@@ -59,6 +59,7 @@ export type Plan = {
   sl_premium: number;
   time_stop_utc: string;
   status: string;
+  filled_qty?: number | null;
   exit_reason: string | null;
   fill_premium: number | null;
   exit_premium: number | null;

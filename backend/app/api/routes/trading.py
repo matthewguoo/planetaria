@@ -81,7 +81,7 @@ async def positions(request: Request) -> dict:
         row["mark"] = round(mid, 4) if mid is not None else None
         row["quote_stale"] = mid is None
         if mid is not None and plan.fill_premium:
-            row["unrealized_pnl"] = round((mid - plan.fill_premium) * 100 * plan.qty, 2)
+            row["unrealized_pnl"] = round((mid - plan.fill_premium) * 100 * plan.effective_qty, 2)
         else:
             row["unrealized_pnl"] = None
         out.append(row)

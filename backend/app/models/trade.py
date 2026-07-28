@@ -30,12 +30,13 @@ def as_utc(dt: datetime | None) -> datetime | None:
     return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt
 
 
-# status lifecycle:
-#   planned -> submitted -> filled -> exiting -> closed
+# Status lifecycle is governed by app.services.plan_fsm (FIX-style explicit
+# transition table); these string sets mirror its state groups for queries.
+#   planned -> submitted -> [partially_filled ->] filled -> exiting -> closed
 #                      \-> cancelled (entry never filled)
 #                      \-> rejected
 TERMINAL_STATUSES = {"closed", "cancelled", "rejected"}
-OPEN_STATUSES = {"planned", "submitted", "filled", "exiting"}
+OPEN_STATUSES = {"planned", "submitted", "partially_filled", "filled", "exiting"}
 
 
 class TradePlan(Base):
@@ -58,6 +59,7 @@ class TradePlan(Base):
     time_stop_utc: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
     status: Mapped[str] = mapped_column(String(16), default="planned", index=True)
+    filled_qty: Mapped[int | None] = mapped_column(Integer, nullable=True)  # partial-fill tracking
     entry_order_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     exit_order_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     exit_reason: Mapped[str | None] = mapped_column(String(24), nullable=True)  # tp|sl|time_stop|manual|flatten
@@ -65,6 +67,11 @@ class TradePlan(Base):
     exit_premium: Mapped[float | None] = mapped_column(Float, nullable=True)
     realized_pnl: Mapped[float | None] = mapped_column(Float, nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    @property
+    def effective_qty(self) -> int:
+        """Contract sets actually held (partial fills); falls back to plan qty."""
+        return self.filled_qty if self.filled_qty else self.qty
 
     def to_dict(self) -> dict:
         return {
@@ -79,6 +86,7 @@ class TradePlan(Base):
             "sl_premium": self.sl_premium,
             "time_stop_utc": as_utc(self.time_stop_utc).isoformat() if self.time_stop_utc else None,
             "status": self.status,
+            "filled_qty": self.filled_qty,
             "entry_order_id": self.entry_order_id,
             "exit_order_id": self.exit_order_id,
             "exit_reason": self.exit_reason,
