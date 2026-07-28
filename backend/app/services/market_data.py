@@ -67,6 +67,11 @@ class MarketDataService:
         self._backfilled: set[str] = set()
         self._lock = asyncio.Lock()
 
+        # Synthetic feed when no keys (dev/UI QA); import here to avoid cycle.
+        from app.services.demo_feed import DemoFeed
+
+        self.demo = DemoFeed(self) if not alpaca.configured else None
+
     # ---------------------------------------------------------------- status
 
     @property
@@ -79,6 +84,7 @@ class MarketDataService:
         return {
             "t": "status",
             "configured": self.alpaca.configured,
+            "demo": self.demo is not None,
             "redis": self.redis.healthy,
             "stream_age_s": self.stream_age_s,
             "stock_symbols": sorted(self._stock_refs.keys()),
@@ -101,6 +107,8 @@ class MarketDataService:
         ]
 
     async def stop(self) -> None:
+        if self.demo:
+            await self.demo.stop()
         for task in self._tasks:
             task.cancel()
         for stream in (self._stock_stream, self._option_stream):
@@ -142,10 +150,20 @@ class MarketDataService:
             self._stock_refs[symbol] = self._stock_refs.get(symbol, 0) + 1
             first = self._stock_refs[symbol] == 1
         if not self.alpaca.configured:
+            if self.demo:
+                await self.demo.ensure(symbol)
             return
         if first:
-            self._stock_stream.subscribe_bars(self._on_stock_bar, symbol)
-            self._stock_stream.subscribe_quotes(self._on_stock_quote, symbol)
+            # alpaca-py's sync subscribe_* blocks on run_coroutine_threadsafe(
+            # ...).result() against THIS loop when the stream is live — calling
+            # it from the loop thread deadlocks the whole process. Always hop
+            # to a worker thread so .result() waits off-loop.
+            await self.alpaca.call(
+                self._stock_stream.subscribe_bars, self._on_stock_bar, symbol
+            )
+            await self.alpaca.call(
+                self._stock_stream.subscribe_quotes, self._on_stock_quote, symbol
+            )
         if symbol not in self._backfilled:
             self._backfilled.add(symbol)
             try:
@@ -174,7 +192,9 @@ class MarketDataService:
                 if self._option_refs[sym] == 1:
                     fresh.append(sym)
         if fresh and self.alpaca.configured:
-            self._option_stream.subscribe_quotes(self._on_option_quote, *fresh)
+            await self.alpaca.call(
+                self._option_stream.subscribe_quotes, self._on_option_quote, *fresh
+            )
 
     async def unsubscribe_options(self, symbols: list[str]) -> None:
         gone = []
@@ -187,7 +207,7 @@ class MarketDataService:
                 else:
                     self._option_refs[sym] = count
         if gone and self.alpaca.configured:
-            self._option_stream.unsubscribe_quotes(*gone)
+            await self.alpaca.call(self._option_stream.unsubscribe_quotes, *gone)
             for sym in gone:
                 self._latest_quotes.pop(sym, None)
 

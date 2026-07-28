@@ -40,11 +40,14 @@ class RedisFacade:
         if self._client:
             await self._client.aclose()
 
-    async def _guard(self, coro, default=None):
+    async def _guard(self, make_coro, default=None):
+        """make_coro is a zero-arg callable so nothing touches self._client
+        when it is None (a bare coroutine argument would be constructed —
+        and explode — before this check could run)."""
         if not self._client:
             return default
         try:
-            result = await coro
+            result = await make_coro()
             self._healthy = True
             return result
         except Exception as exc:
@@ -61,22 +64,25 @@ class RedisFacade:
     async def save_bars(self, symbol: str, tf: str, bars: dict[str, str]) -> None:
         if not bars:
             return
-        await self._guard(self._client.hset(self._bars_key(symbol, tf), mapping=bars))
+        key = self._bars_key(symbol, tf)
+        await self._guard(lambda: self._client.hset(key, mapping=bars))
 
     async def load_bars(self, symbol: str, tf: str) -> dict[str, str]:
-        return await self._guard(self._client.hgetall(self._bars_key(symbol, tf)), {})
+        key = self._bars_key(symbol, tf)
+        return await self._guard(lambda: self._client.hgetall(key), {})
 
     async def trim_bars(self, symbol: str, tf: str, keep_ts: list[str]) -> None:
         """Delete fields not in keep_ts (bounded retention)."""
-        existing = await self._guard(self._client.hkeys(self._bars_key(symbol, tf)), [])
+        key = self._bars_key(symbol, tf)
+        existing = await self._guard(lambda: self._client.hkeys(key), [])
         stale = [ts for ts in existing if ts not in set(keep_ts)]
         if stale:
-            await self._guard(self._client.hdel(self._bars_key(symbol, tf), *stale))
+            await self._guard(lambda: self._client.hdel(key, *stale))
 
     # --- generic short-TTL JSON cache (quotes, chains) ----------------------
 
     async def set_json(self, key: str, value: str, ttl_seconds: int) -> None:
-        await self._guard(self._client.set(key, value, ex=ttl_seconds))
+        await self._guard(lambda: self._client.set(key, value, ex=ttl_seconds))
 
     async def get_json(self, key: str) -> str | None:
-        return await self._guard(self._client.get(key))
+        return await self._guard(lambda: self._client.get(key))

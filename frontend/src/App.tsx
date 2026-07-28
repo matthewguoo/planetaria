@@ -1,4 +1,7 @@
 import { useEffect, useState } from "react";
+import { Header } from "./components/Header";
+import { CandlePane } from "./components/Chart/CandlePane";
+import { ChartControls } from "./components/Chart/ChartControls";
 
 const MIN_WIDTH = 1280;
 
@@ -16,7 +19,7 @@ function ViewportLockout() {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black">
       <div className="panel max-w-md p-8 text-center">
-        <div className="text-bb-amber text-lg tracking-widest">PLANETARIA</div>
+        <div className="text-lg tracking-widest text-bb-amber">PLANETARIA</div>
         <div className="mt-4 text-bb-muted">
           This terminal requires a desktop viewport of at least {MIN_WIDTH}px.
         </div>
@@ -28,27 +31,24 @@ function ViewportLockout() {
   );
 }
 
+// ?unlock bypasses the viewport lock (QA/testing in small panes).
+const UNLOCKED = new URLSearchParams(window.location.search).has("unlock");
+
 export default function App() {
   const locked = useViewportLock();
-  if (locked) return <ViewportLockout />;
+  if (locked && !UNLOCKED) return <ViewportLockout />;
 
   return (
     <div className="flex h-full flex-col gap-px bg-bb-black p-px">
-      {/* Top bar — ticker / account summary (placeholder until data layer lands) */}
-      <header className="panel flex h-9 shrink-0 items-center gap-6 px-3">
-        <span className="tracking-widest text-bb-amber">PLANETARIA</span>
-        <span className="text-bb-muted">SPY</span>
-        <span className="ml-auto text-bb-muted">PAPER</span>
-      </header>
+      <Header />
 
-      {/* Chart area */}
-      <main className="panel min-h-0 flex-1">
-        <div className="flex h-full items-center justify-center text-bb-muted">
-          CHART — awaiting data layer
+      <main className="panel flex min-h-0 flex-1 flex-col">
+        <ChartControls />
+        <div className="min-h-0 flex-1">
+          <CandlePane />
         </div>
       </main>
 
-      {/* Bottom panel row */}
       <section className="grid h-56 shrink-0 grid-cols-4 gap-px">
         {["STRATEGY", "SIZING", "PROBABILITY", "ORDER"].map((title) => (
           <div key={title} className="panel flex flex-col">
