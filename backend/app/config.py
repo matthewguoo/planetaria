@@ -1,12 +1,19 @@
 from functools import lru_cache
+from pathlib import Path
 from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# Anchor .env discovery to the source tree, not the process cwd. Launching
+# uvicorn from the repo root vs backend/ must not silently drop the Alpaca
+# keys (which would flip the whole app into the keyless fallback feed).
+_BACKEND_DIR = Path(__file__).resolve().parent.parent  # .../backend
+_ENV_FILES = (str(_BACKEND_DIR.parent / ".env"), str(_BACKEND_DIR / ".env"))
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=("../.env", ".env"), env_file_encoding="utf-8", extra="ignore"
+        env_file=_ENV_FILES, env_file_encoding="utf-8", extra="ignore"
     )
 
     alpaca_api_key: str = ""

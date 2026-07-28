@@ -137,8 +137,16 @@ cd backend  && uvicorn app.main:app --reload --port 8000
 cd frontend && npm run dev
 ```
 
-Copy `.env.example` to `.env` and add Alpaca **paper** keys. Without keys the
-app runs on a clearly-badged synthetic demo feed so the whole UI is testable.
+Copy `.env.example` to `.env` (repo root or `backend/` — discovery is
+anchored to the source tree, so the launch directory doesn't matter) and add
+Alpaca **paper** keys. With keys, prices are Alpaca's live feed (IEX
+real-time on the free tier; history blends SIP for anything older than
+16 minutes). Without keys the app still shows **real prices**: a keyless
+public feed (Yahoo chart API) supplies 1m history and a ~5s-polled live
+quote, badged `PUBLIC DATA` in the header — the options chain is then
+modeled from that real spot and trading stays disabled. Only if that
+endpoint is unreachable does it drop to the synthetic random walk, badged
+`DEMO DATA`.
 
 ## Tests
 

@@ -3,22 +3,44 @@ import { useUiStore } from "../store/uiStore";
 
 function StatusPill() {
   const status = useTradingStore((s) => s.status);
+  const symbol = useTradingStore((s) => s.symbol);
   let label = "LIVE";
   let cls = "text-bb-profit";
+  let title = "Real-time Alpaca market data";
   if (status.connection !== "open") {
     label = status.connection === "connecting" ? "CONNECTING" : "DISCONNECTED";
     cls = "text-bb-loss";
+    title = "Feed socket is not connected";
   } else if (status.demo) {
-    label = "DEMO DATA";
-    cls = "text-bb-neutral";
+    // Keyless mode: real public prices when the public feed is reachable,
+    // synthetic random walk only as a last resort. Never tradeable.
+    if (status.sources[symbol] === "public") {
+      label = "PUBLIC DATA";
+      cls = "text-bb-amber";
+      title =
+        "Real prices from a keyless public feed (Yahoo, ~5s poll). " +
+        "Options chain is modeled from this spot. Set Alpaca keys in .env for tradeable data.";
+    } else {
+      label = "DEMO DATA";
+      cls = "text-bb-neutral";
+      title =
+        "Synthetic random-walk prices — public feed unreachable and no Alpaca keys. " +
+        "NOT real market data.";
+    }
   } else if (!status.configured) {
     label = "NO KEYS";
     cls = "text-bb-loss";
+    title = "Alpaca keys missing";
   } else if (status.stream_age_s !== null && status.stream_age_s > 30) {
     label = `STALE ${Math.floor(status.stream_age_s)}s`;
     cls = "text-bb-orange";
+    title = "No stream message for a while — quotes may be stale";
   }
-  return <span className={`${cls} font-semibold`}>{label}</span>;
+  return (
+    <span className={`${cls} font-semibold`} title={title}>
+      {label}
+    </span>
+  );
 }
 
 export function Header() {

@@ -59,6 +59,7 @@ socket.onMessage((msg: WsMessage) => {
       store.patchStatus({
         configured: msg.configured as boolean,
         demo: (msg.demo as boolean) ?? false,
+        sources: (msg.sources as Record<string, "public" | "synthetic">) ?? {},
         redis: msg.redis as boolean,
         stream_age_s: msg.stream_age_s as number | null,
       });

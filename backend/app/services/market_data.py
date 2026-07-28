@@ -86,6 +86,9 @@ class MarketDataService:
             "t": "status",
             "configured": self.alpaca.configured,
             "demo": self.demo is not None,
+            # Per-symbol price source when keyless: "public" = real prices
+            # from the keyless public feed, "synthetic" = random walk.
+            "sources": self.demo.sources if self.demo else {},
             "redis": self.redis.healthy,
             "stream_age_s": self.stream_age_s,
             "stock_symbols": sorted(self._stock_refs.keys()),

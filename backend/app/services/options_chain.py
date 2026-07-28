@@ -86,6 +86,12 @@ class ChainService:
 
     async def _fetch(self, underlying: str, dte_max: int) -> dict:
         if not self.alpaca.configured:
+            # Activate the keyless feed FIRST so the modeled chain anchors to
+            # the real spot. Answering from an empty bar store would fabricate
+            # a default spot and hand the designer strikes that vanish once
+            # real data lands seconds later.
+            if self.market.demo:
+                await self.market.demo.ensure(underlying)
             return self._demo_chain(underlying, dte_max)
 
         today = datetime.now(timezone.utc).date()

@@ -4,6 +4,8 @@ export type Quote = { symbol: string; bid: number; ask: number; mid: number; ts:
 export type FeedStatus = {
   configured: boolean;
   demo: boolean;
+  /** Keyless-mode price source per symbol: real public data vs random walk. */
+  sources: Record<string, "public" | "synthetic">;
   redis: boolean;
   stream_age_s: number | null;
   connection: "connecting" | "open" | "down";
@@ -43,7 +45,7 @@ export const useTradingStore = create<TradingState>((set) => ({
   symbol: "SPY",
   tf: "1m",
   quote: null,
-  status: { configured: false, demo: false, redis: false, stream_age_s: null, connection: "connecting" },
+  status: { configured: false, demo: false, sources: {}, redis: false, stream_age_s: null, connection: "connecting" },
   indicators: { heat: true, sim: true, vwap: true, ema: false, bb: false },
   setSymbol: (symbol) => set({ symbol: symbol.toUpperCase(), quote: null }),
   setTf: (tf) => set({ tf }),
