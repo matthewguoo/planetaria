@@ -107,6 +107,7 @@ class ChainService:
             if row:
                 contracts.append(row)
         contracts.sort(key=lambda c: (c["expiry"], c["strike"]))
+        self._enrich_iv(contracts, spot)
         expirations = sorted({c["expiry"] for c in contracts})
         return {
             "underlying": underlying,
@@ -116,6 +117,59 @@ class ChainService:
             "contracts": contracts,
             "demo": False,
         }
+
+    def _enrich_iv(self, contracts: list[dict], spot: float) -> None:
+        """IV fallback chain (mirrors the analytics assumptions):
+        feed IV -> bisection-solve from quote mid -> strike interpolation.
+        Off-hours the indicative feed often omits IV/greeks entirely."""
+        from app.services.options_math import (
+            TRADING_HOURS_PER_YEAR,
+            implied_vol,
+            trading_hours_to_expiry,
+        )
+
+        now_ms = time.time() * 1000
+        taus: dict[str, float] = {}
+        for contract in contracts:
+            if contract["iv"] > 0:
+                contract["iv_source"] = "feed"
+                continue
+            expiry = contract["expiry"]
+            if expiry not in taus:
+                taus[expiry] = trading_hours_to_expiry(expiry, now_ms) / TRADING_HOURS_PER_YEAR
+            tau = taus[expiry]
+            if contract["mid"] > 0 and spot > 0 and tau > 0:
+                solved = implied_vol(contract["mid"], spot, contract["strike"], tau, contract["right"])
+                if solved is not None and 0.01 < solved < 5.0:
+                    contract["iv"] = round(solved, 4)
+                    contract["iv_source"] = "solved"
+
+        # Interpolation pass for anything still missing (illiquid wings).
+        from collections import defaultdict
+
+        groups: dict[tuple, list[dict]] = defaultdict(list)
+        for contract in contracts:
+            groups[(contract["expiry"], contract["right"])].append(contract)
+        for group in groups.values():
+            group.sort(key=lambda c: c["strike"])
+            known = [(i, c["iv"]) for i, c in enumerate(group) if c["iv"] > 0]
+            if not known:
+                continue
+            for i, contract in enumerate(group):
+                if contract["iv"] > 0:
+                    continue
+                lower = max((k for k in known if k[0] < i), default=None, key=lambda k: k[0])
+                upper = min((k for k in known if k[0] > i), default=None, key=lambda k: k[0])
+                if lower and upper:
+                    li, liv = lower
+                    ui, uiv = upper
+                    frac = (group[i]["strike"] - group[li]["strike"]) / (
+                        group[ui]["strike"] - group[li]["strike"] or 1
+                    )
+                    contract["iv"] = round(liv + frac * (uiv - liv), 4)
+                else:
+                    contract["iv"] = round((lower or upper)[1], 4)
+                contract["iv_source"] = "interpolated"
 
     async def _spot(self, underlying: str) -> float:
         quote = self.market.latest_quote(underlying) or await self.market.fetch_latest_stock_quote(underlying)

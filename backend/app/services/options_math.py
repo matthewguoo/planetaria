@@ -74,6 +74,29 @@ def implied_vol(price: float, S: float, K: float, tau: float, right: str, r: flo
     return 0.5 * (lo + hi)
 
 
+def trading_hours_to_expiry(expiry_iso: str, now_utc_ms: float) -> float:
+    """Trading hours from now to expiry-day 16:00 ET. Approximation shared
+    verbatim with the TS mirror: full 6.5h per intervening weekday + the
+    remaining fraction of today's session (clamped to [0, 6.5])."""
+    import datetime as _dt
+    from zoneinfo import ZoneInfo
+
+    et = ZoneInfo("America/New_York")
+    now = _dt.datetime.fromtimestamp(now_utc_ms / 1000, tz=_dt.timezone.utc).astimezone(et)
+    expiry = _dt.date.fromisoformat(expiry_iso)
+    close_today = now.replace(hour=16, minute=0, second=0, microsecond=0)
+    hours_today = max(0.0, min((close_today - now).total_seconds() / 3600.0, 6.5))
+    days = 0
+    d = now.date()
+    while d < expiry:
+        d += _dt.timedelta(days=1)
+        if d.weekday() < 5:
+            days += 1
+    if expiry == now.date():
+        return hours_today
+    return hours_today + days * 6.5
+
+
 @dataclass
 class Leg:
     right: str  # 'C' | 'P'

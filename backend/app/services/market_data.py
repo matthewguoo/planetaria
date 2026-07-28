@@ -99,11 +99,20 @@ class MarketDataService:
     async def start(self) -> None:
         if not self.alpaca.configured:
             return
+        from app.services.supervision import supervise
+
         self._stock_stream = self.alpaca.make_stock_stream()
         self._option_stream = self.alpaca.make_option_stream()
         self._tasks = [
-            asyncio.create_task(self._run_stream(self._stock_stream, "stock"), name="stock-stream"),
-            asyncio.create_task(self._run_stream(self._option_stream, "option"), name="option-stream"),
+            asyncio.create_task(
+                supervise("stock-stream", self._stock_stream._run_forever,
+                          on_reconnect=self._gap_fill_all),
+                name="stock-stream",
+            ),
+            asyncio.create_task(
+                supervise("option-stream", self._option_stream._run_forever),
+                name="option-stream",
+            ),
         ]
 
     async def stop(self) -> None:
@@ -118,29 +127,13 @@ class MarketDataService:
                 except Exception:
                     pass
 
-    async def _run_stream(self, stream, kind: str) -> None:
-        """Supervise a stream: run forever, reconnect with backoff + gap-fill."""
-        attempt = 0
-        while True:
+    async def _gap_fill_all(self) -> None:
+        """Post-reconnect hook: repair any bar gaps the disconnect caused."""
+        for symbol in list(self._stock_refs.keys()):
             try:
-                log.info("%s stream connecting", kind)
-                await stream._run_forever()  # accepted pattern; .run() would asyncio.run()
-                log.warning("%s stream exited cleanly", kind)
-            except asyncio.CancelledError:
-                raise
+                await self._backfill(symbol, gap_fill=True)
             except Exception as exc:
-                log.error("%s stream error: %s", kind, exc)
-            attempt += 1
-            delay = min(60.0, (2**attempt) + random.uniform(0, 1))
-            log.info("%s stream reconnecting in %.1fs", kind, delay)
-            await asyncio.sleep(delay)
-            if kind == "stock":
-                # Fill any bar gap the disconnect caused before resuming.
-                for symbol in list(self._stock_refs.keys()):
-                    try:
-                        await self._backfill(symbol, gap_fill=True)
-                    except Exception as exc:
-                        log.error("gap-fill %s failed: %s", symbol, exc)
+                log.error("gap-fill %s failed: %s", symbol, exc)
 
     # ---------------------------------------------------------- subscriptions
 
