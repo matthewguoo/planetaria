@@ -11,6 +11,7 @@ Escalation ladder for exits (illiquid-friendly):
 import asyncio
 import logging
 from datetime import datetime, timezone
+from uuid import uuid4
 
 from app.models.trade import OPEN_STATUSES, TradePlan, as_utc
 from app.services.plan_fsm import MONITOR_STATES, PlanEvent
@@ -30,94 +31,144 @@ class ExitEnforcer:
         self.trade = trade
         trade.enforcer = self
         self._monitors: dict[str, asyncio.Task] = {}
+        self._reconcile_lock = asyncio.Lock()
+        # Idempotency keys of exit submits that ERRORED (per plan): any of
+        # them may have landed at the broker anyway ("ghost" order — never
+        # recorded on the plan). Tracked until resolved or the plan closes.
+        self._ghost_keys: dict[str, list[str]] = {}
+        # Timing knobs (instance-level so pressure tests can compress them).
+        self.escalation = list(ESCALATION)
+        self.verify_poll_s = 5.0
+        self.verify_attempts = 120  # ~10 min of polls before loud rearm
+        self.rearm_delay_s = 5.0
+        self.reconcile_interval_s = 45.0
 
     # ----------------------------------------------------------- lifecycle
 
     async def startup_reconcile(self) -> None:
         """Rebuild monitors from DB; reconcile vs Alpaca; flag orphans."""
-        plans = await self.trade.risk.open_plans()
-        log.info("reconciling %d open plans", len(plans))
-        for plan in plans:
+        await self.reconcile_once(orphan_scan=True)
+
+    async def reconcile_loop(self) -> None:
+        """Periodic REST truth-sync. The TradingStream is the fast path for
+        fills, but streams drop; without this loop a fill that lands during a
+        stream gap would leave a live position unmanaged forever. Also
+        self-heals: any open plan without a monitor gets re-armed."""
+        while True:
+            await asyncio.sleep(self.reconcile_interval_s)
             try:
-                if plan.status == "planned" and not plan.entry_order_id:
-                    # Crashed between plan commit and order submit: no order
-                    # ever reached the broker, so nothing to manage.
+                await self.reconcile_once()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception("periodic reconcile failed")
+
+    async def reconcile_once(self, orphan_scan: bool = False) -> None:
+        async with self._reconcile_lock:
+            plans = await self.trade.risk.open_plans()
+            if orphan_scan:
+                log.info("reconciling %d open plans", len(plans))
+            for plan in plans:
+                try:
+                    await self._reconcile_plan(plan)
+                except Exception:
+                    log.exception("reconcile failed for plan %s", plan.id)
+
+            # Orphan check: Alpaca option positions with no open plan.
+            if orphan_scan and self.trade.alpaca.configured:
+                try:
+                    positions = await self.trade.alpaca.call(
+                        self.trade.alpaca.trading.get_all_positions, retries=1
+                    )
+                    plan_symbols = {
+                        leg["symbol"]
+                        for p in await self.trade.risk.open_plans()
+                        for leg in p.legs
+                    }
+                    for pos in positions:
+                        if str(getattr(pos, "asset_class", "")).endswith("option") or len(pos.symbol) > 12:
+                            if pos.symbol not in plan_symbols:
+                                log.error(
+                                    "ORPHAN POSITION (no exit plan!): %s qty=%s - close it manually "
+                                    "or via flatten-all", pos.symbol, pos.qty,
+                                )
+                except Exception as exc:
+                    log.warning("orphan scan failed: %s", exc)
+
+    async def _reconcile_plan(self, plan: TradePlan) -> None:
+        """Sync one plan's order state from broker REST, then (re-)arm."""
+        if plan.status == "planned" and not plan.entry_order_id:
+            # Crashed between plan commit and order submit: no order
+            # ever reached the broker, so nothing to manage.
+            await self.trade.fsm.apply(
+                plan.id, PlanEvent.ENTRY_CANCELLED,
+                notes="orphaned planned row (no order submitted)",
+            )
+            return
+        if not self.trade.alpaca.configured:
+            await self.arm(plan.id)
+            return
+        # Refresh entry order status in case fills happened while down.
+        if plan.status in ("submitted", "partially_filled") and plan.entry_order_id:
+            status = await self.trade.order_status(plan.entry_order_id)
+            if status == "filled":
+                order = await self.trade.alpaca.call(
+                    self.trade.alpaca.trading.get_order_by_id, plan.entry_order_id, retries=1
+                )
+                raw = float(order.filled_avg_price or 0) or None
+                avg = self.trade._fill_value(plan, raw, is_entry=True)
+                await self.trade.fsm.apply(
+                    plan.id, PlanEvent.ENTRY_FILLED,
+                    fill_premium=avg if avg is not None else plan.entry_limit,
+                    filled_qty=int(float(order.filled_qty or plan.qty)),
+                )
+            elif status in ("canceled", "expired", "rejected"):
+                order = await self.trade.alpaca.call(
+                    self.trade.alpaca.trading.get_order_by_id, plan.entry_order_id, retries=1
+                )
+                filled_qty = int(float(order.filled_qty or 0))
+                if filled_qty > 0:
+                    await self.trade.fsm.apply(
+                        plan.id, PlanEvent.ENTRY_CANCELLED_PARTIAL,
+                        qty=filled_qty, filled_qty=filled_qty,
+                        notes=f"entry {status} after partial fill (offline)",
+                    )
+                else:
                     await self.trade.fsm.apply(
                         plan.id, PlanEvent.ENTRY_CANCELLED,
-                        notes="orphaned planned row (no order submitted)",
+                        notes=f"entry {status} while offline",
                     )
-                    continue
-                # Refresh entry order status in case fills happened while down.
-                if plan.status in ("submitted", "partially_filled") and plan.entry_order_id:
-                    status = await self.trade.order_status(plan.entry_order_id)
-                    if status == "filled":
-                        order = await self.trade.alpaca.call(
-                            self.trade.alpaca.trading.get_order_by_id, plan.entry_order_id
-                        )
-                        raw = float(order.filled_avg_price or 0) or None
-                        avg = self.trade._fill_value(plan, raw, is_entry=True)
-                        await self.trade.fsm.apply(
-                            plan.id, PlanEvent.ENTRY_FILLED,
-                            fill_premium=avg if avg is not None else plan.entry_limit,
-                            filled_qty=int(float(order.filled_qty or plan.qty)),
-                        )
-                    elif status in ("canceled", "expired", "rejected"):
-                        order = await self.trade.alpaca.call(
-                            self.trade.alpaca.trading.get_order_by_id, plan.entry_order_id
-                        )
-                        filled_qty = int(float(order.filled_qty or 0))
-                        if filled_qty > 0:
-                            await self.trade.fsm.apply(
-                                plan.id, PlanEvent.ENTRY_CANCELLED_PARTIAL,
-                                qty=filled_qty, filled_qty=filled_qty,
-                                notes=f"entry {status} after partial fill (offline)",
-                            )
-                        else:
-                            await self.trade.fsm.apply(
-                                plan.id, PlanEvent.ENTRY_CANCELLED,
-                                notes=f"entry {status} while offline",
-                            )
-                            continue
-                if plan.status == "exiting" and plan.exit_order_id:
-                    status = await self.trade.order_status(plan.exit_order_id)
-                    if status == "filled":
-                        order = await self.trade.alpaca.call(
-                            self.trade.alpaca.trading.get_order_by_id, plan.exit_order_id
-                        )
-                        raw = float(order.filled_avg_price or 0) or None
-                        avg = self.trade._fill_value(plan, raw, is_entry=False)
-                        realized = None
-                        if avg is not None and plan.fill_premium is not None:
-                            realized = round(
-                                (avg - plan.fill_premium) * 100 * plan.effective_qty, 2
-                            )
-                        await self.trade.fsm.apply(
-                            plan.id, PlanEvent.EXIT_FILLED,
-                            exit_premium=avg, realized_pnl=realized,
-                        )
-                        continue
-                    if status in ("canceled", "expired", "rejected"):
-                        await self.trade.fsm.apply(
-                            plan.id, PlanEvent.EXIT_ORDER_DEAD, exit_order_id=None
-                        )
-                await self.arm(plan.id)
-            except Exception:
-                log.exception("reconcile failed for plan %s", plan.id)
-
-        # Orphan check: Alpaca option positions with no open plan.
-        if self.trade.alpaca.configured:
-            try:
-                positions = await self.trade.alpaca.call(self.trade.alpaca.trading.get_all_positions)
-                plan_symbols = {leg["symbol"] for p in await self.trade.risk.open_plans() for leg in p.legs}
-                for pos in positions:
-                    if str(getattr(pos, "asset_class", "")) .endswith("option") or len(pos.symbol) > 12:
-                        if pos.symbol not in plan_symbols:
-                            log.error(
-                                "ORPHAN POSITION (no exit plan!): %s qty=%s - close it manually "
-                                "or via flatten-all", pos.symbol, pos.qty,
-                            )
-            except Exception as exc:
-                log.warning("orphan scan failed: %s", exc)
+                    return
+        if plan.status == "exiting" and plan.exit_order_id:
+            observed_order = plan.exit_order_id
+            status = await self.trade.order_status(observed_order)
+            if status == "filled":
+                order = await self.trade.alpaca.call(
+                    self.trade.alpaca.trading.get_order_by_id, plan.exit_order_id, retries=1
+                )
+                raw = float(order.filled_avg_price or 0) or None
+                avg = self.trade._fill_value(plan, raw, is_entry=False)
+                realized = None
+                if avg is not None and plan.fill_premium is not None:
+                    realized = round(
+                        (avg - plan.fill_premium) * 100 * plan.effective_qty, 2
+                    )
+                await self.trade.fsm.apply(
+                    plan.id, PlanEvent.EXIT_FILLED,
+                    guard={"exit_order_id": observed_order},
+                    exit_premium=avg, realized_pnl=realized,
+                )
+                return
+            if status in ("canceled", "expired", "rejected"):
+                # Guard on the order this verdict is ABOUT: the escalation
+                # ladder may have replaced it since we read the plan, and a
+                # stale "dead" must not wipe the live order's id.
+                await self.trade.fsm.apply(
+                    plan.id, PlanEvent.EXIT_ORDER_DEAD,
+                    guard={"exit_order_id": observed_order},
+                    exit_order_id=None,
+                )
+        await self.arm(plan.id)
 
     async def shutdown(self) -> None:
         for task in self._monitors.values():
@@ -138,7 +189,83 @@ class ExitEnforcer:
         if task:
             task.cancel()
 
+    # ------------------------------------------------------- ghost orders
+
+    async def _handle_ghost(self, plan: TradePlan) -> bool:
+        """Prior exit submits that errored ambiguously may still have landed
+        at the broker ("ghost" orders: never recorded on the plan). Check each
+        unresolved key: cancel a live ghost, adopt-and-close a filled one.
+        Returns True when a ghost FILLED — the position is already closed, so
+        the caller must NOT submit another close on top of it."""
+        for key in list(self._ghost_keys.get(plan.id, ())):
+            ghost = await self.trade._order_by_client_id(f"{plan.id}-x{key}")
+            if ghost is None:
+                continue  # never landed (so far) — keep watching this key
+            if str(getattr(ghost, "id", "")) == (plan.exit_order_id or ""):
+                self._resolve_ghost_key(plan.id, key)
+                continue
+            status = str(getattr(ghost, "status", "")).lower().split(".")[-1]
+            if "fill" in status and "partial" not in status:
+                log.warning("ghost exit order %s for plan %s FILLED - adopting it", ghost.id, plan.id)
+                await self.trade.fsm.apply(
+                    plan.id, PlanEvent.EXIT_SUBMITTED,
+                    exit_order_id=str(ghost.id),
+                    exit_reason=plan.exit_reason or "manual",
+                )
+                self._ghost_keys.pop(plan.id, None)
+                try:
+                    await self._reconcile_plan(await self.trade.get_plan(plan.id))
+                except Exception:
+                    log.exception("ghost adoption reconcile failed for %s", plan.id)
+                return True
+            if any(s in status for s in ("cancel", "expired", "rejected")):
+                self._resolve_ghost_key(plan.id, key)
+                continue
+            log.warning("cancelling ghost exit order %s for plan %s", ghost.id, plan.id)
+            try:
+                await self.trade.cancel_order(str(ghost.id))
+                self._resolve_ghost_key(plan.id, key)
+            except Exception:
+                pass
+        return False
+
+    async def _position_gone(self, plan: TradePlan) -> bool:
+        """True when the broker reports NO remaining position in any of the
+        plan's legs. Conservative: any error keeps the plan alive."""
+        try:
+            positions = {p["symbol"] for p in await self.trade.broker_positions(max_age_s=0.5)}
+        except Exception as exc:
+            log.warning("position check failed for %s: %s", plan.id, exc)
+            return False
+        return not ({leg["symbol"] for leg in plan.legs} & positions)
+
+    def _resolve_ghost_key(self, plan_id: str, key: str) -> None:
+        keys = self._ghost_keys.get(plan_id)
+        if keys and key in keys:
+            keys.remove(key)
+        if not keys:
+            self._ghost_keys.pop(plan_id, None)
+
+    async def _sweep_ghosts_on_close(self, plan_id: str) -> None:
+        """The plan is closed; cancel any unresolved ghost that is live so no
+        stray closing order can fill into a fresh (reversed) position."""
+        keys = self._ghost_keys.pop(plan_id, None)
+        if not keys:
+            return
+        for key in keys:
+            try:
+                ghost = await self.trade._order_by_client_id(f"{plan_id}-x{key}")
+                if ghost is None:
+                    continue
+                status = str(getattr(ghost, "status", "")).lower().split(".")[-1]
+                if not any(s in status for s in ("fill", "cancel", "expired", "rejected")):
+                    log.warning("sweeping live ghost order %s of closed plan %s", ghost.id, plan_id)
+                    await self.trade.cancel_order(str(ghost.id))
+            except Exception:
+                log.exception("ghost sweep failed for plan %s key %s", plan_id, key)
+
     async def _monitor(self, plan_id: str) -> None:
+        rearm = False
         try:
             plan = await self.trade.get_plan(plan_id)
             entry_ttl_min = float((await self.trade.risk.get_settings())["entry_ttl_min"])
@@ -212,27 +339,38 @@ class ExitEnforcer:
         except asyncio.CancelledError:
             raise
         except Exception:
-            log.exception("monitor crashed for plan %s - REARMING in 5s", plan_id)
-            await asyncio.sleep(5)
-            self._monitors.pop(plan_id, None)
-            await self.arm(plan_id)
+            log.exception("monitor crashed for plan %s - REARMING in %.0fs", plan_id, self.rearm_delay_s)
+            rearm = True
         finally:
+            # Deregister SELF first; the replacement (if any) is armed after,
+            # so it can't be clobbered by this cleanup.
             self._monitors.pop(plan_id, None)
+        if rearm:
+            await asyncio.sleep(self.rearm_delay_s)
+            await self.arm(plan_id)
 
     # ------------------------------------------------------------ exits
 
     async def _execute_exit(self, plan_id: str, reason: str) -> None:
         """Escalation ladder, then a verification loop: this must not return
-        with the position alive and nobody watching it."""
-        for buffer, wait in ESCALATION:
+        with the position alive and nobody watching it.
+
+        Each rung submits under a fresh idempotency key (unique per
+        invocation, stable within the submit) so an ambiguous broker failure
+        recovers the SAME order instead of stacking a second close."""
+        token = uuid4().hex[:6]
+        for rung, (buffer, wait) in enumerate(self.escalation):
             plan = await self.trade.get_plan(plan_id)
             if plan.status in ("closed", "cancelled", "rejected"):
+                await self._sweep_ghosts_on_close(plan_id)
                 return
             if plan.exit_order_id:
                 try:
                     await self.trade.cancel_order(plan.exit_order_id)
                 except Exception:
                     pass
+            if await self._handle_ghost(plan):
+                return  # a ghost already filled; adopted and closing
             quotes = {leg["symbol"]: self.market.latest_quote(leg["symbol"]) for leg in plan.legs}
             mid = position_mid_from_quotes(plan.legs, quotes)
             if mid is None:
@@ -240,16 +378,20 @@ class ExitEnforcer:
             # Marketable = accept a WORSE position value: sign-agnostic shift
             # downward by |mid|*buffer (long: sell lower; short: buy back higher).
             limit = None if buffer is None else round_tick(mid - abs(mid) * buffer)
+            key = f"{token}r{rung}"
+            self._ghost_keys.setdefault(plan_id, []).append(key)
             try:
-                await self.trade.submit_exit(plan, reason, limit)
+                await self.trade.submit_exit(plan, reason, limit, attempt_key=key)
+                self._resolve_ghost_key(plan_id, key)  # recorded on the plan
             except Exception as exc:
                 log.error("exit submit failed for %s (%s) - retrying: %s", plan_id, reason, exc)
-                await asyncio.sleep(2)
+                await asyncio.sleep(min(2.0, self.verify_poll_s))
                 continue
             if wait:
                 await asyncio.sleep(wait)
                 plan = await self.trade.get_plan(plan_id)
                 if plan.status == "closed":
+                    await self._sweep_ghosts_on_close(plan_id)
                     return
         log.info("exit ladder exhausted for %s; verifying market order", plan_id)
         await self._verify_closed(plan_id, reason)
@@ -258,29 +400,62 @@ class ExitEnforcer:
         """Poll until the plan closes; if the final order dies, resubmit a
         market close. Bounded per-iteration, unbounded overall — the ladder's
         whole point is that a triggered exit always finishes."""
-        for attempt in range(120):  # ~10 min of 5s polls before loud rearm
-            await asyncio.sleep(5)
+        resubmit_failures = 0
+        for attempt in range(self.verify_attempts):
+            await asyncio.sleep(self.verify_poll_s)
             plan = await self.trade.get_plan(plan_id)
             if plan.status in ("closed", "cancelled", "rejected"):
+                await self._sweep_ghosts_on_close(plan_id)
                 return
             if plan.exit_order_id:
+                observed_order = plan.exit_order_id
                 try:
-                    status = await self.trade.order_status(plan.exit_order_id)
+                    status = await self.trade.order_status(observed_order)
                 except Exception as exc:
                     log.warning("exit status poll failed for %s: %s", plan_id, exc)
                     continue
                 if status == "filled":
-                    continue  # trade-update handler will close the plan
+                    # Don't depend on the TradingStream to learn this — close
+                    # the plan from REST truth right here.
+                    try:
+                        await self._reconcile_plan(await self.trade.get_plan(plan_id))
+                    except Exception as exc:
+                        log.warning("close-from-REST failed for %s: %s", plan_id, exc)
+                    continue
                 if status in ("canceled", "expired", "rejected"):
                     await self.trade.fsm.apply(
-                        plan_id, PlanEvent.EXIT_ORDER_DEAD, exit_order_id=None
+                        plan_id, PlanEvent.EXIT_ORDER_DEAD,
+                        guard={"exit_order_id": observed_order},
+                        exit_order_id=None,
                     )
             if not (await self.trade.get_plan(plan_id)).exit_order_id:
+                if await self._handle_ghost(await self.trade.get_plan(plan_id)):
+                    continue
                 log.warning("exit order dead for %s - resubmitting market close", plan_id)
+                key = f"{uuid4().hex[:6]}v"
+                self._ghost_keys.setdefault(plan_id, []).append(key)
                 try:
-                    await self.trade.submit_exit(plan, reason, None)
+                    await self.trade.submit_exit(plan, reason, None, attempt_key=key)
+                    self._resolve_ghost_key(plan_id, key)
+                    resubmit_failures = 0
                 except Exception as exc:
                     log.error("market close resubmit failed for %s: %s", plan_id, exc)
+                    resubmit_failures += 1
+                    # Repeated rejections usually mean the position no longer
+                    # exists at the broker (closed by an order we lost track
+                    # of, expiry liquidation, or a manual close in their UI).
+                    # Verify against position truth and force-close the plan
+                    # instead of resubmitting forever.
+                    if resubmit_failures >= 3 and await self._position_gone(plan):
+                        log.error(
+                            "position gone at broker for %s - FORCE_CLOSED", plan_id
+                        )
+                        await self.trade.fsm.apply(
+                            plan_id, PlanEvent.FORCE_CLOSED,
+                            notes="position vanished at broker during exit",
+                        )
+                        await self._sweep_ghosts_on_close(plan_id)
+                        return
         log.error("plan %s STILL not closed after verification window - rearming monitor", plan_id)
         self._monitors.pop(plan_id, None)
         await self.arm(plan_id)

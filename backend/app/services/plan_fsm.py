@@ -136,7 +136,14 @@ class PlanStateMachine:
             lock = self._locks[plan_id] = asyncio.Lock()
         return lock
 
-    async def apply(self, plan_id: str, event: PlanEvent, **fields) -> TransitionResult:
+    async def apply(self, plan_id: str, event: PlanEvent, *,
+                    guard: dict | None = None, **fields) -> TransitionResult:
+        """`guard` pins the event to the row state it describes: extra
+        column==value conditions checked atomically with the CAS. Use it for
+        events ABOUT a specific order (e.g. EXIT_ORDER_DEAD for order X) so a
+        stale verdict can't clobber a newer order that replaced X between the
+        observation and the write — the exiting→exiting self-loop makes the
+        status CAS alone blind to that race."""
         async with self._lock(plan_id):
             async with self.db.session() as session:
                 plan = await session.get(TradePlan, plan_id)
@@ -150,11 +157,18 @@ class PlanStateMachine:
                         plan_id, event.value, source.value,
                     )
                     return TransitionResult(False, plan, event, source, None)
+                if guard and any(getattr(plan, k) != v for k, v in guard.items()):
+                    log.warning(
+                        "plan %s: event %s dropped - guard %s does not match row",
+                        plan_id, event.value, guard,
+                    )
+                    return TransitionResult(False, plan, event, source, None)
 
+                conditions = [TradePlan.id == plan_id, TradePlan.status == source.value]
+                for key, value in (guard or {}).items():
+                    conditions.append(getattr(TradePlan, key) == value)
                 result = await session.execute(
-                    update(TradePlan)
-                    .where(TradePlan.id == plan_id, TradePlan.status == source.value)
-                    .values(status=target.value, **fields)
+                    update(TradePlan).where(*conditions).values(status=target.value, **fields)
                 )
                 await session.commit()
                 if result.rowcount == 0:

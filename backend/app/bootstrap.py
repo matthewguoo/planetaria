@@ -53,6 +53,7 @@ async def startup(app: FastAPI, settings: Settings) -> None:
     await market.start()
 
     app.state.reconcile_task = None
+    app.state.reconcile_loop_task = None
     if alpaca.configured:
         stream = alpaca.make_trading_stream()
         stream.subscribe_trade_updates(trade.on_trade_update)
@@ -65,6 +66,12 @@ async def startup(app: FastAPI, settings: Settings) -> None:
         # is exactly the "server up but nothing connects" startup window.
         app.state.reconcile_task = asyncio.create_task(
             _reconcile_with_retry(enforcer), name="startup-reconcile"
+        )
+        # Periodic REST truth-sync: the TradingStream is the fast path for
+        # fills, but a fill landing during a stream gap must not leave a live
+        # position unmanaged. Also re-arms any open plan missing its monitor.
+        app.state.reconcile_loop_task = asyncio.create_task(
+            enforcer.reconcile_loop(), name="reconcile-loop"
         )
 
 
@@ -84,6 +91,8 @@ async def shutdown(app: FastAPI) -> None:
     state = app.state
     if getattr(state, "reconcile_task", None):
         state.reconcile_task.cancel()
+    if getattr(state, "reconcile_loop_task", None):
+        state.reconcile_loop_task.cancel()
     await state.enforcer.shutdown()
     if state.trading_stream_task:
         state.trading_stream_task.cancel()

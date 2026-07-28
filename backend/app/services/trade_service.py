@@ -92,7 +92,7 @@ class TradeService:
         if not self.alpaca.configured:
             return {"equity": 0.0, "cash": 0.0, "buying_power": 0.0,
                     "daytrade_count": 0, "status": "NO_KEYS", "paper": True}
-        acct = await self.alpaca.call(self.alpaca.trading.get_account)
+        acct = await self.alpaca.call(self.alpaca.trading.get_account, retries=1)
         out = {
             "equity": float(acct.equity),
             "cash": float(acct.cash),
@@ -116,7 +116,7 @@ class TradeService:
             return self._positions_cache[1]
         if not self.alpaca.configured:
             return []
-        positions = await self.alpaca.call(self.alpaca.trading.get_all_positions)
+        positions = await self.alpaca.call(self.alpaca.trading.get_all_positions, retries=1)
         out: list[dict] = []
         for pos in positions:
             occ = parse_occ_symbol(pos.symbol)
@@ -320,6 +320,7 @@ class TradeService:
 
     async def _submit_entry(self, plan: TradePlan):
         legs = plan.legs
+        client_order_id = f"{plan.id}-e"
         if len(legs) == 1:
             # Single-leg limit prices are unsigned premiums; side carries
             # direction (a short entry's net credit arrives as negative
@@ -334,6 +335,7 @@ class TradeService:
                 ),
                 limit_price=abs(round_tick(plan.entry_limit)),
                 time_in_force=TimeInForce.DAY,
+                client_order_id=client_order_id,
             )
         else:
             # MLEG limit prices are signed: positive = net debit, negative =
@@ -343,6 +345,7 @@ class TradeService:
                 qty=plan.qty,
                 limit_price=round_tick(plan.entry_limit),
                 time_in_force=TimeInForce.DAY,
+                client_order_id=client_order_id,
                 legs=[
                     OptionLegRequest(
                         symbol=leg["symbol"],
@@ -357,7 +360,36 @@ class TradeService:
                     for leg in legs
                 ],
             )
-        return await self.alpaca.call(self.alpaca.trading.submit_order, request)
+        return await self._submit_idempotent(request, client_order_id)
+
+    async def _submit_idempotent(self, request, client_order_id: str):
+        """Submit an order; on ANY failure, check whether the broker actually
+        accepted it (a timed-out or dropped-connection submit may still have
+        landed). The deterministic client_order_id makes the check exact and
+        makes accidental double-submits impossible — the broker rejects a
+        reused id, and recovery then returns the original order.
+        """
+        try:
+            return await self.alpaca.call(self.alpaca.trading.submit_order, request)
+        except Exception as submit_exc:
+            recovered = await self._order_by_client_id(client_order_id)
+            if recovered is not None:
+                status = str(getattr(recovered, "status", "")).lower()
+                if not any(s in status for s in ("cancel", "expired", "rejected")):
+                    log.warning(
+                        "submit ambiguous for %s (%s) - recovered live order %s",
+                        client_order_id, submit_exc, recovered.id,
+                    )
+                    return recovered
+            raise
+
+    async def _order_by_client_id(self, client_order_id: str):
+        try:
+            return await self.alpaca.call(
+                self.alpaca.trading.get_order_by_client_id, client_order_id, retries=2
+            )
+        except Exception:
+            return None
 
     # ------------------------------------------------------------- updates
 
@@ -432,6 +464,10 @@ class TradeService:
 
             fsm_event: PlanEvent | None = None
             fields: dict = {}
+            # Exit-order events are ABOUT a specific order; guard so a stale
+            # event for an order the escalation ladder already replaced can't
+            # clobber the live one (entry_order_id never changes — no guard).
+            guard = None if is_entry else {"exit_order_id": order_id}
             if event == "fill" and is_entry:
                 fsm_event = PlanEvent.ENTRY_FILLED
                 fields = {"fill_premium": avg, "filled_qty": filled_qty or plan.qty}
@@ -466,7 +502,7 @@ class TradeService:
             if fsm_event is None:
                 return  # informational event (new/accepted/replaced)
 
-            result = await self.fsm.apply(plan.id, fsm_event, **fields)
+            result = await self.fsm.apply(plan.id, fsm_event, guard=guard, **fields)
             if not result.applied:
                 return
             # Effects, driven by the state actually ENTERED:
@@ -479,7 +515,8 @@ class TradeService:
 
     # -------------------------------------------------------------- exits
 
-    async def submit_exit(self, plan: TradePlan, reason: str, limit_price: float | None) -> None:
+    async def submit_exit(self, plan: TradePlan, reason: str, limit_price: float | None,
+                          attempt_key: str = "0") -> None:
         """Submit closing order (reverse all legs). limit None => market.
 
         limit_price is in POSITION-VALUE terms (signed, same axis as
@@ -487,7 +524,12 @@ class TradeService:
         submitted limit is the NEGATION: closing a debit position collects a
         credit (negative MLEG limit), closing a credit position pays a debit
         (positive MLEG limit). Single-leg orders take the unsigned premium.
+
+        attempt_key names the escalation rung (r0/r1/mkt/v3...) so each rung's
+        submit is idempotent: an ambiguous failure recovers the SAME order
+        rather than stacking a second close on the position.
         """
+        client_order_id = f"{plan.id}-x{attempt_key}"
         legs = plan.legs
         if len(legs) == 1:
             leg = legs[0]
@@ -499,6 +541,7 @@ class TradeService:
                     PositionIntent.SELL_TO_CLOSE if leg["side"] > 0 else PositionIntent.BUY_TO_CLOSE
                 ),
                 time_in_force=TimeInForce.DAY,
+                client_order_id=client_order_id,
             )
             request = (
                 MarketOrderRequest(**common)
@@ -523,6 +566,7 @@ class TradeService:
                 order_class=OrderClass.MLEG,
                 qty=plan.effective_qty,
                 time_in_force=TimeInForce.DAY,
+                client_order_id=client_order_id,
                 legs=mleg_legs,
             )
             request = (
@@ -530,7 +574,7 @@ class TradeService:
                 if limit_price is None
                 else LimitOrderRequest(**common, limit_price=round_tick(-limit_price))
             )
-        order = await self.alpaca.call(self.alpaca.trading.submit_order, request)
+        order = await self._submit_idempotent(request, client_order_id)
         await self.fsm.apply(
             plan.id,
             PlanEvent.EXIT_SUBMITTED,
@@ -539,7 +583,8 @@ class TradeService:
         )
 
     async def cancel_order(self, order_id: str) -> None:
-        await self.alpaca.call(self.alpaca.trading.cancel_order_by_id, order_id)
+        # Cancels are idempotent broker-side; retry transient failures.
+        await self.alpaca.call(self.alpaca.trading.cancel_order_by_id, order_id, retries=2)
 
     async def cancel_entry(self, plan: TradePlan) -> None:
         if plan.entry_order_id and plan.status in ("submitted", "partially_filled"):
@@ -549,5 +594,7 @@ class TradeService:
                 log.warning("cancel entry %s failed: %s", plan.entry_order_id, exc)
 
     async def order_status(self, order_id: str) -> str:
-        order = await self.alpaca.call(self.alpaca.trading.get_order_by_id, order_id)
+        order = await self.alpaca.call(
+            self.alpaca.trading.get_order_by_id, order_id, retries=2
+        )
         return str(order.status.value if hasattr(order.status, "value") else order.status)

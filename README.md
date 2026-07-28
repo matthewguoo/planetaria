@@ -200,3 +200,43 @@ down to small laptop widths (panels re-flow 2×2).
   instead of chasing stale prices.
 - All lifecycle mutations flow through the FSM; there is no code path that
   sets a plan's status directly.
+
+### Execution reliability (flaky-broker hardening)
+
+Real market APIs time out, drop connections, and lose events. The execution
+stack assumes that:
+
+- **Nothing can hang.** Every broker REST call has a socket-level timeout
+  (10s, stamped onto the SDK session, which ships with none) plus a
+  coroutine-level ceiling (15s `wait_for`) — a wedged API can never freeze
+  an exit monitor. Reads/cancels retry transient failures (timeout,
+  connection drop, 429/5xx) with backoff.
+- **Submits are idempotent.** Every order carries a deterministic
+  `client_order_id` (entry: `<plan>-e`; exits: one per escalation rung).
+  An ambiguous failure (timed out but maybe landed) recovers the SAME
+  order by client id instead of double-submitting. "Ghost" exits — submits
+  that errored but landed late — are found by their key, then cancelled if
+  live or adopted-and-closed if filled; a sweep on close cancels any
+  stragglers so no stray closing order can fill into a reversed position.
+- **Fills don't depend on the stream.** The TradingStream is the fast
+  path; a periodic REST reconcile (45s) is the truth-sync that catches
+  fills landing during stream gaps, re-arms any open plan missing its
+  monitor, and closes exiting plans straight from order status. The exit
+  verify loop reads REST directly too.
+- **Stale verdicts can't clobber live orders.** Events about a specific
+  order (exit dead/filled) are guarded on that order id at the CAS layer —
+  a reconcile pass that observed rung N cannot wipe rung N+1's live order
+  (the exiting→exiting self-loop makes a status-only CAS blind to this).
+- **Vanished positions resolve.** If closes keep getting rejected and the
+  broker reports no remaining position (expiry liquidation, manual close in
+  their UI), the plan is force-closed rather than resubmitting forever.
+- **The DB can't stall order management.** SQLite fallback runs WAL +
+  NullPool (pool exhaustion under concurrent monitors was reproducible);
+  Postgres gets a bounded pool with a fast timeout.
+
+All of this is pressure-tested in `backend/tests/test_chaos.py`: a flaky
+broker fake (latency, transient errors, hung submits that land late, lost
+fill events, double-close rejection) driven through the REAL enforcer/FSM,
+including a 12-plan concurrent storm asserting every plan closes exactly
+once with the right exit reason. Two real bugs were found and fixed by this
+harness before it ever met a live market.

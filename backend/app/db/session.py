@@ -46,7 +46,30 @@ class Database:
 
         for candidate in (url, SQLITE_FALLBACK):
             try:
-                engine = create_async_engine(candidate, pool_pre_ping=True)
+                if candidate.startswith("sqlite"):
+                    # NullPool: a pooled cap stalls concurrent exit monitors
+                    # under load (pool exhaustion = order management hangs).
+                    # SQLite connections are cheap; WAL + busy timeout make
+                    # concurrent readers/writer behave.
+                    from sqlalchemy.pool import NullPool
+
+                    engine = create_async_engine(
+                        candidate, poolclass=NullPool, connect_args={"timeout": 30}
+                    )
+
+                    from sqlalchemy import event
+
+                    @event.listens_for(engine.sync_engine, "connect")
+                    def _sqlite_pragmas(dbapi_conn, _record):
+                        cursor = dbapi_conn.cursor()
+                        cursor.execute("PRAGMA journal_mode=WAL")
+                        cursor.execute("PRAGMA synchronous=NORMAL")
+                        cursor.close()
+                else:
+                    engine = create_async_engine(
+                        candidate, pool_pre_ping=True,
+                        pool_size=10, max_overflow=20, pool_timeout=10,
+                    )
                 async with engine.begin() as conn:
                     await conn.run_sync(Base.metadata.create_all)
                     await conn.run_sync(_ensure_columns)
