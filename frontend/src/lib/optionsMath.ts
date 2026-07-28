@@ -260,6 +260,58 @@ export function positionPl(legs: Leg[], S: number, tau: number, r: number = RISK
   return positionValue(legs, S, tau, r) - positionEntryCost(legs);
 }
 
+/** Sum of leg intrinsic values (no basis) — the model-free expiry value. */
+export function intrinsicValue(legs: Leg[], S: number): number {
+  let total = 0;
+  for (const leg of legs) {
+    const intrinsic = Math.max(leg.right === "C" ? S - leg.strike : leg.strike - S, 0);
+    total += leg.side * leg.qty * intrinsic;
+  }
+  return total;
+}
+
+/**
+ * Expiry breakevens against an EXPLICIT premium basis (a live position's
+ * actual fill differs from the legs' quoted mids). Model-free: intrinsic
+ * payoff only, refined by bisection.
+ */
+export function breakevensForBasis(
+  legs: Leg[],
+  basis: number,
+  lo: number,
+  hi: number,
+  steps = 1500,
+): number[] {
+  const f = (s: number) => intrinsicValue(legs, s) - basis;
+  const out: number[] = [];
+  let prevS = lo;
+  let prevV = f(lo);
+  for (let i = 1; i <= steps; i++) {
+    const s = lo + ((hi - lo) * i) / steps;
+    const v = f(s);
+    if (prevV === 0) out.push(prevS);
+    else if (prevV < 0 !== v < 0) {
+      let a = prevS;
+      let b = s;
+      for (let j = 0; j < 60; j++) {
+        const m = 0.5 * (a + b);
+        if (f(m) < 0 === prevV < 0) a = m;
+        else b = m;
+      }
+      out.push(0.5 * (a + b));
+    }
+    prevS = s;
+    prevV = v;
+  }
+  const dedup: number[] = [];
+  for (const be of out) {
+    if (!dedup.length || Math.abs(be - dedup[dedup.length - 1]) > 0.01) {
+      dedup.push(Math.round(be * 10000) / 10000);
+    }
+  }
+  return dedup;
+}
+
 export function payoffAtExpiry(legs: Leg[], S: number): number {
   let total = 0;
   for (const leg of legs) {

@@ -3,6 +3,7 @@ import { barsTable } from "../../lib/perspective";
 import { focusFeed, onSnapshot } from "../../lib/barFeed";
 import type { HeatmapResult } from "../../lib/heatmap.worker";
 import {
+  breakevensForBasis,
   makeScenarioModel,
   normPdf,
   positionEntryCost,
@@ -14,10 +15,17 @@ import {
   type ScenarioModel,
   type Smiles,
 } from "../../lib/optionsMath";
+import {
+  computeAtr,
+  computeBollinger,
+  computeEma,
+  computeVwap,
+  realizedVolAnnualized,
+} from "../../lib/indicators";
 import { buildPositionView } from "../../lib/positionView";
 import { useHeatmap } from "../../lib/useHeatmap";
 import { useAccountStore } from "../../store/accountStore";
-import { TF_MS, useTradingStore } from "../../store/tradingStore";
+import { TF_MS, useTradingStore, type IndicatorToggles } from "../../store/tradingStore";
 import { useUiStore } from "../../store/uiStore";
 import {
   availableStrikes,
@@ -110,6 +118,8 @@ type StrategyOverlay = {
   anchorMs: number | null;
   /** Position view: P/L basis (actual fill premium); null = leg net entry. */
   entryBasis: number | null;
+  /** Model-free expiry breakevens against the active premium basis. */
+  breakevens: number[];
 };
 
 /** Bar index the surface's t=0 column maps to: entry bar for a position
@@ -196,6 +206,7 @@ export function CandlePane() {
   const timeStopEt = useStrategyStore((s) => s.timeStopEt);
   const volShift = useStrategyStore((s) => s.volShift);
   const skewBeta = useStrategyStore((s) => s.skewBeta);
+  const indicatorToggles = useTradingStore((s) => s.indicators);
   const setStrike = useStrategyStore((s) => s.setStrike);
   const setRatio = useStrategyStore((s) => s.setRatio);
   const setTpPct = useStrategyStore((s) => s.setTpPct);
@@ -223,6 +234,8 @@ export function CandlePane() {
   const dragTargetRef = useRef<DragTarget | null>(null);
   const surfaceRef = useRef<HeatmapResult | null>(null);
   const overlayRef = useRef<StrategyOverlay | null>(null);
+  const indicatorsRef = useRef<IndicatorToggles>(indicatorToggles);
+  indicatorsRef.current = indicatorToggles;
   const rafRef = useRef(0);
 
   // ------------------------------------------------- strategy derivations
@@ -270,6 +283,10 @@ export function CandlePane() {
           readOnly: true,
           anchorMs: positionView.anchorMs,
           entryBasis: entry,
+          breakevens:
+            spot > 0
+              ? breakevensForBasis(positionView.legs, entry, spot * 0.7, spot * 1.3)
+              : [],
         };
       }
     }
@@ -316,6 +333,8 @@ export function CandlePane() {
       readOnly: false,
       anchorMs: null,
       entryBasis: null,
+      breakevens:
+        legs && spot > 0 ? breakevensForBasis(legs, entry, spot * 0.7, spot * 1.3) : [],
     };
   }, [chain, expiry, kind, strikes, ratios, tpPct, slPct, timeStopEt, quote, volShift, skewBeta, viewingPlan, pnlMode]);
 
@@ -349,6 +368,7 @@ export function CandlePane() {
         surfaceRef.current,
         TF_MS[tf] / 60000,
         dragTargetRef.current,
+        indicatorsRef.current,
       );
     });
   }, [tf]);
@@ -380,7 +400,7 @@ export function CandlePane() {
   useEffect(() => {
     if (!overlay?.legs) surfaceRef.current = null;
     draw();
-  }, [overlay, draw]);
+  }, [overlay, draw, indicatorToggles]);
 
   // ------------------------------------------------------- data plumbing
 
@@ -816,6 +836,7 @@ function render(
   surface: HeatmapResult | null,
   tfMinutes: number,
   dragTarget: DragTarget | null,
+  indicators: IndicatorToggles,
 ) {
   const draggingStrike = dragTarget?.kind === "strike" ? dragTarget.i : null;
   ctx.fillStyle = COLORS.bg;
@@ -865,11 +886,13 @@ function render(
     ctx.fillRect(x - bodyW / 2, top, bodyW, Math.max(1, Math.abs(yC - yO)));
   }
 
+  drawIndicators(ctx, layout, bars, view, domain, first, last, indicators);
   if (overlay) {
     drawStrikes(ctx, layout, domain, overlay, draggingStrike);
     drawRail(ctx, layout, domain, overlay, draggingStrike);
   }
-  if (overlay?.legs && surface) drawExitLevels(ctx, layout, domain, surface);
+  if (overlay?.legs && surface) drawExitLevels(ctx, layout, domain, surface, overlay);
+  drawInfoStrip(ctx, bars, overlay, tfMinutes);
   drawLastPrice(ctx, layout, bars, domain);
   if (mouse && mouse.x <= layout.plotW && mouse.y <= layout.plotH) {
     drawCrosshair(ctx, layout, bars, view, domain, mouse);
@@ -1220,17 +1243,126 @@ function drawRail(
   });
 }
 
+const IND_COLORS = {
+  vwap: "#26C6DA",
+  ema9: "#FFD54F",
+  ema21: "#BA68C8",
+  bb: "rgba(96,125,139,0.55)",
+  bbFill: "rgba(96,125,139,0.08)",
+};
+
+/** Overlay indicator lines across the visible bar range. */
+function drawIndicators(
+  ctx: CanvasRenderingContext2D,
+  layout: Layout,
+  bars: Bars,
+  view: ViewState,
+  domain: [number, number],
+  first: number,
+  last: number,
+  indicators: IndicatorToggles,
+) {
+  if (!bars.n || last <= first) return;
+  const line = (values: Float64Array, color: string, width = 1.2, dash: number[] = []) => {
+    ctx.strokeStyle = color;
+    ctx.lineWidth = width;
+    ctx.setLineDash(dash);
+    ctx.beginPath();
+    let started = false;
+    for (let i = first; i <= last; i++) {
+      const x = indexToX(i, view, layout);
+      const y = priceToY(values[i], domain, layout);
+      if (x < -20 || x > layout.plotW + 20 || !isFinite(y)) {
+        started = false;
+        continue;
+      }
+      if (!started) {
+        ctx.moveTo(x, y);
+        started = true;
+      } else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+    ctx.setLineDash([]);
+  };
+
+  if (indicators.bb) {
+    const bb = computeBollinger(bars);
+    // Band fill between upper and lower.
+    ctx.fillStyle = IND_COLORS.bbFill;
+    ctx.beginPath();
+    let started = false;
+    for (let i = first; i <= last; i++) {
+      const x = indexToX(i, view, layout);
+      const y = priceToY(bb.upper[i], domain, layout);
+      if (!started) {
+        ctx.moveTo(x, y);
+        started = true;
+      } else ctx.lineTo(x, y);
+    }
+    for (let i = last; i >= first; i--) {
+      ctx.lineTo(indexToX(i, view, layout), priceToY(bb.lower[i], domain, layout));
+    }
+    ctx.closePath();
+    ctx.fill();
+    line(bb.upper, IND_COLORS.bb, 1, [3, 3]);
+    line(bb.lower, IND_COLORS.bb, 1, [3, 3]);
+    line(bb.mid, IND_COLORS.bb, 1);
+  }
+  if (indicators.ema) {
+    line(computeEma(bars.c, bars.n, 9), IND_COLORS.ema9, 1.2);
+    line(computeEma(bars.c, bars.n, 21), IND_COLORS.ema21, 1.2);
+  }
+  if (indicators.vwap) {
+    line(computeVwap(bars), IND_COLORS.vwap, 1.4, [6, 3]);
+  }
+}
+
+/** Top-left context readout: ATR (stop-width sanity), realized vol, and the
+ * IV-vs-RV spread — the "is premium rich or cheap?" number for options. */
+function drawInfoStrip(
+  ctx: CanvasRenderingContext2D,
+  bars: Bars,
+  overlay: StrategyOverlay | null,
+  tfMinutes: number,
+) {
+  if (!bars.n) return;
+  const atr = computeAtr(bars);
+  const rv = realizedVolAnnualized(bars, 30, tfMinutes);
+  let text = `ATR14 ${fmtPrice(atr)} · RV30 ${(rv * 100).toFixed(1)}%`;
+  let ivRv: number | null = null;
+  if (overlay && overlay.sigma > 0) {
+    ivRv = overlay.sigma - rv;
+    text += ` · IV ${(overlay.sigma * 100).toFixed(1)}% · IV−RV ${ivRv >= 0 ? "+" : ""}${(ivRv * 100).toFixed(1)}pt`;
+  }
+  ctx.font = "10px 'SF Mono', Consolas, monospace";
+  const w = ctx.measureText(text).width + 12;
+  ctx.fillStyle = "rgba(0,0,0,0.75)";
+  ctx.fillRect(6, 26, w, 15);
+  ctx.textAlign = "left";
+  ctx.textBaseline = "middle";
+  ctx.fillStyle = "#999999";
+  ctx.fillText(text, 12, 34);
+  if (ivRv !== null) {
+    // Rich premium (IV >> RV) hurts buyers; cheap premium hurts sellers.
+    ctx.fillStyle = ivRv > 0.03 ? "#FF6D00" : ivRv < -0.03 ? "#00C853" : "#999999";
+    ctx.fillRect(6, 26, 3, 15);
+  }
+  ctx.font = "11px 'SF Mono', Consolas, monospace";
+}
+
 /**
  * Always-visible execution boundaries: horizontal guides + price-axis badges
  * at the underlying level where TP / SL would fire at the earliest active
  * time. Directly driven by the TP%/SL% fields (and contour drags). Off-scale
  * levels clamp to the axis edge with a direction arrow instead of vanishing.
+ * Breakevens (model-free, at the active premium basis) get white badges.
  */
 function drawExitLevels(
   ctx: CanvasRenderingContext2D,
   layout: Layout,
   domain: [number, number],
   surface: HeatmapResult,
+  overlay: StrategyOverlay,
 ) {
   const drawLevel = (level: number | null, color: string, tag: string) => {
     if (level === null) return;
@@ -1255,6 +1387,27 @@ function drawExitLevels(
     ctx.textBaseline = "middle";
     ctx.fillText(text, layout.plotW + 4, by);
   };
+  // Breakevens first so TP/SL badges draw over them on overlap.
+  for (const be of overlay.breakevens.slice(0, 3)) {
+    const y = priceToY(be, domain, layout);
+    if (y >= 0 && y <= layout.volTop) {
+      ctx.strokeStyle = COLORS.breakeven;
+      ctx.lineWidth = 1;
+      ctx.setLineDash([2, 5]);
+      ctx.beginPath();
+      ctx.moveTo(0, y);
+      ctx.lineTo(layout.plotW, y);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+    const by = Math.max(8, Math.min(layout.volTop - 8, y));
+    ctx.fillStyle = COLORS.breakeven;
+    ctx.fillRect(layout.plotW, by - 8, layout.axisW, 16);
+    ctx.fillStyle = COLORS.bg;
+    ctx.textAlign = "left";
+    ctx.textBaseline = "middle";
+    ctx.fillText(`BE ${fmtPrice(be)}`, layout.plotW + 4, by);
+  }
   drawLevel(firstFinite(surface.tpLine), COLORS.tp, "TP");
   drawLevel(firstFinite(surface.slLine), COLORS.sl, "SL");
 }

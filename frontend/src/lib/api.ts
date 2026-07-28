@@ -23,6 +23,9 @@ export type RiskSettings = {
   default_sl_pct: number;
   time_stop_et: string;
   expiry_time_stop_et: string;
+  max_spread_pct: number;
+  entry_ttl_min: number;
+  max_trades_per_day: number;
 };
 
 export type Account = {

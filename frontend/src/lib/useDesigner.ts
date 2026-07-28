@@ -127,6 +127,14 @@ export function useDesigner(): Designer {
 
     // Discrete risks no surface can show — flag them instead.
     const warnings: string[] = [];
+    const maxSpreadPct = risk?.max_spread_pct ?? 0.15;
+    for (const leg of legs) {
+      if (leg.entry > 0 && leg.halfSpread / leg.entry > maxSpreadPct) {
+        warnings.push(
+          `illiquid leg ${leg.strike}${leg.right}: half-spread ${Math.round((leg.halfSpread / leg.entry) * 100)}% of mid (server will reject > ${Math.round(maxSpreadPct * 100)}%)`,
+        );
+      }
+    }
     for (const leg of legs) {
       if (leg.side >= 0) continue;
       const intrinsic = Math.max(leg.right === "C" ? spot - leg.strike : leg.strike - spot, 0);

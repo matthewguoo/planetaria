@@ -267,12 +267,23 @@ class TradeService:
             structural = structural_max_loss([Leg.from_dict(leg) for leg in legs])
             entry_cost = (structural * 100 * qty) if structural is not None else max_loss * 3
         expiry = max(leg["expiry"] for leg in legs)
+        # Stream age: None while a tick has never arrived reads as "no data",
+        # which must block trading, not silently pass.
+        stream_age: float | None = None
+        if self.alpaca.configured:
+            stream_age = self.market.stream_age_s
+            if stream_age is None:
+                stream_age = float("inf")
         violations = await self.risk.validate_new_trade(
             account_equity=account["equity"],
             entry_cost_dollars=entry_cost,
             max_loss_dollars=max_loss,
             time_stop_utc=time_stop,
             expiry_date_et=expiry,
+            legs=legs,
+            underlying=payload["underlying"],
+            stream_age_s=stream_age,
+            daytrade_count=account["daytrade_count"],
         )
         if violations:
             raise ValueError("; ".join(violations))

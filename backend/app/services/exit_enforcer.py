@@ -141,6 +141,7 @@ class ExitEnforcer:
     async def _monitor(self, plan_id: str) -> None:
         try:
             plan = await self.trade.get_plan(plan_id)
+            entry_ttl_min = float((await self.trade.risk.get_settings())["entry_ttl_min"])
             symbols = [leg["symbol"] for leg in plan.legs]
             await self.market.subscribe_options(symbols)
 
@@ -167,6 +168,19 @@ class ExitEnforcer:
                     if timeout <= 0 and plan.status == "submitted":
                         await self.trade.cancel_entry(plan)
                         return
+                    # Entry TTL: an unfilled limit sitting past its shelf life
+                    # is a stale price chasing the market — cancel, don't chase.
+                    if plan.status == "submitted" and plan.created_at is not None:
+                        age_min = (
+                            datetime.now(timezone.utc) - as_utc(plan.created_at)
+                        ).total_seconds() / 60
+                        if age_min > entry_ttl_min:
+                            log.warning(
+                                "entry TTL (%.0fmin) hit for plan %s - cancelling unfilled entry",
+                                entry_ttl_min, plan.id,
+                            )
+                            await self.trade.cancel_entry(plan)
+                            return
                     if plan.status == "exiting" and not plan.exit_order_id:
                         # Exit order died (cancel/reject) - resubmit the ladder.
                         log.warning("plan %s exiting with no live order - resubmitting", plan.id)

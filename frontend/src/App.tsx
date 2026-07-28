@@ -14,7 +14,9 @@ import { useStrategyStore } from "./store/strategyStore";
 import { useTradingStore } from "./store/tradingStore";
 import { useUiStore } from "./store/uiStore";
 
-const MIN_WIDTH = 1280;
+// The layout auto-sizes fluidly; only genuinely unusable widths (phones in
+// portrait) get the lockout.
+const MIN_WIDTH = 640;
 
 function useViewportLock(): boolean {
   const [locked, setLocked] = useState(window.innerWidth < MIN_WIDTH);
@@ -32,7 +34,7 @@ function ViewportLockout() {
       <div className="panel max-w-md p-8 text-center">
         <div className="text-lg tracking-widest text-bb-amber">PLANETARIA</div>
         <div className="mt-4 text-bb-muted">
-          This terminal requires a desktop viewport of at least {MIN_WIDTH}px.
+          This terminal needs at least {MIN_WIDTH}px of width.
         </div>
         <div className="mt-2 text-bb-muted">
           Current width: <span className="text-bb-amber">{window.innerWidth}px</span>
@@ -95,7 +97,7 @@ export default function App() {
 
           <PositionsDrawer />
 
-          <section className="grid h-64 shrink-0 grid-cols-4 gap-px">
+          <section className="grid max-h-[45vh] shrink-0 auto-rows-[16rem] grid-cols-2 gap-px overflow-y-auto xl:grid-cols-4">
             <StrategyPanel designer={designer} />
             <SizingPanel designer={designer} />
             <ProbabilityPanel designer={designer} />

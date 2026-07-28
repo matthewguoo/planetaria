@@ -390,6 +390,9 @@ function AccountTab() {
         {numField("bp_cap_pct", "BP CAP", 100, "%", 1)}
         {numField("default_tp_pct", "DEFAULT TP", 100, "%", 5)}
         {numField("default_sl_pct", "DEFAULT SL", 100, "%", 5)}
+        {numField("max_spread_pct", "MAX LEG SPREAD", 100, "%", 1)}
+        {numField("entry_ttl_min", "ENTRY TTL", 1, "m", 1)}
+        {numField("max_trades_per_day", "MAX TRADES/DAY", 1, "", 1)}
         <label className="flex items-center justify-between gap-2 text-[11px]">
           <span className="text-bb-muted">TIME STOP (ET)</span>
           <input

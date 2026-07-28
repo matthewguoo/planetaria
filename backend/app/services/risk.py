@@ -23,6 +23,10 @@ DEFAULT_RISK = {
     "default_sl_pct": 0.50,      # -50% of entry premium
     "time_stop_et": "15:50",     # non-expiry-day default
     "expiry_time_stop_et": "15:15",  # Alpaca force-liquidates expiring pos ~15:30
+    # MFT leak-pluggers:
+    "max_spread_pct": 0.15,      # per-leg half-spread / mid cap (illiquidity guard)
+    "entry_ttl_min": 5,          # unfilled entries auto-cancel (no stale chasing)
+    "max_trades_per_day": 20,    # overtrading breaker
 }
 
 RISK_KEY = "risk"
@@ -48,10 +52,15 @@ class RiskService:
             if key in ("time_stop_et", "expiry_time_stop_et"):
                 time.fromisoformat(str(value))  # validate HH:MM
                 clean[key] = str(value)
-            elif key == "max_positions":
+            elif key in ("max_positions", "entry_ttl_min", "max_trades_per_day"):
                 iv = int(value)
-                if not 1 <= iv <= 20:
-                    raise ValueError("max_positions must be 1-20")
+                bounds = {
+                    "max_positions": (1, 20),
+                    "entry_ttl_min": (1, 120),
+                    "max_trades_per_day": (1, 200),
+                }[key]
+                if not bounds[0] <= iv <= bounds[1]:
+                    raise ValueError(f"{key} must be {bounds[0]}-{bounds[1]}")
                 clean[key] = iv
             else:
                 fv = float(value)
@@ -61,6 +70,7 @@ class RiskService:
                     "bp_cap_pct": (0.01, 1.0),
                     "default_tp_pct": (0.05, 10.0),
                     "default_sl_pct": (0.05, 0.95),
+                    "max_spread_pct": (0.01, 0.50),
                 }[key]
                 if not limits[0] <= fv <= limits[1]:
                     raise ValueError(f"{key} out of bounds {limits}")
@@ -98,6 +108,40 @@ class RiskService:
             )
             return sum(plan.realized_pnl or 0.0 for plan in result.scalars())
 
+    async def trades_created_today(self) -> int:
+        """All plans created this ET session day, regardless of status."""
+        now_et = datetime.now(ET)
+        start_utc = now_et.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(
+            timezone.utc
+        )
+        async with self.db.session() as session:
+            result = await session.execute(
+                select(TradePlan).where(TradePlan.created_at >= start_utc)
+            )
+            return len(list(result.scalars()))
+
+    async def recent_duplicate(
+        self, underlying: str, leg_symbols: list[str], window_s: float = 10.0
+    ) -> bool:
+        """An open plan with identical legs created within the window — almost
+        always a double-click or a retry racing its own success."""
+        from datetime import timedelta
+
+        cutoff = datetime.now(timezone.utc) - timedelta(seconds=window_s)
+        async with self.db.session() as session:
+            result = await session.execute(
+                select(TradePlan).where(
+                    TradePlan.underlying == underlying.upper(),
+                    TradePlan.status.in_(OPEN_STATUSES),
+                    TradePlan.created_at >= cutoff,
+                )
+            )
+            wanted = sorted(leg_symbols)
+            for plan in result.scalars():
+                if sorted(leg["symbol"] for leg in plan.legs) == wanted:
+                    return True
+        return False
+
     async def validate_new_trade(
         self,
         *,
@@ -106,10 +150,49 @@ class RiskService:
         max_loss_dollars: float,
         time_stop_utc: datetime,
         expiry_date_et: str,
+        legs: list[dict] | None = None,
+        underlying: str | None = None,
+        stream_age_s: float | None = None,
+        daytrade_count: int = 0,
     ) -> list[str]:
         """Returns a list of violations; empty list = trade allowed."""
         cfg = await self.get_settings()
         violations: list[str] = []
+
+        # ---- MFT leak-pluggers -------------------------------------------
+        # Stale market data: quotes drive the exits; trading blind on stale
+        # (or absent) data is how limit fills turn into instant losers.
+        if stream_age_s is not None and stream_age_s > 30:
+            violations.append(
+                "market data stale "
+                + ("(no ticks received yet)" if stream_age_s == float("inf")
+                   else f"({stream_age_s:.0f}s since last tick)")
+            )
+        # Illiquidity: wide legs make TP/SL execution unreliable and the
+        # round-trip spread eats the edge.
+        if legs:
+            for leg in legs:
+                half_spread = leg.get("half_spread")
+                mid = abs(leg.get("entry", 0) or 0)
+                if half_spread and mid > 0 and half_spread / mid > cfg["max_spread_pct"]:
+                    violations.append(
+                        f"{leg.get('symbol', '?')}: half-spread {half_spread / mid:.0%} of mid "
+                        f"exceeds {cfg['max_spread_pct']:.0%} cap (illiquid - exits unreliable)"
+                    )
+        # PDT: a 4th day trade on a sub-$25k account gets the account frozen.
+        if account_equity < 25_000 and daytrade_count >= 3:
+            violations.append("PDT guard: 4th day trade on a sub-$25k account")
+        # Overtrading breaker.
+        trades_today = await self.trades_created_today()
+        if trades_today >= cfg["max_trades_per_day"]:
+            violations.append(
+                f"overtrading breaker: {trades_today} trades today "
+                f"(max {cfg['max_trades_per_day']})"
+            )
+        # Double-submit guard.
+        if underlying and legs:
+            if await self.recent_duplicate(underlying, [l["symbol"] for l in legs]):
+                violations.append("duplicate guard: identical order submitted seconds ago")
 
         if max_loss_dollars > account_equity * cfg["max_loss_pct"] + 0.01:
             violations.append(

@@ -156,7 +156,7 @@ export function AccountPage() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-px overflow-y-auto">
-      <div className="grid shrink-0 grid-cols-6 gap-px">
+      <div className="grid shrink-0 grid-cols-2 gap-px md:grid-cols-3 xl:grid-cols-6">
         <StatCard label="EQUITY" value={fmtUsd(account?.equity)} />
         <StatCard label="CASH" value={fmtUsd(account?.cash)} />
         <StatCard label="BUYING POWER" value={fmtUsd(account?.buying_power)} />

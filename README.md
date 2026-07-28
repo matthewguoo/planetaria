@@ -148,11 +148,26 @@ cd frontend && npm test                # TS/Python parity + presets + sizing
 cd frontend && npm run build           # typecheck + production build
 ```
 
+### Chart context (MFT layer)
+
+Toggleable indicators (session-anchored VWAP, EMA 9/21, Bollinger 20×2σ)
+plus an always-on readout of ATR(14), realized vol (30-bar, annualized per
+timeframe), ATM implied vol, and the IV−RV spread — the "is premium rich
+or cheap?" number, color-ticked. Model-free expiry breakevens render as
+white dashed guides with BE price badges on the axis (basis-aware: a live
+position's breakevens use its actual fill). The layout auto-sizes fluidly
+down to small laptop widths (panels re-flow 2×2).
+
 ## Safety
 
 - v1 is hard-locked to paper trading (`ALPACA_PAPER=false` refuses to boot).
 - Orders without TP, SL, and a time stop are rejected server-side.
 - Exits may only be tightened after entry, never widened.
 - Daily loss circuit breaker blocks new entries.
+- MFT leak-pluggers, all server-enforced: stale/absent market data blocks
+  entries; per-leg half-spread cap rejects illiquid structures; PDT guard
+  on sub-$25k accounts; overtrading breaker (max trades/day); duplicate
+  guard against double-submits; unfilled entries auto-cancel after a TTL
+  instead of chasing stale prices.
 - All lifecycle mutations flow through the FSM; there is no code path that
   sets a plan's status directly.

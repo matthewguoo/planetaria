@@ -19,6 +19,7 @@ class LegOrder(BaseModel):
     ratio: int = 1
     entry: float
     iv: float
+    half_spread: float | None = Field(default=None, ge=0)  # liquidity guard input
 
 
 class OrderIn(BaseModel):
