@@ -22,6 +22,14 @@ def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def as_utc(dt: datetime | None) -> datetime | None:
+    """SQLite round-trips DateTime(timezone=True) as offset-naive; values are
+    stored in UTC, so re-attach tzinfo before any aware comparison."""
+    if dt is None:
+        return None
+    return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt
+
+
 # status lifecycle:
 #   planned -> submitted -> filled -> exiting -> closed
 #                      \-> cancelled (entry never filled)
@@ -61,7 +69,7 @@ class TradePlan(Base):
     def to_dict(self) -> dict:
         return {
             "id": self.id,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "created_at": as_utc(self.created_at).isoformat() if self.created_at else None,
             "underlying": self.underlying,
             "strategy": self.strategy,
             "legs": self.legs,
@@ -69,7 +77,7 @@ class TradePlan(Base):
             "entry_limit": self.entry_limit,
             "tp_premium": self.tp_premium,
             "sl_premium": self.sl_premium,
-            "time_stop_utc": self.time_stop_utc.isoformat() if self.time_stop_utc else None,
+            "time_stop_utc": as_utc(self.time_stop_utc).isoformat() if self.time_stop_utc else None,
             "status": self.status,
             "entry_order_id": self.entry_order_id,
             "exit_order_id": self.exit_order_id,

@@ -26,7 +26,7 @@ class RedisFacade:
     async def connect(self) -> None:
         try:
             self._client = aioredis.from_url(
-                self._url, decode_responses=True, socket_connect_timeout=3
+                self._url, decode_responses=True, socket_connect_timeout=1
             )
             await self._client.ping()
             self._healthy = True

@@ -12,7 +12,7 @@ import asyncio
 import logging
 from datetime import datetime, timezone
 
-from app.models.trade import OPEN_STATUSES, TradePlan
+from app.models.trade import OPEN_STATUSES, TradePlan, as_utc
 from app.services.trade_service import TradeService, position_mid_from_quotes, round_tick
 
 log = logging.getLogger("app.enforcer")
@@ -118,7 +118,7 @@ class ExitEnforcer:
                     plan = await self.trade.get_plan(plan_id)
                     if plan.status not in OPEN_STATUSES:
                         return
-                    timeout = (plan.time_stop_utc - datetime.now(timezone.utc)).total_seconds()
+                    timeout = (as_utc(plan.time_stop_utc) - datetime.now(timezone.utc)).total_seconds()
                     if timeout <= 0 and plan.status == "filled":
                         log.warning("TIME STOP hit for plan %s", plan.id)
                         await self._execute_exit(plan_id, "time_stop")
@@ -232,7 +232,7 @@ class ExitEnforcer:
         if time_stop_utc is not None:
             if time_stop_utc.tzinfo is None:
                 time_stop_utc = time_stop_utc.replace(tzinfo=timezone.utc)
-            if time_stop_utc >= plan.time_stop_utc:
+            if time_stop_utc >= as_utc(plan.time_stop_utc):
                 raise ValueError("time stop may only move earlier")
             fields["time_stop_utc"] = time_stop_utc
         if not fields:
