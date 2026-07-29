@@ -127,11 +127,19 @@ export function impliedVol(
 /**
  * Volatility smile support — the post-BSM correction for "price moved, so
  * frozen-IV payoffs are wrong". points are [strike, iv] from the live chain,
- * sorted by strike. Scenario IV uses STICKY MONEYNESS: the smile is a
- * function of K/S, so when spot moves from spot0 to S, a leg struck at K
- * reads the today-smile at the moneyness-equivalent strike K * spot0 / S.
- * With no usable smile (fewer than 2 points) it degrades to the leg's
- * frozen IV — classic sticky-strike BSM.
+ * sorted by strike. Scenario IV uses ANCHORED STICKY MONEYNESS: the smile is
+ * a function of K/S, and the leg rides its SHAPE as a relative correction —
+ *
+ *     iv(S) = leg.iv + [ smile(K * spot0 / S) − smile(K) ]
+ *
+ * anchored to the leg's own entry-implied IV, never an absolute lookup. At
+ * S = spot0 the correction is zero BY CONSTRUCTION, which pins the scenario
+ * value at (now, spot) to the leg's actual market price. An absolute lookup
+ * would inject phantom P/L at t=0 whenever the fitted smile disagrees with
+ * the leg's own mid — guaranteed off-hours, when stale/crossed wing quotes
+ * poison the fit (observed: a 1DTE call "instantly" worth 3x entry). With no
+ * usable smile (fewer than 2 points) it degrades to the leg's frozen IV —
+ * classic sticky-strike BSM.
  */
 export type SmilePoint = [number, number]; // [strike, iv]
 export type Smiles = { C: SmilePoint[]; P: SmilePoint[] };
@@ -159,8 +167,10 @@ export function scenarioIv(
 ): number {
   if (!smiles || S <= 0 || spot0 <= 0) return leg.iv;
   const points = leg.right === "C" ? smiles.C : smiles.P;
-  const iv = smileIv(points, (leg.strike * spot0) / S);
-  return iv !== null && iv > 0.005 ? iv : leg.iv;
+  const moved = smileIv(points, (leg.strike * spot0) / S);
+  const anchor = smileIv(points, leg.strike);
+  if (moved === null || anchor === null) return leg.iv;
+  return Math.max(leg.iv + (moved - anchor), 0.005);
 }
 
 /**

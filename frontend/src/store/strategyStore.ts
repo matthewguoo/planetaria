@@ -12,6 +12,7 @@ import { create } from "zustand";
 import { api } from "../lib/api";
 import {
   bsDelta,
+  impliedVol,
   TRADING_HOURS_PER_YEAR,
   tradingHoursToExpiry,
   type Leg,
@@ -600,16 +601,26 @@ export function buildLegs(state: {
         ? strikes.map(() => 1)
         : template.map((l) => l.ratio);
   const legs: StrategyLeg[] = [];
+  // Entry-implied IV is authoritative: the leg's model value at (now, spot)
+  // must equal the price it's entered at, so re-solve IV from the mid under
+  // OUR convention with the chain's tape-anchored spot. The chain's iv field
+  // (server-solved, or raw feed where no mid existed) is the fallback.
+  const tau = tradingHoursToExpiry(expiry, Date.now()) / TRADING_HOURS_PER_YEAR;
   for (let i = 0; i < strikes.length; i++) {
     const contract = findContract(chain, expiry, rights[i], strikes[i]);
     if (!contract || contract.mid <= 0 || contract.iv <= 0) return null;
+    const solved =
+      chain.spot > 0 && tau > 0
+        ? impliedVol(contract.mid, chain.spot, strikes[i], tau, rights[i])
+        : null;
+    const iv = solved !== null && solved > 0.005 && solved < 5 ? solved : contract.iv;
     legs.push({
       right: rights[i],
       strike: strikes[i],
       qty: ratios[i],
       side: sides[i],
       entry: contract.mid,
-      iv: contract.iv,
+      iv,
       symbol: contract.symbol,
       expiry,
       halfSpread:

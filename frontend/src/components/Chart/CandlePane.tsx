@@ -28,7 +28,7 @@ import { ChartHud } from "./ChartHud";
 import { publishScale, sharedBars } from "../../lib/chartShared";
 import { useHeatmap } from "../../lib/useHeatmap";
 import { useAccountStore } from "../../store/accountStore";
-import { TF_MS, freshSpot, useTradingStore, type IndicatorToggles } from "../../store/tradingStore";
+import { TF_MS, freshSpot, quoteIsStale, useTradingStore, type IndicatorToggles } from "../../store/tradingStore";
 import { useUiStore } from "../../store/uiStore";
 import {
   availableStrikes,
@@ -254,6 +254,12 @@ export function CandlePane({
   const viewWindowRef = useRef<[number, number] | null>(null);
   const indicatorsRef = useRef<IndicatorToggles>(indicatorToggles);
   indicatorsRef.current = indicatorToggles;
+  // Tick-fresh display: the newest FRESH quote extends the forming bar so the
+  // chart moves with every tick instead of once per bar close. Display-only —
+  // stored bar data stays exactly what the feed delivered.
+  const liveTickRef = useRef<{ mid: number; ts: number } | null>(null);
+  liveTickRef.current =
+    quote && quote.mid > 0 && !quoteIsStale(quote) ? { mid: quote.mid, ts: quote.ts } : null;
   const rafRef = useRef(0);
 
   // ------------------------------------------------- strategy derivations
@@ -388,6 +394,7 @@ export function CandlePane({
         TF_MS[tf] / 60000,
         dragTargetRef.current,
         indicatorsRef.current,
+        liveTickRef.current,
       );
       // Feed HTML layers outside the canvas (sidebar HUD, leg rail).
       sharedBars.current = barsRef.current;
@@ -439,6 +446,11 @@ export function CandlePane({
     if (!overlay?.legs) surfaceRef.current = null;
     draw();
   }, [overlay, draw, indicatorToggles]);
+
+  // Every fresh quote repaints the forming bar (tick-level chart freshness).
+  useEffect(() => {
+    draw();
+  }, [quote, draw]);
 
   // ------------------------------------------------------- data plumbing
 
@@ -889,6 +901,7 @@ function render(
   tfMinutes: number,
   dragTarget: DragTarget | null,
   indicators: IndicatorToggles,
+  liveTick: { mid: number; ts: number } | null = null,
 ) {
   const draggingStrike = dragTarget?.kind === "strike" ? dragTarget.i : null;
   ctx.fillStyle = COLORS.bg;
@@ -907,8 +920,21 @@ function render(
   const barW = layout.plotW / view.barsVisible;
   const bodyW = Math.max(1, Math.min(barW * 0.7, 14));
 
+  // Live-bar extension: a fresh quote newer than the last bar's start moves
+  // the forming candle between feed bar-closes. Display-only.
+  const lastIdx = bars.n - 1;
+  const live =
+    liveTick && liveTick.ts >= bars.t[lastIdx]
+      ? {
+          c: liveTick.mid,
+          h: Math.max(bars.h[lastIdx], liveTick.mid),
+          l: Math.min(bars.l[lastIdx], liveTick.mid),
+        }
+      : null;
+
   const anchorIdx = anchorIndexFor(bars, overlay);
   drawPriceGrid(ctx, layout, domain);
+  drawSessionBoundaries(ctx, layout, bars, view, first, last);
   drawTimeAxis(ctx, layout, bars, view, first, last, overlay, tfMinutes, anchorIdx);
 
   // Heatmap first: background layer in the future region (HEAT toggle).
@@ -921,12 +947,16 @@ function render(
   for (let i = first; i <= last; i++) {
     const x = indexToX(i, view, layout);
     if (x < -barW || x > layout.plotW + barW) continue;
-    const up = bars.c[i] >= bars.o[i];
+    const isLive = live !== null && i === lastIdx;
+    const c = isLive ? live.c : bars.c[i];
+    const h = isLive ? live.h : bars.h[i];
+    const l = isLive ? live.l : bars.l[i];
+    const up = c >= bars.o[i];
     const color = up ? COLORS.up : COLORS.down;
-    const yH = priceToY(bars.h[i], domain, layout);
-    const yL = priceToY(bars.l[i], domain, layout);
+    const yH = priceToY(h, domain, layout);
+    const yL = priceToY(l, domain, layout);
     const yO = priceToY(bars.o[i], domain, layout);
-    const yC = priceToY(bars.c[i], domain, layout);
+    const yC = priceToY(c, domain, layout);
     ctx.strokeStyle = color;
     ctx.fillStyle = color;
     ctx.lineWidth = 1;
@@ -947,7 +977,7 @@ function render(
     drawRail(ctx, layout, domain, overlay, draggingStrike);
   }
   if (overlay?.legs && surface) drawExitLevels(ctx, layout, domain, surface, overlay);
-  drawLastPrice(ctx, layout, bars, domain);
+  drawLastPrice(ctx, layout, bars, domain, live?.c);
   if (mouse && mouse.x <= layout.plotW && mouse.y <= layout.plotH) {
     drawCrosshair(ctx, layout, bars, view, domain, mouse);
     if (overlay?.legs && surface) {
@@ -1580,13 +1610,47 @@ function drawVolume(
   }
 }
 
+/** Session-day boundaries: a full-height line + date chip at the first bar of
+ * each new ET trading day, so day breaks read at a glance on intraday zooms. */
+function drawSessionBoundaries(
+  ctx: CanvasRenderingContext2D,
+  layout: Layout,
+  bars: Bars,
+  view: ViewState,
+  first: number,
+  last: number,
+) {
+  ctx.textBaseline = "top";
+  ctx.textAlign = "left";
+  for (let i = Math.max(first, 1); i <= last; i++) {
+    if (fmtDayET(bars.t[i]) === fmtDayET(bars.t[i - 1])) continue;
+    const x = indexToX(i, view, layout) - layout.plotW / view.barsVisible / 2;
+    if (x < 0 || x > layout.plotW) continue;
+    ctx.strokeStyle = "#2a2a2a";
+    ctx.setLineDash([2, 4]);
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x, layout.plotH);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    const label = fmtDayET(bars.t[i]).toUpperCase();
+    ctx.fillStyle = "rgba(0,0,0,0.8)";
+    const w = ctx.measureText(label).width + 8;
+    ctx.fillRect(x + 2, 2, w, 13);
+    ctx.fillStyle = COLORS.axisText;
+    ctx.fillText(label, x + 6, 4);
+  }
+}
+
 function drawLastPrice(
   ctx: CanvasRenderingContext2D,
   layout: Layout,
   bars: Bars,
   domain: [number, number],
+  liveClose?: number,
 ) {
-  const lastClose = bars.c[bars.n - 1];
+  const lastClose = liveClose ?? bars.c[bars.n - 1];
   const y = priceToY(lastClose, domain, layout);
   if (y < 0 || y > layout.volTop) return;
   ctx.strokeStyle = COLORS.last;

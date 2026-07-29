@@ -171,17 +171,33 @@ describe("smile-aware scenario pricing (sticky moneyness)", () => {
     expect(smileIv([[450, 0.2]], 450)).toBeNull(); // <2 points unusable
   });
 
-  it("at spot0 the scenario IV matches today's smile at the leg strike", async () => {
+  it("at spot0 the scenario IV is the leg's own IV — zero correction by construction", async () => {
     const { scenarioIv } = await import("../lib/optionsMath");
     expect(scenarioIv(leg, 450, 450, smiles)).toBeCloseTo(0.24, 9);
   });
 
-  it("when spot rallies, the strike rolls DOWN the moneyness smile", async () => {
+  it("when spot rallies, the strike rides the smile SHAPE down (anchored)", async () => {
     const { scenarioIv } = await import("../lib/optionsMath");
-    // Spot 450 -> 460: leg struck 460 now sits ATM-equivalent (460*450/460=450).
+    // Spot 450 -> 460: moneyness-equivalent strike 450; smile(450)=0.20,
+    // smile(460)=0.24 -> correction -0.04 on the leg's own 0.24.
     expect(scenarioIv(leg, 460, 450, smiles)).toBeCloseTo(0.2, 2);
     // No smile -> frozen leg IV (plain BSM).
     expect(scenarioIv(leg, 460, 450, null)).toBeCloseTo(0.24, 9);
+  });
+
+  it("a polluted smile cannot inject phantom P/L at (now, spot) — regression", async () => {
+    const { scenarioIv, positionPlSmile, bsPrice } = await import("../lib/optionsMath");
+    // Off-hours failure mode: fit says 30% vol while the leg's own mid
+    // implies 10%. Anchoring must keep t=0 value AT the leg's market price.
+    const polluted = {
+      C: [[430, 0.30], [450, 0.30], [470, 0.30]] as [number, number][],
+      P: [[430, 0.30], [450, 0.30], [470, 0.30]] as [number, number][],
+    };
+    const tau = 13 / (252 * 6.5);
+    const entry = bsPrice(450, 455, tau, 0.10, "C");
+    const cheapLeg = { right: "C" as const, strike: 455, qty: 1, side: 1 as const, entry, iv: 0.10 };
+    expect(scenarioIv(cheapLeg, 450, 450, polluted)).toBeCloseTo(0.10, 9);
+    expect(positionPlSmile([cheapLeg], 450, tau, 450, polluted)).toBeCloseTo(0, 9);
   });
 
   it("smile-aware value differs from frozen-IV value off-spot but agrees at expiry", async () => {

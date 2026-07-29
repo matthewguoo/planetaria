@@ -125,9 +125,16 @@ class ChainService:
         }
 
     def _enrich_iv(self, contracts: list[dict], spot: float) -> None:
-        """IV fallback chain (mirrors the analytics assumptions):
-        feed IV -> bisection-solve from quote mid -> strike interpolation.
-        Off-hours the indicative feed often omits IV/greeks entirely."""
+        """IV priority: solve-from-mid (OUR convention) -> feed -> interpolate.
+
+        The solve is FIRST, not a fallback: every consumer prices with our
+        trading-time BS convention, so the invariant that matters is
+        bs_price(spot, K, tau_ours, iv) == mid. Alpaca's feed IV lives in a
+        different convention (calendar time, their spot, their model) and can
+        sit 2-3x away from what our pricer needs — off-hours we observed a
+        1DTE call carrying feed IV 26.5% against a mid implying 11%, making
+        positions appear instantly worth 3x entry. Feed IV survives only where
+        no usable mid exists (empty/crossed book)."""
         from app.services.options_math import (
             TRADING_HOURS_PER_YEAR,
             implied_vol,
@@ -137,18 +144,19 @@ class ChainService:
         now_ms = time.time() * 1000
         taus: dict[str, float] = {}
         for contract in contracts:
-            if contract["iv"] > 0:
-                contract["iv_source"] = "feed"
-                continue
+            feed_iv = contract["iv"]
             expiry = contract["expiry"]
             if expiry not in taus:
                 taus[expiry] = trading_hours_to_expiry(expiry, now_ms) / TRADING_HOURS_PER_YEAR
             tau = taus[expiry]
+            solved = None
             if contract["mid"] > 0 and spot > 0 and tau > 0:
                 solved = implied_vol(contract["mid"], spot, contract["strike"], tau, contract["right"])
-                if solved is not None and 0.01 < solved < 5.0:
-                    contract["iv"] = round(solved, 4)
-                    contract["iv_source"] = "solved"
+            if solved is not None and 0.01 < solved < 5.0:
+                contract["iv"] = round(solved, 4)
+                contract["iv_source"] = "solved"
+            elif feed_iv > 0:
+                contract["iv_source"] = "feed"
 
         # Interpolation pass for anything still missing (illiquid wings).
         from collections import defaultdict
