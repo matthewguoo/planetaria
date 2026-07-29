@@ -30,6 +30,27 @@ log = logging.getLogger("app.mktdata")
 
 SIP_DELAY_S = 16 * 60  # free tier: SIP allowed only >15min old; use 16 for margin
 
+# A quote may anchor spot only while it is at least this close in time to the
+# newest bar; beyond that the trade-derived bar close wins.
+QUOTE_VS_BAR_GRACE_MS = 60_000
+
+
+def freshest_spot(quote: dict | None, last_bar: dict | None) -> float:
+    """Freshest defensible spot price.
+
+    A quote wins only while its timestamp is no older than the last 1m bar's
+    close (minus a 60s grace). A frozen quote (thin or closed book) losing to
+    a printing tape is exactly the failure mode this guards: quotes from
+    yesterday's close must not anchor pricing 2 points off today's trades.
+    """
+    q_ms = quote["ts"] if quote and quote.get("mid") else None
+    bar_close_ms = last_bar["t"] + 60_000 if last_bar else None
+    if q_ms is not None and (bar_close_ms is None or q_ms >= bar_close_ms - QUOTE_VS_BAR_GRACE_MS):
+        return float(quote["mid"])
+    if last_bar is not None:
+        return float(last_bar["c"])
+    return float(quote["mid"]) if quote and quote.get("mid") else 0.0
+
 
 def _bar_from_alpaca(bar) -> dict:
     return {
@@ -60,6 +81,7 @@ class MarketDataService:
         self._stock_refs: dict[str, int] = {}
         self._option_refs: dict[str, int] = {}
         self._latest_quotes: dict[str, dict] = {}  # symbol -> quote msg (stock + option)
+        self._quote_fetch_at: dict[str, float] = {}  # symbol -> monotonic REST attempt
         self._last_stream_msg: float = 0.0
         self._stock_stream = None
         self._option_stream = None
@@ -289,23 +311,42 @@ class MarketDataService:
         return [_bar_from_alpaca(b) for b in bars]
 
     async def fetch_latest_stock_quote(self, symbol: str) -> dict | None:
-        """REST fallback when no stream quote has arrived yet."""
+        """Latest quote with staleness-aware refresh.
+
+        The cache must NOT be forever: outside regular hours (and on the thin
+        IEX book generally) the quote stream can go silent while trades keep
+        printing — a quote cached at yesterday's close would otherwise anchor
+        spot 2+ points off this morning's tape. Refresh over REST when the
+        cached quote is older than 10s, throttled to one attempt per 5s per
+        symbol, and never let an older broker quote overwrite a newer one.
+        """
         cached = self._latest_quotes.get(symbol)
-        if cached:
+        now_ms = time.time() * 1000
+        if cached and now_ms - cached["ts"] < 10_000:
             return cached
         if not self.alpaca.configured:
-            return None
+            return cached
+        last_attempt = self._quote_fetch_at.get(symbol, 0.0)
+        if time.monotonic() - last_attempt < 5.0:
+            return cached
+        self._quote_fetch_at[symbol] = time.monotonic()
         try:
             request = StockLatestQuoteRequest(symbol_or_symbols=symbol, feed=self.alpaca.stock_feed)
             result = await self.alpaca.call(self.alpaca.stock_data.get_stock_latest_quote, request)
             quote = result[symbol]
             msg = self._quote_msg("quote", symbol, quote.bid_price, quote.ask_price,
                                   quote.timestamp)
-            self._latest_quotes[symbol] = msg
-            return msg
+            if cached is None or msg["ts"] >= cached["ts"]:
+                self._latest_quotes[symbol] = msg
+            return self._latest_quotes[symbol]
         except Exception as exc:
             log.error("latest quote %s failed: %s", symbol, exc)
-            return None
+            return cached
+
+    def spot(self, symbol: str) -> float:
+        """Freshest defensible spot for pricing (see freshest_spot)."""
+        bars = self.bars.get_bars(symbol, "1m", limit=1)
+        return freshest_spot(self._latest_quotes.get(symbol), bars[-1] if bars else None)
 
     # -------------------------------------------------------------- handlers
 

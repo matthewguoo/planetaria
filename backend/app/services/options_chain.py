@@ -178,11 +178,11 @@ class ChainService:
                 contract["iv_source"] = "interpolated"
 
     async def _spot(self, underlying: str) -> float:
-        quote = self.market.latest_quote(underlying) or await self.market.fetch_latest_stock_quote(underlying)
-        if quote and quote.get("mid"):
-            return float(quote["mid"])
-        bars = self.market.bars.get_bars(underlying, "1m", limit=1)
-        return float(bars[-1]["c"]) if bars else 0.0
+        # Refresh a stale cached quote (throttled inside), then take the
+        # freshest of quote-vs-tape — a frozen overnight quote must not
+        # anchor the chain 2 points off the printing premarket bars.
+        await self.market.fetch_latest_stock_quote(underlying)
+        return self.market.spot(underlying)
 
     # ----------------------------------------------------------------- demo
 

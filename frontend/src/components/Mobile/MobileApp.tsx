@@ -12,6 +12,7 @@ import { useDesigner } from "../../lib/useDesigner";
 import { useAccountStore } from "../../store/accountStore";
 import { useStrategyStore } from "../../store/strategyStore";
 import { TIMEFRAMES, useTradingStore, type Timeframe } from "../../store/tradingStore";
+import { PriceReadout } from "../PriceReadout";
 import { useUiStore } from "../../store/uiStore";
 import { AccountPage } from "../Account/AccountPage";
 import { CandlePane } from "../Chart/CandlePane";
@@ -53,13 +54,7 @@ function MobileHeader() {
   return (
     <header className="flex h-9 shrink-0 items-center gap-2 border-b border-bb-border bg-bb-panel px-2">
       <SymbolSearch />
-      {quote ? (
-        <span data-numeric className="min-w-0 truncate text-[13px] text-bb-amber">
-          {quote.mid ? quote.mid.toFixed(2) : "—"}
-        </span>
-      ) : (
-        <span className="text-[11px] text-bb-muted">…</span>
-      )}
+      <PriceReadout compact />
       <span className="ml-auto flex items-center gap-2">
         <button
           className={"text-[11px] " + (audio === "off" ? "text-bb-muted" : "text-bb-amber")}

@@ -21,7 +21,7 @@ import {
   useStrategyStore,
   type StrategyLeg,
 } from "../store/strategyStore";
-import { useTradingStore } from "../store/tradingStore";
+import { freshSpot, useTradingStore } from "../store/tradingStore";
 
 export type Designer = {
   ready: boolean;
@@ -67,7 +67,7 @@ export function useDesigner(): Designer {
 
   return useMemo(() => {
     const legs = buildLegs({ chain, expiry, kind, strikes, ratios, rights, sides });
-    const spot = quote?.mid || chain?.spot || 0;
+    const spot = freshSpot(quote, chain?.spot ?? 0);
     const equity = account?.equity ?? 0;
     const risk = account?.risk;
     const smiles = smileFromChain(chain, expiry);

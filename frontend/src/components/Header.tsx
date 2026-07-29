@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { cycleAudioMode, getAudioMode, onAudioModeChange } from "../lib/audio";
 import { SystemMenu } from "./System/SystemMenu";
 import { useTradingStore } from "../store/tradingStore";
+import { PriceReadout } from "./PriceReadout";
 import { useUiStore } from "../store/uiStore";
 
 const AUDIO_LABEL = { off: "🔇 OFF", fx: "🔊 FX", vox: "🔊 VOX" } as const;
@@ -95,16 +96,7 @@ export function Header() {
     <header className="panel flex h-9 shrink-0 items-center gap-6 px-3">
       <span className="tracking-widest text-bb-amber">PLANETARIA</span>
       <span className="text-white">{symbol}</span>
-      {quote ? (
-        <span data-numeric className="text-bb-amber">
-          {quote.mid ? quote.mid.toFixed(2) : "—"}
-          <span className="ml-3 text-bb-muted">
-            {quote.bid.toFixed(2)} × {quote.ask.toFixed(2)}
-          </span>
-        </span>
-      ) : (
-        <span className="text-bb-muted">no quote</span>
-      )}
+      <PriceReadout />
       <div className="ml-auto flex items-center gap-4">
         {(["terminal", "account"] as const).map((v) => (
           <button

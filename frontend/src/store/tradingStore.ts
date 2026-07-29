@@ -1,6 +1,22 @@
 import { create } from "zustand";
 
 export type Quote = { symbol: string; bid: number; ask: number; mid: number; ts: number };
+
+/** A quote older than this cannot anchor spot on its own. */
+export const QUOTE_FRESH_MS = 90_000;
+
+export function quoteIsStale(quote: Quote | null, nowMs: number = Date.now()): boolean {
+  return !!quote && nowMs - quote.ts > QUOTE_FRESH_MS;
+}
+
+/** Freshest defensible spot: the live quote mid while it's fresh, otherwise
+ * the fallback (chain spot — which the backend already anchors to the tape
+ * via its own quote-vs-bar rule). Guards the frozen-overnight-quote case
+ * where the header/model would price 2+ points off the printing bars. */
+export function freshSpot(quote: Quote | null, fallback: number, nowMs: number = Date.now()): number {
+  if (quote && quote.mid > 0 && !quoteIsStale(quote, nowMs)) return quote.mid;
+  return fallback > 0 ? fallback : quote?.mid ?? 0;
+}
 export type FeedStatus = {
   configured: boolean;
   demo: boolean;

@@ -28,7 +28,7 @@ import { ChartHud } from "./ChartHud";
 import { publishScale, sharedBars } from "../../lib/chartShared";
 import { useHeatmap } from "../../lib/useHeatmap";
 import { useAccountStore } from "../../store/accountStore";
-import { TF_MS, useTradingStore, type IndicatorToggles } from "../../store/tradingStore";
+import { TF_MS, freshSpot, useTradingStore, type IndicatorToggles } from "../../store/tradingStore";
 import { useUiStore } from "../../store/uiStore";
 import {
   availableStrikes,
@@ -270,7 +270,7 @@ export function CandlePane({
     if (viewingPlan) {
       const positionView = buildPositionView(viewingPlan, chain, pnlMode);
       if (positionView) {
-        const spot = quote?.mid || chain?.spot || 0;
+        const spot = freshSpot(quote, chain?.spot ?? 0);
         const live = pnlMode === "live";
         const entry = positionView.entryBasis;
         const shift = live ? volShift : 0;
@@ -311,7 +311,7 @@ export function CandlePane({
       chain, expiry, kind, strikes, ratios, rights: legRights, sides: legSides,
     });
     if (!chain || !expiry) return null;
-    const spot = quote?.mid || chain.spot;
+    const spot = freshSpot(quote, chain.spot);
     const hte = calcHoursToExpiry(expiry);
     const entry = legs ? positionEntryCost(legs) : 0;
     // Time stop: today at HH:MM ET, in trading hours from now.
