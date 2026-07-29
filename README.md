@@ -4,6 +4,13 @@ A disciplined 0-3 DTE options trading terminal: FastAPI backend against Alpaca
 (paper), React/canvas frontend. The core design rule: **every position has a
 server-enforced exit plan** (TP / SL / hard time stop) that survives restarts.
 
+## Screenshots
+
+`docs/screenshots/` holds a phone + desktop walkthrough. Regenerate against
+a running app with `node scripts/screenshots.mjs` from `frontend/` (needs
+`npm i -D playwright && npx playwright install chromium`, or set
+`PW_CHROMIUM` to an existing Chromium binary).
+
 ## Architecture
 
 ```
