@@ -246,6 +246,7 @@ export function CandlePane({
   } | null>(null);
   const axisDragRef = useRef<{ startY: number; domain: [number, number] } | null>(null);
   const dragTargetRef = useRef<DragTarget | null>(null);
+  const prevSymbolRef = useRef(symbol);
   const surfaceRef = useRef<HeatmapResult | null>(null);
   const overlayRef = useRef<StrategyOverlay | null>(null);
   // Visible y-domain, quantized to 25% steps of its own span: pans/zooms
@@ -476,6 +477,15 @@ export function CandlePane({
     } | null = null;
 
     focusFeed(symbol, tf);
+
+    // Ticker switch: the old symbol's manual y-scale and pan position are
+    // meaningless on a different price level — snap back to auto-fit/follow
+    // so the new symbol lands in view instead of off-screen.
+    if (prevSymbolRef.current !== symbol) {
+      prevSymbolRef.current = symbol;
+      viewRef.current.yDomain = null;
+      viewRef.current.follow = true;
+    }
 
     async function pull() {
       if (!view || disposed) return;

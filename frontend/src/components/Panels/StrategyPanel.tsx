@@ -2,7 +2,9 @@ import type { Designer } from "../../lib/useDesigner";
 import {
   availableStrikes,
   findContract,
+  PLACABILITY_BADGE,
   STRATEGIES,
+  strategyPlacability,
   useStrategyStore,
   type StrategyKind,
 } from "../../store/strategyStore";
@@ -53,7 +55,7 @@ export function StrategyPanel({ designer }: { designer: Designer }) {
                   .filter((k) => STRATEGIES[k].group === group)
                   .map((k) => (
                     <option key={k} value={k}>
-                      {STRATEGIES[k].label}
+                      {STRATEGIES[k].label + PLACABILITY_BADGE[strategyPlacability(k)]}
                     </option>
                   ))}
               </optgroup>
@@ -160,6 +162,12 @@ export function StrategyPanel({ designer }: { designer: Designer }) {
           </div>
           <div className="text-[9px] leading-tight text-bb-muted">
             drag strikes on the rail · CHAIN panel adds legs · payoff on-chart
+          </div>
+          <div
+            className="px-1 text-[9px] leading-tight text-bb-muted"
+            title="⊘: leaves uncovered short calls — Alpaca rejects these at this account level (verified). $CSP: uncovered short put is cash-secured at ~strike value per set (~$74k on SPY, broker-verified), so it's intrinsically a 1-2 lot structure — add a put wing to size by stop risk instead."
+          >
+            ⊘ needs naked calls — unplaceable · $CSP cash-secured put — low lot count
           </div>
         </div>
       </div>

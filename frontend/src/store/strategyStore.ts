@@ -270,6 +270,33 @@ export function strategyDef(kind: StrategyKind): StrategyDef {
   return STRATEGIES[kind];
 }
 
+/** Broker placability class of a preset (from its template, spot-independent):
+ *  "blocked" — leaves uncovered short CALLS; unplaceable at Alpaca L3
+ *              (verified: "account not eligible to trade uncovered options").
+ *  "csp"     — leaves uncovered short PUTS; placeable but cash-secured at
+ *              ~strike value per set (verified via broker cost basis), so
+ *              intrinsically a 1-2 lot structure on a ~$100k account.
+ *  "ok"      — fully defined risk; sizes to the stop-risk budget. */
+export type Placability = "ok" | "csp" | "blocked";
+
+export function strategyPlacability(kind: StrategyKind): Placability {
+  const legs = STRATEGIES[kind].legs;
+  const uncovered = (right: "C" | "P") =>
+    Math.max(
+      -legs.filter((l) => l.right === right).reduce((a, l) => a + l.side * l.ratio, 0),
+      0,
+    );
+  if (uncovered("C") > 0) return "blocked";
+  if (uncovered("P") > 0) return "csp";
+  return "ok";
+}
+
+export const PLACABILITY_BADGE: Record<Placability, string> = {
+  ok: "",
+  csp: " · $CSP",
+  blocked: " · ⊘",
+};
+
 export type StrategyLeg = Leg & { symbol: string; expiry: string; halfSpread: number };
 
 type StrategyState = {
