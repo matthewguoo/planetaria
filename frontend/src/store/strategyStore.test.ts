@@ -185,6 +185,27 @@ describe("smile-aware scenario pricing (sticky moneyness)", () => {
     expect(scenarioIv(leg, 460, 450, null)).toBeCloseTo(0.24, 9);
   });
 
+  it("smoothSmile recovers a quadratic from sawtooth noise and passes small sets through", async () => {
+    const { smoothSmile } = await import("../lib/optionsMath");
+    const spot = 450;
+    // True smile: 0.2 + 0.1x + 3x^2 in log-moneyness, plus alternating noise.
+    const strikes = [430, 435, 440, 445, 450, 455, 460, 465, 470];
+    const noisy = strikes.map((k, i) => {
+      const x = Math.log(k / spot);
+      return [k, 0.2 + 0.1 * x + 3 * x * x + (i % 2 === 0 ? 0.04 : -0.04)] as [number, number];
+    });
+    const smooth = smoothSmile(noisy, spot);
+    for (const [k, iv] of smooth) {
+      const x = Math.log(k / spot);
+      // ±0.04 alternating noise over 9 points: the fit should at least halve
+      // it everywhere (sawtooth itself would leave full ±0.04 excursions).
+      expect(Math.abs(iv - (0.2 + 0.1 * x + 3 * x * x))).toBeLessThan(0.025);
+    }
+    // Too few points: raw passthrough.
+    const few: [number, number][] = [[445, 0.2], [450, 0.21], [455, 0.25]];
+    expect(smoothSmile(few, spot)).toEqual(few);
+  });
+
   it("a polluted smile cannot inject phantom P/L at (now, spot) — regression", async () => {
     const { scenarioIv, positionPlSmile, bsPrice } = await import("../lib/optionsMath");
     // Off-hours failure mode: fit says 30% vol while the leg's own mid

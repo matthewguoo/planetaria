@@ -169,7 +169,39 @@ class MarketDataService:
                 supervise("overnight-poll", self._overnight_poll_loop),
                 name="overnight-poll",
             ),
+            asyncio.create_task(
+                supervise("silent-stream-gap-fill", self._gap_fill_loop),
+                name="silent-stream-gap-fill",
+            ),
         ]
+
+    async def _gap_fill_loop(self) -> None:
+        """IEX only operates 08:00-17:00 ET, so the free real-time stream is
+        silent through 04:00-08:00 premarket (and thin elsewhere). Whenever a
+        subscribed symbol's bars fall >3 min behind during the 04:00-20:00 ET
+        session, re-run the REST backfill — its SIP segment (allowed >16 min
+        back on this tier) keeps the chart trailing ~16 min instead of frozen
+        at the last IEX print."""
+        while True:
+            await asyncio.sleep(120)
+            now = datetime.now(timezone.utc)
+            if is_overnight_et(now):  # overnight poller owns that window
+                continue
+            from zoneinfo import ZoneInfo
+
+            et = now.astimezone(ZoneInfo("America/New_York"))
+            minute = et.hour * 60 + et.minute
+            if et.weekday() >= 5 or minute < 240 or minute >= 1200:
+                continue
+            now_ms = now.timestamp() * 1000
+            for symbol in list(self._stock_refs.keys()):
+                last = self.bars.last_ts(symbol)
+                if last is not None and now_ms - last < 3 * 60_000:
+                    continue
+                try:
+                    await self._backfill(symbol, gap_fill=True)
+                except Exception as exc:
+                    log.warning("silent-stream gap-fill %s failed: %s", symbol, exc)
 
     async def _overnight_poll_loop(self) -> None:
         """Blue Ocean overnight freshness: while the 20:00-04:00 ET session is

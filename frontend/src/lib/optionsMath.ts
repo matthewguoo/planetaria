@@ -144,6 +144,42 @@ export function impliedVol(
 export type SmilePoint = [number, number]; // [strike, iv]
 export type Smiles = { C: SmilePoint[]; P: SmilePoint[] };
 
+/**
+ * Robust smile: least-squares quadratic in log-moneyness through the raw
+ * per-strike IV points, evaluated back onto the same strikes. Off-hours the
+ * per-contract solves produce a SAWTOOTH (each strike solved from its own
+ * junk quote); riding that noise through scenarioIv turns a smooth position
+ * value into striped nonsense — especially with ratio legs. The quadratic
+ * keeps the real skew (b) and curvature (c) and discards the noise. Falls
+ * back to the raw points when there are too few for a stable fit.
+ */
+export function smoothSmile(points: SmilePoint[], spot: number): SmilePoint[] {
+  if (points.length < 5 || spot <= 0) return points;
+  const xs = points.map(([k]) => Math.log(k / spot));
+  const ys = points.map(([, iv]) => iv);
+  // Normal equations for y ~ a + b x + c x^2.
+  let s0 = 0, s1 = 0, s2 = 0, s3 = 0, s4 = 0, t0 = 0, t1 = 0, t2 = 0;
+  for (let i = 0; i < xs.length; i++) {
+    const x = xs[i];
+    const x2 = x * x;
+    s0 += 1; s1 += x; s2 += x2; s3 += x2 * x; s4 += x2 * x2;
+    t0 += ys[i]; t1 += ys[i] * x; t2 += ys[i] * x2;
+  }
+  const det =
+    s0 * (s2 * s4 - s3 * s3) - s1 * (s1 * s4 - s3 * s2) + s2 * (s1 * s3 - s2 * s2);
+  if (Math.abs(det) < 1e-12) return points;
+  const a =
+    (t0 * (s2 * s4 - s3 * s3) - s1 * (t1 * s4 - s3 * t2) + s2 * (t1 * s3 - s2 * t2)) / det;
+  const b =
+    (s0 * (t1 * s4 - t2 * s3) - t0 * (s1 * s4 - s3 * s2) + s2 * (s1 * t2 - t1 * s2)) / det;
+  const c =
+    (s0 * (s2 * t2 - s3 * t1) - s1 * (s1 * t2 - s3 * t0) + t0 * (s1 * s3 - s2 * s2)) / det;
+  return points.map(([k]) => {
+    const x = Math.log(k / spot);
+    return [k, Math.max(a + b * x + c * x * x, 0.01)] as SmilePoint;
+  });
+}
+
 export function smileIv(points: SmilePoint[], strike: number): number | null {
   if (points.length < 2) return null;
   if (strike <= points[0][0]) return points[0][1];

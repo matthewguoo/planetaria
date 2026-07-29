@@ -13,6 +13,7 @@ import { api } from "../lib/api";
 import {
   bsDelta,
   impliedVol,
+  smoothSmile,
   TRADING_HOURS_PER_YEAR,
   tradingHoursToExpiry,
   type Leg,
@@ -727,11 +728,18 @@ export function smileFromChain(
   expiry: string | null,
 ): { C: [number, number][]; P: [number, number][] } | null {
   if (!chain || !expiry) return null;
+  // Quadratic-fit smoothing: per-strike solves are noisy off-hours (each
+  // strike solved from its own junk quote) and scenario pricing must ride a
+  // smooth curve, not a sawtooth — ratio legs amplify smile noise into
+  // striped P/L surfaces.
   const build = (right: "C" | "P"): [number, number][] =>
-    chain.contracts
-      .filter((c) => c.expiry === expiry && c.right === right && c.iv > 0.005)
-      .map((c) => [c.strike, c.iv] as [number, number])
-      .sort((a, b) => a[0] - b[0]);
+    smoothSmile(
+      chain.contracts
+        .filter((c) => c.expiry === expiry && c.right === right && c.iv > 0.005)
+        .map((c) => [c.strike, c.iv] as [number, number])
+        .sort((a, b) => a[0] - b[0]),
+      chain.spot,
+    );
   const smiles = { C: build("C"), P: build("P") };
   if (smiles.C.length < 2 && smiles.P.length < 2) return null;
   return smiles;

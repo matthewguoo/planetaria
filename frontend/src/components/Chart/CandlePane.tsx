@@ -1673,7 +1673,7 @@ function drawSessionZones(
   etOff: number,
 ) {
   const halfBar = layout.plotW / view.barsVisible / 2;
-  ctx.fillStyle = "rgba(94,124,175,0.07)";
+  ctx.fillStyle = "rgba(104,138,196,0.16)";
   let runStart: number | null = null;
   const flush = (endIdx: number) => {
     if (runStart === null) return;

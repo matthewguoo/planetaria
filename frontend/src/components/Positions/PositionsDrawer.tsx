@@ -26,6 +26,21 @@ const fmtUsd = (v: number | null | undefined, sign = false) =>
 const pnlCls = (v: number | null | undefined) =>
   v === null || v === undefined ? "text-bb-muted" : v >= 0 ? "text-bb-profit" : "text-bb-loss";
 
+/** Premium cost basis in dollars for percent-return display. */
+function planBasis(plan: Plan): number {
+  const premium = Math.abs(plan.fill_premium ?? plan.entry_limit);
+  return premium * 100 * (plan.filled_qty || plan.qty);
+}
+
+/** "$X (+Y%)" against the premium basis — % omitted when basis is ~0
+ * (zero-cost structures have no meaningful percent return). */
+function fmtPnl(v: number | null | undefined, basis: number): string {
+  if (v === null || v === undefined) return "—";
+  const dollars = fmtUsd(v, true);
+  if (basis < 1) return dollars;
+  return `${dollars} (${v >= 0 ? "+" : ""}${((v / basis) * 100).toFixed(1)}%)`;
+}
+
 function etTime(iso: string): string {
   return new Intl.DateTimeFormat("en-US", {
     timeZone: "America/New_York",
@@ -109,8 +124,12 @@ function PositionRow({ plan }: { plan: Plan }) {
       <td data-numeric className="px-2 py-1 text-right">
         {plan.mark != null ? plan.mark.toFixed(2) : <span className="text-bb-orange">STALE</span>}
       </td>
-      <td data-numeric className={"px-2 py-1 text-right " + pnlCls(plan.unrealized_pnl)}>
-        {fmtUsd(plan.unrealized_pnl, true)}
+      <td
+        data-numeric
+        className={"px-2 py-1 text-right " + pnlCls(plan.unrealized_pnl)}
+        title="Unrealized P/L ($ and % of premium at risk)"
+      >
+        {fmtPnl(plan.unrealized_pnl, planBasis(plan))}
       </td>
       <td data-numeric className="px-2 py-1 text-right text-bb-profit">{plan.tp_premium.toFixed(2)}</td>
       <td data-numeric className="px-2 py-1 text-right text-bb-loss">{plan.sl_premium.toFixed(2)}</td>
@@ -326,8 +345,12 @@ function HistoryTab() {
                   <td className="px-2 py-1 text-center text-[10px] text-bb-muted">
                     {(t.exit_reason ?? t.status).toUpperCase()}
                   </td>
-                  <td data-numeric className={"px-2 py-1 text-right " + pnlCls(t.realized_pnl)}>
-                    {fmtUsd(t.realized_pnl, true)}
+                  <td
+                    data-numeric
+                    className={"px-2 py-1 text-right " + pnlCls(t.realized_pnl)}
+                    title="Realized P/L ($ and % of premium at risk)"
+                  >
+                    {fmtPnl(t.realized_pnl, planBasis(t))}
                   </td>
                 </tr>
               ))}
