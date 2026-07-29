@@ -20,9 +20,10 @@ function fmtEt(ms: number): string {
 }
 
 /** US equity session phase in ET. Extended hours are 04:00–09:30 (PRE) and
- * 16:00–20:00 (AH); 20:00–04:00 and weekends are CLOSED — the one window
- * where "no new candles" is correct, not stale. */
-export function sessionPhase(nowMs: number = Date.now()): "PRE" | "RTH" | "AH" | "CLOSED" {
+ * 16:00–20:00 (AH). 20:00–04:00 is the OVERNIGHT session (Blue Ocean ATS,
+ * Sun 20:00 → Fri 04:00) — the app polls its last trade so the chart keeps
+ * moving. Only Sat and most of Sunday are truly CLOSED. */
+export function sessionPhase(nowMs: number = Date.now()): "PRE" | "RTH" | "AH" | "O/N" | "CLOSED" {
   const parts = Object.fromEntries(
     new Intl.DateTimeFormat("en-US", {
       timeZone: "America/New_York",
@@ -34,18 +35,23 @@ export function sessionPhase(nowMs: number = Date.now()): "PRE" | "RTH" | "AH" |
       .formatToParts(new Date(nowMs))
       .map((p) => [p.type, p.value]),
   );
-  if (parts.weekday === "Sat" || parts.weekday === "Sun") return "CLOSED";
   const minute = Number(parts.hour === "24" ? 0 : parts.hour) * 60 + Number(parts.minute);
+  const day = parts.weekday;
+  if (day === "Sat") return "CLOSED";
+  if (day === "Sun") return minute >= 20 * 60 ? "O/N" : "CLOSED";
+  if (minute < 4 * 60) return "O/N"; // Mon-Fri tail of the overnight session
+  if (day !== "Fri" && minute >= 20 * 60) return "O/N";
   if (minute >= 4 * 60 && minute < 9 * 60 + 30) return "PRE";
   if (minute >= 9 * 60 + 30 && minute < 16 * 60) return "RTH";
   if (minute >= 16 * 60 && minute < 20 * 60) return "AH";
-  return "CLOSED";
+  return "CLOSED"; // Fri 20:00+
 }
 
 const PHASE_STYLE: Record<ReturnType<typeof sessionPhase>, string> = {
   RTH: "text-bb-profit",
   PRE: "text-bb-neutral",
   AH: "text-bb-neutral",
+  "O/N": "text-bb-neutral",
   CLOSED: "text-bb-muted",
 };
 
@@ -53,7 +59,8 @@ const PHASE_TITLE: Record<ReturnType<typeof sessionPhase>, string> = {
   RTH: "Regular trading hours (09:30–16:00 ET)",
   PRE: "Pre-market (04:00–09:30 ET) — thin extended-hours prints",
   AH: "After hours (16:00–20:00 ET) — thin extended-hours prints",
-  CLOSED: "Market closed (20:00–04:00 ET / weekend) — no prints anywhere; last candle is final",
+  "O/N": "Overnight session (Blue Ocean ATS, Sun 20:00 → Fri 04:00 ET) — last trade polled ~10s; thin institutional prints",
+  CLOSED: "Market closed (Fri 20:00 ET → Sun 20:00 ET) — no prints anywhere; last candle is final",
 };
 
 export function PriceReadout({ compact = false }: { compact?: boolean }) {
@@ -77,7 +84,7 @@ export function PriceReadout({ compact = false }: { compact?: boolean }) {
   return (
     <span data-numeric className={"text-bb-amber" + (compact ? " min-w-0 truncate text-[13px]" : "")}>
       {spot > 0 ? spot.toFixed(2) : "—"}
-      {!compact && quote && (
+      {!compact && quote && quote.bid !== quote.ask && (
         <span
           className={"ml-3 " + (stale ? "text-bb-orange" : "text-bb-muted")}
           title={
@@ -88,6 +95,11 @@ export function PriceReadout({ compact = false }: { compact?: boolean }) {
         >
           {quote.bid.toFixed(2)} × {quote.ask.toFixed(2)}
           {stale ? ` · Q ${fmtEt(quote.ts)}` : ""}
+        </span>
+      )}
+      {!compact && quote && quote.bid === quote.ask && (
+        <span className="ml-3 text-bb-muted" title="Overnight trade print (no book) — bid/ask resume at 04:00 ET">
+          LAST {fmtEt(quote.ts)} ET
         </span>
       )}
       <span className={"ml-2 text-[10px] " + PHASE_STYLE[phase]} title={PHASE_TITLE[phase]}>

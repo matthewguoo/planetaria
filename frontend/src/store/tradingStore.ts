@@ -56,6 +56,10 @@ type TradingState = {
   setQuote: (quote: Quote) => void;
   patchStatus: (patch: Partial<FeedStatus>) => void;
   toggleIndicator: (key: keyof IndicatorToggles) => void;
+  /** Show extended-hours bars (pre/after/overnight). Default OFF: RTH-only
+   * candles with day boundaries — the discretionary-intraday default. */
+  showEth: boolean;
+  toggleShowEth: () => void;
 };
 
 export const useTradingStore = create<TradingState>((set) => ({
@@ -70,4 +74,15 @@ export const useTradingStore = create<TradingState>((set) => ({
   patchStatus: (patch) => set((s) => ({ status: { ...s.status, ...patch } })),
   toggleIndicator: (key) =>
     set((s) => ({ indicators: { ...s.indicators, [key]: !s.indicators[key] } })),
+  showEth: typeof localStorage !== "undefined" && localStorage.getItem("planetaria.showEth") === "1",
+  toggleShowEth: () =>
+    set((s) => {
+      const next = !s.showEth;
+      try {
+        localStorage.setItem("planetaria.showEth", next ? "1" : "0");
+      } catch {
+        // storage unavailable (private mode) — session-only toggle
+      }
+      return { showEth: next };
+    }),
 }));

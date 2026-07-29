@@ -34,6 +34,30 @@ SIP_DELAY_S = 16 * 60  # free tier: SIP allowed only >15min old; use 16 for marg
 # newest bar; beyond that the trade-derived bar close wins.
 QUOTE_VS_BAR_GRACE_MS = 60_000
 
+# Overnight (Blue Ocean ATS via Alpaca's `overnight` feed): the 20:00-04:00 ET
+# session that runs Sun 20:00 -> Fri 04:00. Only the latest-trade REST
+# endpoint carries it on the free tier, so we poll and roll our own 1m bars.
+OVERNIGHT_POLL_S = 10.0
+OVERNIGHT_URL = "https://data.alpaca.markets/v2/stocks/{symbol}/trades/latest?feed=overnight"
+
+
+def is_overnight_et(now_utc: datetime) -> bool:
+    """True inside the Blue Ocean overnight session (ET):
+    Sun-Thu 20:00 -> next-day 04:00 (so Mon-Fri 00:00-04:00 and Sun-Thu
+    20:00-24:00). Sat is fully closed; Fri closes at 04:00."""
+    from zoneinfo import ZoneInfo
+
+    et = now_utc.astimezone(ZoneInfo("America/New_York"))
+    minute = et.hour * 60 + et.minute
+    dow = et.weekday()  # Mon=0 .. Sun=6
+    if dow == 5:  # Sat
+        return False
+    if dow == 6:  # Sun: session opens 20:00
+        return minute >= 1200
+    if dow == 4:  # Fri: only the tail of Thu's session
+        return minute < 240
+    return minute < 240 or minute >= 1200  # Mon-Thu
+
 
 def freshest_spot(quote: dict | None, last_bar: dict | None) -> float:
     """Freshest defensible spot price.
@@ -82,6 +106,8 @@ class MarketDataService:
         self._option_refs: dict[str, int] = {}
         self._latest_quotes: dict[str, dict] = {}  # symbol -> quote msg (stock + option)
         self._quote_fetch_at: dict[str, float] = {}  # symbol -> monotonic REST attempt
+        self._overnight_bars: dict[str, dict] = {}  # symbol -> forming 1m bar
+        self._overnight_trade_ids: dict[str, int] = {}  # dedupe volume across polls
         self._last_stream_msg: float = 0.0
         self._stock_stream = None
         self._option_stream = None
@@ -139,7 +165,82 @@ class MarketDataService:
                 supervise("option-stream", self._option_stream._run_forever),
                 name="option-stream",
             ),
+            asyncio.create_task(
+                supervise("overnight-poll", self._overnight_poll_loop),
+                name="overnight-poll",
+            ),
         ]
+
+    async def _overnight_poll_loop(self) -> None:
+        """Blue Ocean overnight freshness: while the 20:00-04:00 ET session is
+        live, poll each subscribed symbol's latest overnight trade (~10s) and
+        roll our own 1m bars — the IEX stream is silent in that window and a
+        chart pinned to the 8pm close would anchor pricing a point or more off
+        the tape that Blue Ocean is actually printing."""
+        import httpx
+
+        headers = {
+            "APCA-API-KEY-ID": self.settings.alpaca_api_key,
+            "APCA-API-SECRET-KEY": self.settings.alpaca_secret_key,
+        }
+        async with httpx.AsyncClient(headers=headers, timeout=8.0) as client:
+            while True:
+                await asyncio.sleep(OVERNIGHT_POLL_S)
+                if not is_overnight_et(datetime.now(timezone.utc)):
+                    self._overnight_bars.clear()
+                    self._overnight_trade_ids.clear()
+                    continue
+                for symbol in list(self._stock_refs.keys()):
+                    try:
+                        await self._poll_overnight_symbol(client, symbol)
+                    except Exception as exc:
+                        log.warning("overnight poll %s failed: %s", symbol, exc)
+
+    async def _poll_overnight_symbol(self, client, symbol: str) -> None:
+        resp = await client.get(OVERNIGHT_URL.format(symbol=symbol))
+        if resp.status_code != 200:
+            return
+        trade = (resp.json() or {}).get("trade") or {}
+        price = float(trade.get("p") or 0)
+        size = int(trade.get("s") or 0)
+        raw_ts = trade.get("t")
+        trade_id = trade.get("i")
+        if price <= 0 or not raw_ts:
+            return
+        ts = datetime.fromisoformat(raw_ts.split(".")[0] + "+00:00")
+        ts_ms = int(ts.timestamp() * 1000)
+        # A weekend-stale print must not masquerade as a live tick.
+        if time.time() * 1000 - ts_ms > 20 * 60_000:
+            return
+
+        cached = self._latest_quotes.get(symbol)
+        if cached is None or ts_ms >= cached["ts"]:
+            # A trade print, not a book: bid == ask == last. freshest_spot and
+            # the header treat it as the live price; the O/N phase chip and
+            # zero spread make the provenance readable.
+            msg = {"t": "quote", "symbol": symbol, "bid": price, "ask": price,
+                   "mid": price, "ts": ts_ms, "src": "overnight"}
+            self._latest_quotes[symbol] = msg
+            self.broadcast.publish(f"quote:{symbol}", msg)
+
+        minute_ts = ts_ms - (ts_ms % 60_000)
+        bar = self._overnight_bars.get(symbol)
+        is_new_trade = self._overnight_trade_ids.get(symbol) != trade_id
+        self._overnight_trade_ids[symbol] = trade_id
+        if bar is None or bar["t"] != minute_ts:
+            bar = {"t": minute_ts, "o": price, "h": price, "l": price, "c": price, "v": 0}
+            self._overnight_bars[symbol] = bar
+        bar["h"] = max(bar["h"], price)
+        bar["l"] = min(bar["l"], price)
+        bar["c"] = price
+        if is_new_trade:
+            bar["v"] += size
+        updates = await self.bars.upsert_1m(symbol, dict(bar))
+        for tf, updated in updates:
+            self.broadcast.publish(
+                f"bars:{symbol}:{tf}",
+                {"t": "bar", "symbol": symbol, "tf": tf, "bar": updated},
+            )
 
     async def stop(self) -> None:
         if self.demo:

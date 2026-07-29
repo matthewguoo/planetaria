@@ -256,10 +256,22 @@ export function CandlePane({
   indicatorsRef.current = indicatorToggles;
   // Tick-fresh display: the newest FRESH quote extends the forming bar so the
   // chart moves with every tick instead of once per bar close. Display-only —
-  // stored bar data stays exactly what the feed delivered.
+  // stored bar data stays exactly what the feed delivered. In RTH-only mode
+  // an extended-hours tick must NOT extend the last RTH candle (it would
+  // falsify the session close), so the extension is gated to RTH minutes.
+  const showEth = useTradingStore((s) => s.showEth);
+  const showEthRef = useRef(showEth);
+  showEthRef.current = showEth;
   const liveTickRef = useRef<{ mid: number; ts: number } | null>(null);
-  liveTickRef.current =
-    quote && quote.mid > 0 && !quoteIsStale(quote) ? { mid: quote.mid, ts: quote.ts } : null;
+  liveTickRef.current = (() => {
+    if (!quote || quote.mid <= 0 || quoteIsStale(quote)) return null;
+    if (!showEth) {
+      const minuteOfDay =
+        ((quote.ts / 60_000 + etOffsetMinutes(quote.ts)) % 1440 + 1440) % 1440;
+      if (minuteOfDay < RTH_START_MIN || minuteOfDay >= RTH_END_MIN) return null;
+    }
+    return { mid: quote.mid, ts: quote.ts };
+  })();
   const rafRef = useRef(0);
 
   // ------------------------------------------------- strategy derivations
@@ -395,6 +407,7 @@ export function CandlePane({
         dragTargetRef.current,
         indicatorsRef.current,
         liveTickRef.current,
+        showEthRef.current,
       );
       // Feed HTML layers outside the canvas (sidebar HUD, leg rail).
       sharedBars.current = barsRef.current;
@@ -468,16 +481,28 @@ export function CandlePane({
       if (!view || disposed) return;
       const cols = await view.to_columns();
       if (disposed) return;
-      const t = cols.t as number[] | undefined;
-      const n = t?.length ?? 0;
+      const t = (cols.t as number[] | undefined) ?? [];
+      let idx = t.map((_, i) => i);
+      // RTH-only default: extended-hours bars are dropped entirely, so days
+      // sit contiguous on the index axis and future-time mapping is exactly
+      // trading-time. The ETH toggle shows the full tape.
+      if (!showEth && t.length) {
+        const etOff = etOffsetMinutes(t[t.length - 1]);
+        idx = idx.filter((i) => {
+          const minuteOfDay = (((t[i] / 60_000 + etOff) % 1440) + 1440) % 1440;
+          return minuteOfDay >= RTH_START_MIN && minuteOfDay < RTH_END_MIN;
+        });
+      }
+      const n = idx.length;
+      const pick = (col: unknown[]) => Float64Array.from(idx, (i) => col[i] as number);
       barsRef.current = n
         ? {
-            t: Float64Array.from(cols.t as number[]),
-            o: Float64Array.from(cols.o as number[]),
-            h: Float64Array.from(cols.h as number[]),
-            l: Float64Array.from(cols.l as number[]),
-            c: Float64Array.from(cols.c as number[]),
-            v: Float64Array.from(cols.v as number[]),
+            t: pick(cols.t as number[]),
+            o: pick(cols.o as number[]),
+            h: pick(cols.h as number[]),
+            l: pick(cols.l as number[]),
+            c: pick(cols.c as number[]),
+            v: pick(cols.v as number[]),
             n,
           }
         : EMPTY;
@@ -506,7 +531,7 @@ export function CandlePane({
       void view?.delete();
       barsRef.current = EMPTY;
     };
-  }, [symbol, tf, draw]);
+  }, [symbol, tf, draw, showEth]);
 
   useEffect(() => {
     const observer = new ResizeObserver(draw);
@@ -902,6 +927,7 @@ function render(
   dragTarget: DragTarget | null,
   indicators: IndicatorToggles,
   liveTick: { mid: number; ts: number } | null = null,
+  showEth = false,
 ) {
   const draggingStrike = dragTarget?.kind === "strike" ? dragTarget.i : null;
   ctx.fillStyle = COLORS.bg;
@@ -935,7 +961,7 @@ function render(
   const anchorIdx = anchorIndexFor(bars, overlay);
   const etOff = etOffsetMinutes(bars.t[bars.n - 1]);
   drawPriceGrid(ctx, layout, domain);
-  drawSessionZones(ctx, layout, bars, view, first, last, etOff);
+  if (showEth) drawSessionZones(ctx, layout, bars, view, first, last, etOff);
   drawSessionBoundaries(ctx, layout, bars, view, first, last, etOff);
   drawTimeAxis(ctx, layout, bars, view, first, last, overlay, tfMinutes, anchorIdx);
 

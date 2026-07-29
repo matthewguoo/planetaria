@@ -61,6 +61,8 @@ function PositionBanner() {
 export function ChartControls() {
   const tf = useTradingStore((s) => s.tf);
   const setTf = useTradingStore((s) => s.setTf);
+  const showEth = useTradingStore((s) => s.showEth);
+  const toggleShowEth = useTradingStore((s) => s.toggleShowEth);
   const chainOpen = useUiStore((s) => s.chainOpen);
   const toggleChain = useUiStore((s) => s.toggleChain);
 
@@ -82,6 +84,18 @@ export function ChartControls() {
           {option.toUpperCase()}
         </button>
       ))}
+      <button
+        onClick={toggleShowEth}
+        title="Extended hours: show pre-market / after-hours / overnight bars (shaded). Off = regular session only, days contiguous."
+        className={
+          "px-2 py-0.5 text-[11px] " +
+          (showEth
+            ? "bg-bb-hover font-semibold text-bb-amber"
+            : "text-bb-muted hover:bg-bb-hover hover:text-bb-amber")
+        }
+      >
+        ETH
+      </button>
       <div className="mx-2 h-4 w-px bg-bb-border" />
       <button
         onClick={toggleChain}
