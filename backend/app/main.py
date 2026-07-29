@@ -46,11 +46,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(market_router)
-app.include_router(options_router)
+# The ENGINE API (trading commands + system ops) is always mounted; the
+# UI-serving surface (chain, bars REST, browser WebSocket fanout) is
+# skipped in HEADLESS mode — engine-only deployments for reliability.
 app.include_router(trading_router)
 app.include_router(system_router)
-app.include_router(ws_router)
+if not get_settings().headless:
+    app.include_router(market_router)
+    app.include_router(options_router)
+    app.include_router(ws_router)
 
 
 @app.get("/api/health")

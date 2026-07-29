@@ -240,6 +240,26 @@ The THETA chip in the HUD turns on the premium-seller's workspace:
   spread friction — the honest number for whether the structure is worth
   selling after costs.
 
+### Engine API & headless mode
+
+The execution engine (streams → FSM → exit enforcer → reconcile → risk)
+is architecturally separate from the UI-serving surface, and can run
+alone: `HEADLESS=true` boots the full engine plus only its **command/ops
+API** — no chain/bars endpoints, no browser WebSocket:
+
+- Commands: `POST /api/orders`, `POST /api/positions/{id}/close`,
+  `/flatten`, `PATCH /api/positions/{id}/exits` (tighten-only),
+  `POST /api/positions/adopt`
+- Ops: `GET /api/system/state`, `GET /api/positions/{id}/events`
+  (lifecycle journal), `GET/PUT /api/settings/risk` and `/feed`,
+  `GET /api/health`
+
+This is the future split seam: run the engine supervised on an always-on
+host (systemd/docker restart-always — restarts are safe, the reconcile
+machinery rebuilds all monitors from the DB) and keep the UI wherever
+you like. Until real capital or multi-user needs force a true two-process
+split, one supervised process is the more reliable shape.
+
 ### System menu & lifecycle journal
 
 The ⚙ button (desktop and phone headers) opens the SYSTEM menu:

@@ -28,6 +28,13 @@ class Settings(BaseSettings):
 
     cors_origins: list[str] = ["http://localhost:5173", "http://127.0.0.1:5173"]
 
+    # HEADLESS=true boots the ENGINE ONLY: full execution stack (streams,
+    # FSM, exit enforcer, reconcile, risk) plus the command/ops API, but no
+    # UI-serving routes (chain, bars REST, browser WebSocket). This is the
+    # future split seam: run the engine supervised on an always-on host and
+    # point any UI at it — or at a separate UI-serving instance.
+    headless: bool = False
+
     # Risk defaults; live values persisted in app_settings table.
     default_max_loss_pct: float = 0.02
     default_daily_loss_pct: float = 0.06
