@@ -289,16 +289,20 @@ async def wait_status(trade, plan_id, want=("closed",), deadline=5.0) -> str:
     return (await trade.get_plan(plan_id)).status
 
 
-async def auto_filler(broker, trade, deliver_events=True, delay=0.06, price=1.5):
+async def auto_filler(broker, trade, deliver_events=True, delay=0.06, price=1.5,
+                      skip_substr=None):
     """Fills accepted orders after a delay; optionally delivers the stream
-    event (a real broker sometimes doesn't — reconcile must cover)."""
+    event (a real broker sometimes doesn't — reconcile must cover).
+    skip_substr: never fill orders whose client id contains it (lets a test
+    keep a resting TP unfilled while its stop-close race runs)."""
     try:
         while True:
             await asyncio.sleep(0.02)
             now = time.monotonic()
             with broker.lock:
                 due = [o for o in broker.orders.values()
-                       if o.status == "accepted" and now - o.submitted_mono >= delay]
+                       if o.status == "accepted" and now - o.submitted_mono >= delay
+                       and not (skip_substr and skip_substr in o.client_order_id)]
             for order in due:
                 try:
                     broker.fill(order.id, price)
@@ -610,8 +614,13 @@ async def test_sl_trigger_cancels_resting_tp_first(stack):
     stack.enforcer.quote_poll_s = 0.05
     stack.enforcer.quote_poll_near_s = 0.05
     stack.market.quotes[SYM] = {"bid": 1.99, "ask": 2.01, "mid": 2.0}
+    # The filler must never fill the RESTING TP itself: this test is about
+    # the SL trigger winning and taking the TP down. (If the TP fill wins
+    # the race instead, absorbing it as a TP close is the CORRECT outcome —
+    # covered by test_resting_tp_placed_at_broker_and_fill_closes_plan.)
     filler = asyncio.create_task(
-        auto_filler(stack.broker, stack.trade, deliver_events=False, price=0.9)
+        auto_filler(stack.broker, stack.trade, deliver_events=False, price=0.9,
+                    skip_substr="-xtp")
     )
     try:
         await stack.enforcer.arm(plan.id)
@@ -677,8 +686,9 @@ async def test_underlying_tick_triggers_fast_sl(stack):
 
 @pytest.mark.asyncio
 async def test_sl_single_spike_does_not_shake_out(stack):
-    """One junk print below the stop (spread bounce, stale side) must NOT
-    fire the SL: the median filter absorbs isolated spikes entirely."""
+    """One tight-but-transient print below the stop must NOT fire the SL:
+    it isn't deep enough for the crash fast-path, so it has to survive the
+    confirmation dwell — and it doesn't."""
     await stack.trade.risk.update_settings({"sl_confirm_s": 0.4})
     plan = await make_plan(stack.db, broker=stack.broker)
     stack.enforcer.quote_poll_s = 0.05
@@ -695,6 +705,40 @@ async def test_sl_single_spike_does_not_shake_out(stack):
         assert refreshed.status == "filled", (
             f"spike shook the position out (status={refreshed.status})"
         )
+    finally:
+        stack.enforcer.disarm(plan.id)
+
+
+@pytest.mark.asyncio
+async def test_sl_wide_junk_quote_cannot_fire_stop(stack):
+    """A blown-out spread printing a 'mid' below the stop must not fire the
+    SL even with the dwell OFF: the Kalman fair value weights quotes by
+    their spread, so a junk observation carries almost no information."""
+    # Fixture default: sl_confirm_s = 0 (instant fire on a fair-value breach).
+    plan = await make_plan(stack.db, broker=stack.broker)
+    stack.enforcer.quote_poll_s = 0.05
+    stack.enforcer.quote_poll_near_s = 0.05
+    try:
+        await stack.enforcer.arm(plan.id)
+        # Establish fair value with tight healthy quotes at 2.0.
+        for _ in range(5):
+            stack.market.pump(SYM, 2.0)
+            await asyncio.sleep(0.06)
+        # Spread blows out: bid 0.10 / ask 1.70 -> "mid" 0.90 <= SL 1.0,
+        # but the quote is 1.60 wide on a 3.0 bracket — pure noise.
+        for _ in range(8):
+            stack.market.quotes[SYM] = {"bid": 0.10, "ask": 1.70, "mid": 0.90}
+            stack.market.broadcast.publish(f"oquote:{SYM}", {"t": "oquote", "symbol": SYM})
+            await asyncio.sleep(0.06)
+        refreshed = await stack.trade.get_plan(plan.id)
+        assert refreshed.status == "filled", (
+            f"junk quote fired the stop (status={refreshed.status})"
+        )
+        # The real market returns: still holding.
+        for _ in range(5):
+            stack.market.pump(SYM, 2.0)
+            await asyncio.sleep(0.06)
+        assert (await stack.trade.get_plan(plan.id)).status == "filled"
     finally:
         stack.enforcer.disarm(plan.id)
 

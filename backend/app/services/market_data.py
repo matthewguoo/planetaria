@@ -334,7 +334,9 @@ class MarketDataService:
             return
         for sym, quote in result.items():
             msg = self._quote_msg("oquote", sym, quote.bid_price, quote.ask_price,
-                                  quote.timestamp)
+                                  quote.timestamp,
+                                  getattr(quote, "bid_size", None),
+                                  getattr(quote, "ask_size", None))
             self._latest_quotes[sym] = msg
             self.broadcast.publish(f"oquote:{sym}", msg)
         missing = [s for s in stale if s not in result]
@@ -353,7 +355,9 @@ class MarketDataService:
             result = await self.alpaca.call(self.alpaca.stock_data.get_stock_latest_quote, request)
             quote = result[symbol]
             msg = self._quote_msg("quote", symbol, quote.bid_price, quote.ask_price,
-                                  quote.timestamp)
+                                  quote.timestamp,
+                                  getattr(quote, "bid_size", None),
+                                  getattr(quote, "ask_size", None))
             self._latest_quotes[symbol] = msg
             return msg
         except Exception as exc:
@@ -362,7 +366,8 @@ class MarketDataService:
 
     # -------------------------------------------------------------- handlers
 
-    def _quote_msg(self, kind: str, symbol: str, bid, ask, ts) -> dict:
+    def _quote_msg(self, kind: str, symbol: str, bid, ask, ts,
+                   bid_size=None, ask_size=None) -> dict:
         bid = float(bid or 0)
         ask = float(ask or 0)
         mid = (bid + ask) / 2 if bid and ask else (ask or bid)
@@ -372,6 +377,9 @@ class MarketDataService:
             "bid": bid,
             "ask": ask,
             "mid": round(mid, 4),
+            # Book pressure feeds the microprice trigger (fair_value.py).
+            "bid_size": float(bid_size) if bid_size else None,
+            "ask_size": float(ask_size) if ask_size else None,
             "ts": int(ts.timestamp() * 1000) if ts else int(time.time() * 1000),
         }
 
@@ -387,13 +395,19 @@ class MarketDataService:
 
     async def _on_stock_quote(self, quote) -> None:
         self._last_stream_msg = time.monotonic()
-        msg = self._quote_msg("quote", quote.symbol, quote.bid_price, quote.ask_price, quote.timestamp)
+        msg = self._quote_msg("quote", quote.symbol, quote.bid_price, quote.ask_price,
+                              quote.timestamp,
+                              getattr(quote, "bid_size", None),
+                              getattr(quote, "ask_size", None))
         self._latest_quotes[quote.symbol] = msg
         self.broadcast.publish(f"quote:{quote.symbol}", msg)
         await self.redis.set_json(f"quote:{quote.symbol}", json.dumps(msg), ttl_seconds=60)
 
     async def _on_option_quote(self, quote) -> None:
         self._last_stream_msg = time.monotonic()
-        msg = self._quote_msg("oquote", quote.symbol, quote.bid_price, quote.ask_price, quote.timestamp)
+        msg = self._quote_msg("oquote", quote.symbol, quote.bid_price, quote.ask_price,
+                              quote.timestamp,
+                              getattr(quote, "bid_size", None),
+                              getattr(quote, "ask_size", None))
         self._latest_quotes[quote.symbol] = msg
         self.broadcast.publish(f"oquote:{quote.symbol}", msg)

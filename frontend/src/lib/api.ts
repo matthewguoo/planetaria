@@ -29,8 +29,8 @@ export type RiskSettings = {
   max_spread_pct: number;
   entry_ttl_min: number;
   max_trades_per_day: number;
-  /** SL breach must persist this long (median-filtered) before firing;
-   * deep breaches fire immediately. 0 = instant. */
+  /** SL breach must persist this long (on the Kalman fair value) before
+   * firing; deep breaches fire immediately. 0 = instant. */
   sl_confirm_s: number;
 };
 

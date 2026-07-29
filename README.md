@@ -292,25 +292,41 @@ If a mid is ever uncomputable (a leg with no quote even via REST), the
 monitor says so: throttled log naming the legs, per-plan health in
 `/api/system/state`, and a NO-QUOTE warning in the SYSTEM menu.
 
-### Denoised stop (no shakeouts, no blowups)
+### Fair-value stop trigger (no shakeouts, no blowups)
 
 Raw option mids are chaotic — a one-tick spread blowout can print a mid
-below the stop for 200ms and vanish. The SL trigger therefore runs the
-standard production combo (there is no single named algorithm; real desks
-converge on exactly this):
+below the stop for 200ms and vanish. Triggers therefore never act on the
+raw mid: they act on the estimator stack production desks run
+(`app/services/fair_value.py`):
 
-- **Median filter** — the trigger evaluates the median of the last 3 mids,
-  so a single bad print can never fire the stop by itself.
-- **Confirmation dwell** — a breach must persist `sl_confirm_s` seconds
-  (risk setting, default 3s, 0 = instant) before the exit ladder starts.
-  While confirming, the monitor re-checks every 0.5s with forced quote
-  refreshes and reports `sl-confirming (Ns)` in its health.
-- **Deep-breach override** — if the (filtered) mid is ≥25% of the TP-SL
-  span past the stop, it fires immediately: a real collapse never waits
-  out the dwell. This bounds the extra loss the dwell can cost.
-- **Hysteresis** — the confirmation timer only resets once the mid recovers
-  2% of the span back above the stop, so a mid oscillating exactly on the
-  line can't reset the clock forever.
+- **Microprice, not mid** (Stoikov) — the size-weighted quote price
+  `I·ask + (1−I)·bid` with `I = bid_size/(bid_size+ask_size)` leans
+  toward resting book pressure and predicts the next trade better than
+  the midpoint. Quotes without sizes fall back to the mid.
+- **Spread-gated trust** — each observation enters a 1-D Kalman filter
+  with measurement variance = (position half-spread)². A tight two-sided
+  market snaps the fair value; a blown-out, one-sided, or crossed quote
+  barely moves it — so a junk print *cannot* fire the stop, even with
+  the dwell at zero. Persistently wide markets still converge the
+  estimate (information beats suspicion), just slowly.
+- **Theo-drift prediction** — between option quotes, the fair value is
+  moved by the *change* in the BSM model value driven by underlying
+  ticks (which stream constantly). Differencing cancels model level
+  bias; only its dynamics are trusted.
+
+On top of the estimator, the trigger-decision layer:
+
+- **Confirmation dwell** — a fair-value breach must persist `sl_confirm_s`
+  seconds (risk setting, default 3s, 0 = instant) before the exit ladder
+  starts. While confirming, the monitor re-checks every 0.5s with forced
+  quote refreshes and reports `sl-confirming (Ns)` in its health.
+- **Deep-breach override** — a fair value ≥25% of the TP-SL span past the
+  stop fires immediately; so does a *raw* microprice that deep when the
+  quote is quality (half-spread ≤10% of the span): a tight market
+  printing a crash is real, don't wait for the filter or the dwell.
+- **Hysteresis** — the confirmation timer only resets once the fair value
+  recovers 2% of the span back above the stop, so a value oscillating
+  exactly on the line can't reset the clock forever.
 
 The live conditionals are visible in the chart HUD: viewing a position
 shows an ENFORCER block with monitor health, mark vs bracket, distance to

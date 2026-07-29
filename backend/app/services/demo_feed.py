@@ -219,6 +219,9 @@ class DemoFeed:
                 "bid": round(max(mid - half, 0.0), 2),
                 "ask": round(mid + half, 2),
                 "mid": round(mid, 4),
+                # Balanced synthetic book: microprice == mid.
+                "bid_size": 10.0,
+                "ask_size": 10.0,
                 "ts": int(now_ms),
             }
             self.market._latest_quotes[sym] = msg

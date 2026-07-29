@@ -126,7 +126,7 @@ function EnforcerBlock({ planId }: { planId: string }) {
       />
       <StatRow
         label="SL"
-        value="median mid + dwell → ladder −2%→−6%→MKT"
+        value="µprice→KF fair value + dwell → ladder −2%→−6%→MKT"
         cls="text-bb-muted"
       />
       <StatRow label="TIME STOP" value={etCountdown(plan.time_stop_utc)} cls="text-bb-orange" />

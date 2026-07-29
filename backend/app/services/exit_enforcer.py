@@ -24,14 +24,24 @@ log = logging.getLogger("app.enforcer")
 
 ESCALATION = [(0.02, 5.0), (0.06, 5.0), (None, 0.0)]  # (buffer, wait_after)
 
-# SL denoising (option mids flicker: spread bounce, stale sides, junk
-# prints). A breach must persist sl_confirm_s on MEDIAN-filtered mids —
-# unless it is DEEP (>= this fraction of the TP-SL span past the stop),
-# in which case it fires immediately: real crashes are large, noise is
-# small. Hysteresis stops re-arm churn at the line.
+# SL trigger stack (see fair_value.py for the estimator): TP/SL act on a
+# Kalman fair value (microprice observations weighted by quote quality,
+# theo-drift prediction between quotes) — a wide junk print CANNOT move
+# the trigger price, so it cannot shake the position out. On top of the
+# estimator: a breach must persist sl_confirm_s (dwell) — unless it is
+# DEEP (>= SL_DEEP_FRAC of the TP-SL span past the stop), where blowup
+# prevention beats shakeout prevention and it fires immediately. A raw
+# microprice deep past the stop also fires immediately when the quote is
+# QUALITY (half-spread <= SL_QUALITY_HS_FRAC of the span): a tight
+# two-sided market printing a crash is real, don't wait for the filter.
+# Hysteresis stops dwell-clock churn exactly at the line.
 SL_DEEP_FRAC = 0.25
 SL_HYSTERESIS_FRAC = 0.02
-MID_FILTER_WINDOW = 3
+SL_QUALITY_HS_FRAC = 0.10
+# Process noise: the position's fair value can plausibly drift this
+# fraction of the bracket span per second (0-DTE realistic); measurement
+# trust then follows from each quote's spread.
+KF_PROC_FRAC = 0.05
 
 
 def model_position_value(plan: TradePlan, spot: float, now_ms: float) -> float | None:
@@ -367,10 +377,9 @@ class ExitEnforcer:
             next_tp_rest_try = 0.0
             wait_s = self.quote_poll_near_s
             msg: dict | None = None
-            from collections import deque
-            from statistics import median
+            from app.services.fair_value import FairValueFilter, position_quote_stats
 
-            recent_mids: deque = deque(maxlen=MID_FILTER_WINDOW)
+            fv_filter = FairValueFilter()
             sl_breach_since: float | None = None
             try:
                 while True:
@@ -457,6 +466,9 @@ class ExitEnforcer:
                         spot = float(msg.get("mid") or 0)
                         mv = model_position_value(plan, spot, time.time() * 1000)
                         if mv is not None:
+                            # Theo drift: the model's CHANGE moves the fair
+                            # value between option quotes (level bias cancels).
+                            fv_filter.on_model_value(mv)
                             span = abs(plan.tp_premium - plan.sl_premium) or 1.0
                             near = 0.15 * span
                             if mv >= plan.tp_premium - near or mv <= plan.sl_premium + near:
@@ -469,8 +481,8 @@ class ExitEnforcer:
                                                 plan_id, exc)
 
                     quotes = {s: self.market.latest_quote(s) for s in symbols}
-                    mid = position_mid_from_quotes(plan.legs, quotes)
-                    if mid is None:
+                    stats = position_quote_stats(plan.legs, quotes)
+                    if stats is None:
                         # Keep trying at the tight cadence until quotes appear.
                         wait_s = self.quote_poll_near_s
                         missing = [s for s in symbols
@@ -487,37 +499,50 @@ class ExitEnforcer:
                             )
                         continue
                     self.monitor_health[plan_id] = "ok"
-                    # Median filter kills single-tick spikes (spread bounce,
-                    # one junk print) at the cost of tiny lag.
-                    recent_mids.append(mid)
-                    fmid = median(recent_mids)
-                    # Adaptive cadence: tighten the poll floor near thresholds.
+                    micro, half_spread = stats
                     span = abs(plan.tp_premium - plan.sl_premium) or 1.0
-                    dist = min(abs(fmid - plan.tp_premium), abs(fmid - plan.sl_premium))
+                    # Kalman update: quote trust scales with its spread —
+                    # a wide junk print CANNOT move the trigger price.
+                    fv = fv_filter.on_quote(
+                        micro, half_spread, time.monotonic(),
+                        q_rate=(KF_PROC_FRAC * span) ** 2,
+                    )
+                    quality = half_spread <= SL_QUALITY_HS_FRAC * span
+                    # Adaptive cadence: tighten the poll floor near thresholds.
+                    dist = min(abs(fv - plan.tp_premium), abs(fv - plan.sl_premium))
                     wait_s = self.quote_poll_near_s if dist < 0.2 * span else self.quote_poll_s
                     # TP side: software trigger only when no broker-resting TP
                     # is working the level already.
-                    if not plan.tp_order_id and fmid >= plan.tp_premium:
-                        log.info("TP hit for plan %s (mid %.2f)", plan.id, fmid)
+                    if not plan.tp_order_id and fv >= plan.tp_premium:
+                        log.info("TP hit for plan %s (fv %.2f)", plan.id, fv)
                         await self._execute_exit(plan_id, "tp")
                         return
-                    # SL: deep breaches fire NOW; shallow ones must persist
-                    # (dwell) so quote noise can't shake the position out.
-                    if fmid <= plan.sl_premium:
-                        depth = plan.sl_premium - fmid
+                    # SL: deep breaches fire NOW — on the fair value, or on a
+                    # QUALITY raw microprice (a tight two-sided market
+                    # printing a crash is real; don't wait for the filter).
+                    # Shallow breaches must persist (dwell) so residual noise
+                    # can't shake the position out.
+                    deep = SL_DEEP_FRAC * span
+                    if (plan.sl_premium - fv >= deep) or (
+                        quality and plan.sl_premium - micro >= deep
+                    ):
+                        log.warning("SL hit for plan %s (fv %.2f micro %.2f, deep breach)",
+                                    plan.id, fv, micro)
+                        await self._execute_exit(plan_id, "sl")
+                        return
+                    if fv <= plan.sl_premium:
                         now_mono = time.monotonic()
-                        if depth >= SL_DEEP_FRAC * span or sl_confirm_s <= 0:
-                            log.warning("SL hit for plan %s (mid %.2f, deep breach)",
-                                        plan.id, fmid)
+                        if sl_confirm_s <= 0:
+                            log.warning("SL hit for plan %s (fv %.2f)", plan.id, fv)
                             await self._execute_exit(plan_id, "sl")
                             return
                         if sl_breach_since is None:
                             sl_breach_since = now_mono
                             log.info("plan %s: SL breach @ %.2f - confirming for %.1fs",
-                                     plan.id, fmid, sl_confirm_s)
+                                     plan.id, fv, sl_confirm_s)
                         elif now_mono - sl_breach_since >= sl_confirm_s:
-                            log.warning("SL hit for plan %s (mid %.2f, held %.1fs)",
-                                        plan.id, fmid, now_mono - sl_breach_since)
+                            log.warning("SL hit for plan %s (fv %.2f, held %.1fs)",
+                                        plan.id, fv, now_mono - sl_breach_since)
                             await self._execute_exit(plan_id, "sl")
                             return
                         self.monitor_health[plan_id] = (
@@ -531,10 +556,10 @@ class ExitEnforcer:
                         except Exception:
                             pass
                     elif sl_breach_since is not None and (
-                        fmid > plan.sl_premium + SL_HYSTERESIS_FRAC * span
+                        fv > plan.sl_premium + SL_HYSTERESIS_FRAC * span
                     ):
-                        log.info("plan %s: SL breach cleared (mid %.2f) - dwell reset",
-                                 plan.id, fmid)
+                        log.info("plan %s: SL breach cleared (fv %.2f) - dwell reset",
+                                 plan.id, fv)
                         sl_breach_since = None
             finally:
                 for sym in symbols:
