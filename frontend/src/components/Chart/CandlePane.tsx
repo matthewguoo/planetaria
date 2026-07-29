@@ -591,7 +591,14 @@ export function CandlePane({ designer }: { designer: Designer }) {
   );
 
   const onMouseDown = useCallback(
-    (e: React.MouseEvent) => {
+    (e: React.PointerEvent) => {
+      // Capture so touch drags keep streaming to the canvas even when the
+      // finger wanders off it (also helps fast mouse drags).
+      try {
+        (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+      } catch {
+        /* unsupported pointer id (e.g. synthetic events) */
+      }
       const rect = canvasRef.current!.getBoundingClientRect();
       const x = e.clientX - rect.left;
       const y = e.clientY - rect.top;
@@ -779,13 +786,17 @@ export function CandlePane({ designer }: { designer: Designer }) {
   return (
     <div ref={wrapRef} className="relative h-full w-full cursor-crosshair overflow-hidden">
       <ChartHud designer={designer} barsRef={barsRef} />
+      {/* Pointer events (not mouse) so touch drives the same pan/drag
+          interactions on phones; touch-none stops the page from scrolling
+          while dragging the chart. */}
       <canvas
         ref={canvasRef}
+        className="touch-none"
         onWheel={onWheel}
-        onMouseDown={onMouseDown}
-        onMouseMove={onMouseMove}
-        onMouseUp={endDrag}
-        onMouseLeave={onMouseLeave}
+        onPointerDown={onMouseDown}
+        onPointerMove={onMouseMove}
+        onPointerUp={endDrag}
+        onPointerLeave={onMouseLeave}
         onDoubleClick={onDoubleClick}
       />
     </div>

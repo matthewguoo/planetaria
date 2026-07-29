@@ -4,6 +4,7 @@ import { Header } from "./components/Header";
 import { CandlePane } from "./components/Chart/CandlePane";
 import { ChainPanel } from "./components/Chart/ChainPanel";
 import { ChartControls } from "./components/Chart/ChartControls";
+import { MobileApp } from "./components/Mobile/MobileApp";
 import { OrderPanel } from "./components/Panels/OrderPanel";
 import { SizingPanel } from "./components/Panels/SizingPanel";
 import { StrategyPanel } from "./components/Panels/StrategyPanel";
@@ -14,34 +15,18 @@ import { useStrategyStore } from "./store/strategyStore";
 import { useTradingStore } from "./store/tradingStore";
 import { useUiStore } from "./store/uiStore";
 
-// The layout auto-sizes fluidly; only genuinely unusable widths (phones in
-// portrait) get the lockout.
+// Below this width the dedicated phone layout takes over (chart-first,
+// bottom-sheet panels — see components/Mobile/).
 const MIN_WIDTH = 640;
 
-function useViewportLock(): boolean {
-  const [locked, setLocked] = useState(window.innerWidth < MIN_WIDTH);
+function usePhoneViewport(): boolean {
+  const [phone, setPhone] = useState(window.innerWidth < MIN_WIDTH);
   useEffect(() => {
-    const onResize = () => setLocked(window.innerWidth < MIN_WIDTH);
+    const onResize = () => setPhone(window.innerWidth < MIN_WIDTH);
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
   }, []);
-  return locked;
-}
-
-function ViewportLockout() {
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black">
-      <div className="panel max-w-md p-8 text-center">
-        <div className="text-lg tracking-widest text-bb-amber">PLANETARIA</div>
-        <div className="mt-4 text-bb-muted">
-          This terminal needs at least {MIN_WIDTH}px of width.
-        </div>
-        <div className="mt-2 text-bb-muted">
-          Current width: <span className="text-bb-amber">{window.innerWidth}px</span>
-        </div>
-      </div>
-    </div>
-  );
+  return phone;
 }
 
 /** Background data pumps: chain (10s), account (30s), positions (5s). */
@@ -69,17 +54,17 @@ function useDataPumps() {
   }, [refreshAccount, refreshPositions]);
 }
 
-// ?unlock bypasses the viewport lock (QA/testing in small panes).
+// ?unlock forces the desktop layout in small panes (QA/testing).
 const UNLOCKED = new URLSearchParams(window.location.search).has("unlock");
 
 export default function App() {
-  const locked = useViewportLock();
+  const phone = usePhoneViewport();
   useDataPumps();
   const designer = useDesigner();
   const view = useUiStore((s) => s.view);
   const chainOpen = useUiStore((s) => s.chainOpen);
 
-  if (locked && !UNLOCKED) return <ViewportLockout />;
+  if (phone && !UNLOCKED) return <MobileApp />;
 
   return (
     <div className="flex h-full flex-col gap-px bg-bb-black p-px">

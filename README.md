@@ -177,6 +177,19 @@ the strategy panel. All strikes everywhere are the chain API's actual
 tradeable contracts — rail drags and chain clicks snap to listed strikes
 only, never interpolated prices.
 
+### Phone layout
+
+Below 640px a dedicated mobile shell (`frontend/src/components/Mobile/`)
+replaces the desktop grid — the desktop files stay untouched. The candle
+chart (with the full HUD, heatmap, contours, and drag interactions — the
+canvas speaks pointer events, so touch drags strikes and TP/SL directly)
+fills the screen under a slim symbol/price/status header and a
+timeframe + zoom strip (+/−/FIT buttons reuse the desktop wheel/dblclick
+paths via synthetic events). A bottom nav opens sheets over the chart:
+TRADE (strategy/sizing/order ticket), CHAIN (tap B/S to add legs), POS
+(positions drawer), ACCT (full account dashboard). `?unlock` still forces
+the desktop layout in a small window.
+
 ### Theta-sell system
 
 The THETA chip in the HUD turns on the premium-seller's workspace:
