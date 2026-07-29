@@ -15,15 +15,14 @@ import { TIMEFRAMES, useTradingStore, type Timeframe } from "../../store/trading
 import { useUiStore } from "../../store/uiStore";
 import { AccountPage } from "../Account/AccountPage";
 import { CandlePane } from "../Chart/CandlePane";
-import { ChainPanel } from "../Chart/ChainPanel";
 import { OrderPanel } from "../Panels/OrderPanel";
 import { SizingPanel } from "../Panels/SizingPanel";
 import { StrategyPanel } from "../Panels/StrategyPanel";
-import { PositionsDrawer } from "../Positions/PositionsDrawer";
 import { SymbolSearch } from "../SymbolSearch";
+import { MobileDataTabs } from "./MobileDataTabs";
 import { Sheet } from "./Sheet";
 
-type SheetTab = null | "trade" | "chain" | "positions" | "account";
+type SheetTab = null | "trade" | "account";
 
 function statusColor(status: {
   connection: string;
@@ -147,13 +146,6 @@ export function MobileApp() {
     );
   };
 
-  const NAV: { tab: Exclude<SheetTab, null>; label: string; badge?: string }[] = [
-    { tab: "trade", label: modified ? "TRADE·C" : "TRADE" },
-    { tab: "chain", label: "CHAIN" },
-    { tab: "positions", label: `POS${positions.length ? ` ${positions.length}` : ""}` },
-    { tab: "account", label: "ACCT" },
-  ];
-
   return (
     <div className="flex h-[100dvh] flex-col bg-bb-black">
       <MobileHeader />
@@ -185,24 +177,33 @@ export function MobileApp() {
         </span>
       </div>
 
-      {/* The chart is the screen. */}
+      {/* The chart is the hero: chips-only HUD, all dense data lives in
+          the exchange-style tab strip below. */}
       <div ref={chartWrapRef} className="relative min-h-0 flex-1">
-        <CandlePane designer={designer} />
+        <CandlePane designer={designer} hudVariant="chips" />
       </div>
 
-      <nav className="flex h-11 shrink-0 border-t border-bb-border bg-bb-panel pb-[env(safe-area-inset-bottom)]">
-        {NAV.map(({ tab, label }) => (
-          <button
-            key={tab}
-            onClick={() => setSheet(sheet === tab ? null : tab)}
-            className={
-              "flex-1 text-[11px] tracking-widest " +
-              (sheet === tab ? "bg-bb-amber font-semibold text-black" : "text-bb-muted")
-            }
-          >
-            {label}
-          </button>
-        ))}
+      <MobileDataTabs designer={designer} />
+
+      <nav className="flex h-12 shrink-0 items-stretch gap-px border-t border-bb-border bg-bb-panel pb-[env(safe-area-inset-bottom)]">
+        <button
+          onClick={() => setSheet(sheet === "trade" ? null : "trade")}
+          className={
+            "flex-[2] text-[12px] font-semibold tracking-widest " +
+            (sheet === "trade" ? "bg-bb-hover text-bb-amber" : "bg-bb-amber text-black")
+          }
+        >
+          {modified ? "TRADE · CUSTOM" : "TRADE"}
+        </button>
+        <button
+          onClick={() => setSheet(sheet === "account" ? null : "account")}
+          className={
+            "flex-1 text-[11px] tracking-widest " +
+            (sheet === "account" ? "bg-bb-hover text-bb-amber" : "text-bb-muted")
+          }
+        >
+          ACCOUNT{positions.length ? ` · ${positions.length}` : ""}
+        </button>
       </nav>
 
       {sheet === "trade" && (
@@ -212,16 +213,6 @@ export function MobileApp() {
             <div className="h-64"><SizingPanel designer={designer} /></div>
             <div className="h-72"><OrderPanel designer={designer} /></div>
           </div>
-        </Sheet>
-      )}
-      {sheet === "chain" && (
-        <Sheet title="OPTIONS CHAIN — B/S adds a leg" onClose={() => setSheet(null)}>
-          <div className="h-[60dvh]"><ChainPanel /></div>
-        </Sheet>
-      )}
-      {sheet === "positions" && (
-        <Sheet title="POSITIONS" onClose={() => setSheet(null)}>
-          <div className="flex h-[60dvh] flex-col"><PositionsDrawer /></div>
         </Sheet>
       )}
       {sheet === "account" && (

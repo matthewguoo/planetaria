@@ -192,7 +192,13 @@ function computeChipRects(
   return rects;
 }
 
-export function CandlePane({ designer }: { designer: Designer }) {
+export function CandlePane({
+  designer,
+  hudVariant,
+}: {
+  designer: Designer;
+  hudVariant?: "full" | "chips";
+}) {
   const symbol = useTradingStore((s) => s.symbol);
   const tf = useTradingStore((s) => s.tf);
   const quote = useTradingStore((s) => s.quote);
@@ -785,7 +791,7 @@ export function CandlePane({ designer }: { designer: Designer }) {
 
   return (
     <div ref={wrapRef} className="relative h-full w-full cursor-crosshair overflow-hidden">
-      <ChartHud designer={designer} barsRef={barsRef} />
+      <ChartHud designer={designer} barsRef={barsRef} variant={hudVariant} />
       {/* Pointer events (not mouse) so touch drives the same pan/drag
           interactions on phones; touch-none stops the page from scrolling
           while dragging the chart. */}

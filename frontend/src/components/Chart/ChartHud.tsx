@@ -40,8 +40,9 @@ function StatRow({ label, value, cls }: { label: string; value: string; cls?: st
 }
 
 /** Theta-sell block: delta-targeted templates + credit-selling metrics.
- * Templates resolve short strikes by |delta| from the LIVE chain. */
-function ThetaBlock({ designer }: { designer: Designer }) {
+ * Templates resolve short strikes by |delta| from the LIVE chain.
+ * Exported so the mobile layout can host it in a tab below the chart. */
+export function ThetaBlock({ designer }: { designer: Designer }) {
   const applyThetaTemplate = useStrategyStore((s) => s.applyThetaTemplate);
   const chain = useStrategyStore((s) => s.chain);
   const [failed, setFailed] = useState<string | null>(null);
@@ -122,9 +123,13 @@ function ThetaBlock({ designer }: { designer: Designer }) {
 export function ChartHud({
   designer,
   barsRef,
+  variant = "full",
 }: {
   designer: Designer;
   barsRef: React.RefObject<Bars>;
+  /** "chips": toggles + one legend line only — the phone layout hosts the
+   * MC/theta data in tabs below the chart instead of floating over it. */
+  variant?: "full" | "chips";
 }) {
   const indicators = useTradingStore((s) => s.indicators);
   const toggleIndicator = useTradingStore((s) => s.toggleIndicator);
@@ -138,7 +143,7 @@ export function ChartHud({
   mcRef.current = mc;
 
   const mcInputs: McInputs | null = useMemo(() => {
-    if (!indicators.sim || !designer.ready || !designer.legs) return null;
+    if (variant !== "full" || !indicators.sim || !designer.ready || !designer.legs) return null;
     return {
       legs: designer.legs,
       entry: designer.entry,
@@ -152,7 +157,7 @@ export function ChartHud({
       skewBeta,
       frictionPerSet: designer.frictionPerSet,
     };
-  }, [designer, volShift, skewBeta, indicators.sim]);
+  }, [designer, volShift, skewBeta, indicators.sim, variant]);
 
   useMonteCarlo(mcInputs, setMc);
 
@@ -233,9 +238,9 @@ export function ChartHud({
         </span>
       </div>
 
-      {indicators.theta && <ThetaBlock designer={designer} />}
+      {variant === "full" && indicators.theta && <ThetaBlock designer={designer} />}
 
-      {indicators.sim && designer.ready && p && (
+      {variant === "full" && indicators.sim && designer.ready && p && (
         <div
           className="pointer-events-none flex flex-col gap-0.5 border border-bb-border/60 bg-black/75 px-1.5 py-1"
           title="Monte Carlo: 2000 paths with the enforcer's exact exit rules, net of spread friction. Analytic rows: risk-neutral GBM."

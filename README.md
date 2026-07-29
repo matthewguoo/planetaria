@@ -185,10 +185,13 @@ chart (with the full HUD, heatmap, contours, and drag interactions — the
 canvas speaks pointer events, so touch drags strikes and TP/SL directly)
 fills the screen under a slim symbol/price/status header and a
 timeframe + zoom strip (+/−/FIT buttons reuse the desktop wheel/dblclick
-paths via synthetic events). A bottom nav opens sheets over the chart:
-TRADE (strategy/sizing/order ticket), CHAIN (tap B/S to add legs), POS
-(positions drawer), ACCT (full account dashboard). `?unlock` still forces
-the desktop layout in a small window.
+paths via synthetic events). The dense data follows the
+exchange-app pattern (Binance/TradingView mobile): the chart carries only
+a chips legend, and a tab strip under it hosts SIM (Monte Carlo +
+probabilities), THETA (templates + seller metrics), CHAIN (tap B/S to add
+legs), and POS in a collapsible pane. A prominent pinned TRADE button
+opens the full ticket sheet; ACCOUNT opens the dashboard. `?unlock` still
+forces the desktop layout in a small window.
 
 ### Theta-sell system
 
