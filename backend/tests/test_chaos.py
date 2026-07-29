@@ -199,6 +199,12 @@ class FakeMarket:
     async def unsubscribe_options(self, symbols):
         pass
 
+    async def subscribe_stock(self, symbol):
+        pass
+
+    async def unsubscribe_stock(self, symbol):
+        pass
+
     async def refresh_option_quotes(self, symbols, max_age_s: float = 30.0):
         # REST/demo fallback is a no-op here; quotes are set by the tests.
         self.refresh_calls += 1
@@ -227,6 +233,9 @@ async def stack(tmp_path):
     enforcer.verify_attempts = 150
     enforcer.rearm_delay_s = 0.05
     enforcer.reconcile_interval_s = 0.15
+    # Resting TP off by default so the software-trigger scenarios stay pure;
+    # dedicated tests flip it on.
+    enforcer.resting_tp = False
     yield SimpleNamespace(
         db=db, broker=broker, alpaca=alpaca, market=market, trade=trade, enforcer=enforcer
     )
@@ -538,6 +547,7 @@ async def test_monitor_reports_unevaluable_mid(stack):
     no-mid health instead of silently doing nothing."""
     plan = await make_plan(stack.db, broker=stack.broker)
     stack.enforcer.quote_poll_s = 0.05
+    stack.enforcer.quote_poll_near_s = 0.05
     # NO quotes at all for the leg.
     try:
         await stack.enforcer.arm(plan.id)
@@ -547,3 +557,116 @@ async def test_monitor_reports_unevaluable_mid(stack):
         assert SYM in health
     finally:
         stack.enforcer.disarm(plan.id)
+
+
+@pytest.mark.asyncio
+async def test_resting_tp_placed_at_broker_and_fill_closes_plan(stack):
+    """With resting TP on, the monitor parks a live limit close at the
+    broker; its fill (delivered via the stream) closes the plan as TP."""
+    plan = await make_plan(stack.db, broker=stack.broker)
+    stack.enforcer.resting_tp = True
+    stack.enforcer.quote_poll_s = 0.05
+    stack.enforcer.quote_poll_near_s = 0.05
+    # Mid safely between SL and TP: no software trigger fires.
+    stack.market.quotes[SYM] = {"bid": 1.99, "ask": 2.01, "mid": 2.0}
+    try:
+        await stack.enforcer.arm(plan.id)
+        # The resting TP order should appear at the broker AND on the plan
+        # (poll the plan row: the DB write trails the broker accept).
+        deadline = time.monotonic() + 5
+        refreshed = None
+        while time.monotonic() < deadline:
+            refreshed = await stack.trade.get_plan(plan.id)
+            if refreshed.tp_order_id:
+                break
+            await asyncio.sleep(0.02)
+        assert refreshed is not None and refreshed.tp_order_id, "resting TP never recorded"
+        with stack.broker.lock:
+            tp_order = stack.broker.orders.get(refreshed.tp_order_id)
+        assert tp_order is not None and "-xtp" in tp_order.client_order_id
+        assert tp_order.status == "accepted"
+        tp_orders = [tp_order]
+        # Broker fills the resting TP (price = the TP premium).
+        order = stack.broker.fill(tp_orders[0].id, 4.0)
+        await deliver_fill(stack.trade, order)
+        status = await wait_status(stack.trade, plan.id, deadline=5.0)
+        assert status == "closed"
+        done = await stack.trade.get_plan(plan.id)
+        assert done.exit_reason == "tp"
+        assert done.exit_premium == pytest.approx(4.0)
+    finally:
+        stack.enforcer.disarm(plan.id)
+
+
+@pytest.mark.asyncio
+async def test_sl_trigger_cancels_resting_tp_first(stack):
+    """SL firing while a TP rests at the broker must take the TP down before
+    submitting the stop close — never two live closes at once."""
+    plan = await make_plan(stack.db, broker=stack.broker)
+    stack.enforcer.resting_tp = True
+    stack.enforcer.quote_poll_s = 0.05
+    stack.enforcer.quote_poll_near_s = 0.05
+    stack.market.quotes[SYM] = {"bid": 1.99, "ask": 2.01, "mid": 2.0}
+    filler = asyncio.create_task(
+        auto_filler(stack.broker, stack.trade, deliver_events=False, price=0.9)
+    )
+    try:
+        await stack.enforcer.arm(plan.id)
+        # Wait for the resting TP, then crash the mid through the stop.
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            refreshed = await stack.trade.get_plan(plan.id)
+            if refreshed.tp_order_id:
+                break
+            await asyncio.sleep(0.02)
+        assert refreshed.tp_order_id, "resting TP never placed"
+        tp_order_id = refreshed.tp_order_id
+        stack.market.quotes[SYM] = {"bid": 0.79, "ask": 0.81, "mid": 0.8}  # <= SL
+        status = await wait_status(stack.trade, plan.id, deadline=10.0)
+        assert status == "closed"
+        done = await stack.trade.get_plan(plan.id)
+        assert done.exit_reason == "sl"
+        # The old resting TP must be canceled, and exactly one close filled.
+        with stack.broker.lock:
+            assert stack.broker.orders[tp_order_id].status == "canceled"
+        assert len(stack.broker.filled_exits_for(plan.id)) == 1
+    finally:
+        filler.cancel()
+
+
+@pytest.mark.asyncio
+async def test_underlying_tick_triggers_fast_sl(stack):
+    """The underlying stock stream drives SL reaction: a spot tick that puts
+    the MODEL value past the stop forces an option-quote refresh and the SL
+    fires well inside the far-poll window."""
+    plan = await make_plan(stack.db, broker=stack.broker)
+    stack.enforcer.quote_poll_s = 30.0  # far poll deliberately SLOW
+    stack.enforcer.quote_poll_near_s = 30.0
+
+    # refresh_option_quotes "REST" delivers the crash price when asked.
+    async def refresh(symbols, max_age_s: float = 30.0):
+        stack.market.refresh_calls += 1
+        if max_age_s <= 1.0:  # only the forced (model-trigger) refresh
+            stack.market.quotes[SYM] = {"bid": 0.59, "ask": 0.61, "mid": 0.6}
+
+    stack.market.refresh_option_quotes = refresh
+    # Cached option quotes start mid-bracket and the option stream is silent.
+    stack.market.quotes[SYM] = {"bid": 1.99, "ask": 2.01, "mid": 2.0}
+    filler = asyncio.create_task(
+        auto_filler(stack.broker, stack.trade, deliver_events=False, price=0.6)
+    )
+    try:
+        await stack.enforcer.arm(plan.id)
+        await asyncio.sleep(0.3)  # monitor armed, waiting on its queue
+        # Underlying crashes: SPY 450 -> 430 puts the modeled call value ~0.
+        stack.market.broadcast.publish(
+            "quote:SPY", {"t": "quote", "symbol": "SPY", "bid": 429.9, "ask": 430.1, "mid": 430.0},
+        )
+        t0 = time.monotonic()
+        status = await wait_status(stack.trade, plan.id, deadline=10.0)
+        elapsed = time.monotonic() - t0
+        assert status == "closed", f"stuck in {status}"
+        assert (await stack.trade.get_plan(plan.id)).exit_reason == "sl"
+        assert elapsed < 5.0, f"SL took {elapsed:.1f}s - underlying trigger did not fire"
+    finally:
+        filler.cancel()

@@ -22,7 +22,10 @@ backend (FastAPI, single process)
    ├─ ChainService        0-3 DTE chains, IV solve/interpolation, 5s cache
    ├─ TradeService        validated placement -> DB plan -> Alpaca order
    ├─ PlanStateMachine    FIX-style FSM governing every plan's lifecycle
-   ├─ ExitEnforcer        quote-driven TP/SL + time stops; escalation ladder
+   ├─ ExitEnforcer        bracket engine: TP rests AT THE BROKER as a live
+   │                      limit; SL is software with a trigger hierarchy
+   │                      (option ticks -> underlying-tick model checks ->
+   │                      adaptive REST polling); escalation ladder
    │                      (limit @ mid-2% -> mid-6% -> market -> verify loop)
    ├─ RiskService         per-trade max loss, BP cap, max positions,
    │                      daily circuit breaker — server-side, not advisory
@@ -259,6 +262,35 @@ host (systemd/docker restart-always — restarts are safe, the reconcile
 machinery rebuilds all monitors from the DB) and keep the UI wherever
 you like. Until real capital or multi-user needs force a true two-process
 split, one supervised process is the more reliable shape.
+
+### Exit trigger hierarchy (how fast is the bracket?)
+
+The take-profit RESTS AT THE BROKER as a live limit close the moment the
+entry fills: zero software latency, and it fills even if the engine is
+down. (Idempotent per (plan, level): a crash between broker-accept and
+the DB write recovers the same order, never doubles it. Any other exit
+first pulls the resting TP down — and if the cancel loses the race to a
+fill, the position is recognized as already closed.)
+
+The stop-loss cannot rest (no broker stop orders for options), so it is
+software with a layered trigger chain, fastest first:
+
+1. **Option stream ticks** — every leg tick re-evaluates the position mid
+   (milliseconds, the normal RTH path).
+2. **Underlying stock ticks** — SPY quotes stream constantly even when
+   your specific contracts don't. Each tick re-marks the position with a
+   BSM model value from the plan's leg IVs; at ~15% of the TP-SL span
+   from a threshold it forces an immediate REST option-quote refresh and
+   evaluates real mids. Sub-second reaction to the thing that actually
+   moves.
+3. **Adaptive REST polling** — 1s cadence while the mid sits near a
+   threshold, 15s when far: the floor for a totally silent market, not
+   the reaction time.
+4. **Time stop** — quote-independent, always.
+
+If a mid is ever uncomputable (a leg with no quote even via REST), the
+monitor says so: throttled log naming the legs, per-plan health in
+`/api/system/state`, and a NO-QUOTE warning in the SYSTEM menu.
 
 ### System menu & lifecycle journal
 

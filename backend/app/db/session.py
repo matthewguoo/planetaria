@@ -17,7 +17,7 @@ SQLITE_FALLBACK = "sqlite+aiosqlite:///./trader.db"
 # creates missing TABLES, so pre-existing databases need these ALTERs (a
 # lightweight stand-in for full Alembic migrations; both engines support it).
 _ADDITIVE_COLUMNS = {
-    "trade_plans": {"filled_qty": "INTEGER"},
+    "trade_plans": {"filled_qty": "INTEGER", "tp_order_id": "VARCHAR(48)"},
 }
 
 

@@ -62,6 +62,10 @@ class TradePlan(Base):
     filled_qty: Mapped[int | None] = mapped_column(Integer, nullable=True)  # partial-fill tracking
     entry_order_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     exit_order_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Resting take-profit limit order held AT THE BROKER while the plan is
+    # filled: zero-latency TP fills that survive engine downtime. SL/time
+    # remain software-enforced (no broker stop orders for options).
+    tp_order_id: Mapped[str | None] = mapped_column(String(48), nullable=True)
     exit_reason: Mapped[str | None] = mapped_column(String(24), nullable=True)  # tp|sl|time_stop|manual|flatten
     fill_premium: Mapped[float | None] = mapped_column(Float, nullable=True)
     exit_premium: Mapped[float | None] = mapped_column(Float, nullable=True)
@@ -89,6 +93,7 @@ class TradePlan(Base):
             "filled_qty": self.filled_qty,
             "entry_order_id": self.entry_order_id,
             "exit_order_id": self.exit_order_id,
+            "tp_order_id": self.tp_order_id,
             "exit_reason": self.exit_reason,
             "fill_premium": self.fill_premium,
             "exit_premium": self.exit_premium,

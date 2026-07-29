@@ -447,11 +447,20 @@ class TradeService:
                         or_(
                             TradePlan.entry_order_id == order_id,
                             TradePlan.exit_order_id == order_id,
+                            TradePlan.tp_order_id == order_id,
                         )
                     )
                 )
                 plan = result.scalars().first()
             if plan is None:
+                return
+            # Broker-resting TP events: a fill closes the plan; a dead order
+            # clears the field so the monitor re-rests it.
+            if plan.tp_order_id == order_id and plan.entry_order_id != order_id:
+                if event == "fill":
+                    await self._absorb_tp_fill(plan.id, order_id)
+                elif event in ("canceled", "expired", "rejected"):
+                    await self.fsm.update_fields(plan.id, tp_order_id=None)
                 return
             is_entry = plan.entry_order_id == order_id
             raw_avg = float(order.filled_avg_price) if order.filled_avg_price else None
@@ -515,21 +524,11 @@ class TradeService:
 
     # -------------------------------------------------------------- exits
 
-    async def submit_exit(self, plan: TradePlan, reason: str, limit_price: float | None,
-                          attempt_key: str = "0") -> None:
-        """Submit closing order (reverse all legs). limit None => market.
-
-        limit_price is in POSITION-VALUE terms (signed, same axis as
-        entry/TP/SL). The closing order has every leg reversed, so its
-        submitted limit is the NEGATION: closing a debit position collects a
-        credit (negative MLEG limit), closing a credit position pays a debit
-        (positive MLEG limit). Single-leg orders take the unsigned premium.
-
-        attempt_key names the escalation rung (r0/r1/mkt/v3...) so each rung's
-        submit is idempotent: an ambiguous failure recovers the SAME order
-        rather than stacking a second close on the position.
-        """
-        client_order_id = f"{plan.id}-x{attempt_key}"
+    def _close_request(self, plan: TradePlan, limit_price: float | None, client_order_id: str):
+        """Closing order (reverse all legs) at a POSITION-VALUE limit (signed,
+        same axis as entry/TP/SL); None => market. The closing order has every
+        leg reversed, so MLEG submits the NEGATION of the position-terms
+        limit; single-leg orders take the unsigned premium."""
         legs = plan.legs
         if len(legs) == 1:
             leg = legs[0]
@@ -543,37 +542,45 @@ class TradeService:
                 time_in_force=TimeInForce.DAY,
                 client_order_id=client_order_id,
             )
-            request = (
+            return (
                 MarketOrderRequest(**common)
                 if limit_price is None
                 else LimitOrderRequest(**common, limit_price=abs(round_tick(limit_price)))
             )
-        else:
-            mleg_legs = [
-                OptionLegRequest(
-                    symbol=leg["symbol"],
-                    ratio_qty=leg.get("ratio", 1),
-                    side=OrderSide.SELL if leg["side"] > 0 else OrderSide.BUY,
-                    position_intent=(
-                        PositionIntent.SELL_TO_CLOSE
-                        if leg["side"] > 0
-                        else PositionIntent.BUY_TO_CLOSE
-                    ),
-                )
-                for leg in legs
-            ]
-            common = dict(
-                order_class=OrderClass.MLEG,
-                qty=plan.effective_qty,
-                time_in_force=TimeInForce.DAY,
-                client_order_id=client_order_id,
-                legs=mleg_legs,
+        mleg_legs = [
+            OptionLegRequest(
+                symbol=leg["symbol"],
+                ratio_qty=leg.get("ratio", 1),
+                side=OrderSide.SELL if leg["side"] > 0 else OrderSide.BUY,
+                position_intent=(
+                    PositionIntent.SELL_TO_CLOSE
+                    if leg["side"] > 0
+                    else PositionIntent.BUY_TO_CLOSE
+                ),
             )
-            request = (
-                MarketOrderRequest(**common)
-                if limit_price is None
-                else LimitOrderRequest(**common, limit_price=round_tick(-limit_price))
-            )
+            for leg in legs
+        ]
+        common = dict(
+            order_class=OrderClass.MLEG,
+            qty=plan.effective_qty,
+            time_in_force=TimeInForce.DAY,
+            client_order_id=client_order_id,
+            legs=mleg_legs,
+        )
+        return (
+            MarketOrderRequest(**common)
+            if limit_price is None
+            else LimitOrderRequest(**common, limit_price=round_tick(-limit_price))
+        )
+
+    async def submit_exit(self, plan: TradePlan, reason: str, limit_price: float | None,
+                          attempt_key: str = "0") -> None:
+        """Submit closing order. attempt_key names the escalation rung
+        (r0/r1/mkt/v3...) so each rung's submit is idempotent: an ambiguous
+        failure recovers the SAME order rather than stacking a second close.
+        """
+        client_order_id = f"{plan.id}-x{attempt_key}"
+        request = self._close_request(plan, limit_price, client_order_id)
         order = await self._submit_idempotent(request, client_order_id)
         await self.fsm.apply(
             plan.id,
@@ -581,6 +588,78 @@ class TradeService:
             exit_order_id=str(order.id),
             exit_reason=reason,
         )
+
+    # ------------------------------------------------- broker-resting TP
+
+    async def submit_resting_tp(self, plan: TradePlan) -> None:
+        """Rest the take-profit AT THE BROKER as a live limit close: zero
+        software latency and it fills even if this engine is down. The key
+        is deterministic per (plan, TP level) so a crash between broker
+        accept and the DB write can never double-place it; tighten-reuse of
+        a burned level walks to an r2/r3 suffix."""
+        cents = int(round(abs(plan.tp_premium) * 100))
+        last_exc: Exception | None = None
+        for suffix in ("", "r2", "r3", "r4"):
+            key = f"{plan.id}-xtp{cents}{suffix}"
+            request = self._close_request(plan, plan.tp_premium, key)
+            try:
+                order = await self._submit_idempotent(request, key)
+                await self.fsm.update_fields(plan.id, tp_order_id=str(order.id))
+                log.info("resting TP placed for plan %s @ %.2f (order %s)",
+                         plan.id, plan.tp_premium, order.id)
+                return
+            except Exception as exc:
+                last_exc = exc
+                if "unique" not in str(exc).lower():
+                    raise
+        raise last_exc  # every suffix burned (should not happen in practice)
+
+    async def cancel_resting_tp(self, plan: TradePlan) -> bool:
+        """Cancel the broker-resting TP before any other close. Returns True
+        when the TP turned out to be FILLED (position already closed — the
+        caller must NOT submit another close on top)."""
+        if not plan.tp_order_id:
+            return False
+        order_id = plan.tp_order_id
+        try:
+            await self.cancel_order(order_id)
+        except Exception:
+            # Cancel can lose the race to a fill — check before assuming.
+            try:
+                status = await self.order_status(order_id)
+            except Exception as exc:
+                log.warning("resting TP cancel+status failed for %s: %s", plan.id, exc)
+                return False
+            if status == "filled":
+                await self._absorb_tp_fill(plan.id, order_id)
+                return True
+        await self.fsm.update_fields(plan.id, tp_order_id=None)
+        return False
+
+    async def _absorb_tp_fill(self, plan_id: str, order_id: str) -> None:
+        """A resting TP filled at the broker: close the plan from REST truth
+        (works whether we learn it from the stream, a cancel race, or
+        reconcile)."""
+        order = await self.alpaca.call(
+            self.alpaca.trading.get_order_by_id, order_id, retries=1
+        )
+        plan = await self.get_plan(plan_id)
+        raw = float(order.filled_avg_price or 0) or None
+        avg = self._fill_value(plan, raw, is_entry=False)
+        await self.fsm.apply(
+            plan_id, PlanEvent.EXIT_SUBMITTED,
+            exit_order_id=order_id, exit_reason="tp", tp_order_id=None,
+        )
+        realized = None
+        if avg is not None and plan.fill_premium is not None:
+            realized = round((avg - plan.fill_premium) * 100 * plan.effective_qty, 2)
+        result = await self.fsm.apply(
+            plan_id, PlanEvent.EXIT_FILLED,
+            guard={"exit_order_id": order_id},
+            exit_premium=avg, realized_pnl=realized,
+        )
+        if result.applied and self.enforcer:
+            self.enforcer.disarm(plan_id)
 
     async def cancel_order(self, order_id: str) -> None:
         # Cancels are idempotent broker-side; retry transient failures.
