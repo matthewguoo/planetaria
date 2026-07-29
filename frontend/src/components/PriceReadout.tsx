@@ -19,6 +19,43 @@ function fmtEt(ms: number): string {
   }).format(new Date(ms));
 }
 
+/** US equity session phase in ET. Extended hours are 04:00–09:30 (PRE) and
+ * 16:00–20:00 (AH); 20:00–04:00 and weekends are CLOSED — the one window
+ * where "no new candles" is correct, not stale. */
+export function sessionPhase(nowMs: number = Date.now()): "PRE" | "RTH" | "AH" | "CLOSED" {
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/New_York",
+      weekday: "short",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    })
+      .formatToParts(new Date(nowMs))
+      .map((p) => [p.type, p.value]),
+  );
+  if (parts.weekday === "Sat" || parts.weekday === "Sun") return "CLOSED";
+  const minute = Number(parts.hour === "24" ? 0 : parts.hour) * 60 + Number(parts.minute);
+  if (minute >= 4 * 60 && minute < 9 * 60 + 30) return "PRE";
+  if (minute >= 9 * 60 + 30 && minute < 16 * 60) return "RTH";
+  if (minute >= 16 * 60 && minute < 20 * 60) return "AH";
+  return "CLOSED";
+}
+
+const PHASE_STYLE: Record<ReturnType<typeof sessionPhase>, string> = {
+  RTH: "text-bb-profit",
+  PRE: "text-bb-neutral",
+  AH: "text-bb-neutral",
+  CLOSED: "text-bb-muted",
+};
+
+const PHASE_TITLE: Record<ReturnType<typeof sessionPhase>, string> = {
+  RTH: "Regular trading hours (09:30–16:00 ET)",
+  PRE: "Pre-market (04:00–09:30 ET) — thin extended-hours prints",
+  AH: "After hours (16:00–20:00 ET) — thin extended-hours prints",
+  CLOSED: "Market closed (20:00–04:00 ET / weekend) — no prints anywhere; last candle is final",
+};
+
 export function PriceReadout({ compact = false }: { compact?: boolean }) {
   const quote = useTradingStore((s) => s.quote);
   const chainSpot = useStrategyStore((s) => s.chain?.spot ?? 0);
@@ -35,6 +72,7 @@ export function PriceReadout({ compact = false }: { compact?: boolean }) {
 
   const stale = quoteIsStale(quote);
   const spot = freshSpot(quote, chainSpot);
+  const phase = sessionPhase();
 
   return (
     <span data-numeric className={"text-bb-amber" + (compact ? " min-w-0 truncate text-[13px]" : "")}>
@@ -52,6 +90,9 @@ export function PriceReadout({ compact = false }: { compact?: boolean }) {
           {stale ? ` · Q ${fmtEt(quote.ts)}` : ""}
         </span>
       )}
+      <span className={"ml-2 text-[10px] " + PHASE_STYLE[phase]} title={PHASE_TITLE[phase]}>
+        {phase}
+      </span>
     </span>
   );
 }

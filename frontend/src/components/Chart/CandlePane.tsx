@@ -933,8 +933,10 @@ function render(
       : null;
 
   const anchorIdx = anchorIndexFor(bars, overlay);
+  const etOff = etOffsetMinutes(bars.t[bars.n - 1]);
   drawPriceGrid(ctx, layout, domain);
-  drawSessionBoundaries(ctx, layout, bars, view, first, last);
+  drawSessionZones(ctx, layout, bars, view, first, last, etOff);
+  drawSessionBoundaries(ctx, layout, bars, view, first, last, etOff);
   drawTimeAxis(ctx, layout, bars, view, first, last, overlay, tfMinutes, anchorIdx);
 
   // Heatmap first: background layer in the future region (HEAT toggle).
@@ -1610,8 +1612,62 @@ function drawVolume(
   }
 }
 
+/** ET wall-clock offset (minutes to add to UTC epoch-minutes), one Intl call.
+ * Cached per render; constant across a chart window except across a DST
+ * transition mid-window, where being an hour off on shading is cosmetic. */
+function etOffsetMinutes(ms: number): number {
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/New_York",
+      year: "numeric", month: "2-digit", day: "2-digit",
+      hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
+    })
+      .formatToParts(new Date(ms))
+      .map((p) => [p.type, p.value]),
+  );
+  const wall = Date.UTC(
+    Number(parts.year), Number(parts.month) - 1, Number(parts.day),
+    Number(parts.hour === "24" ? 0 : parts.hour), Number(parts.minute), Number(parts.second),
+  );
+  return Math.round((wall - ms) / 60_000);
+}
+
+const RTH_START_MIN = 9 * 60 + 30; // 09:30 ET
+const RTH_END_MIN = 16 * 60; //       16:00 ET
+
+/** Extended-hours shading: bars outside 09:30–16:00 ET get a subtle tint so
+ * pre/after-market price action reads as a different regime at a glance. */
+function drawSessionZones(
+  ctx: CanvasRenderingContext2D,
+  layout: Layout,
+  bars: Bars,
+  view: ViewState,
+  first: number,
+  last: number,
+  etOff: number,
+) {
+  const halfBar = layout.plotW / view.barsVisible / 2;
+  ctx.fillStyle = "rgba(94,124,175,0.07)";
+  let runStart: number | null = null;
+  const flush = (endIdx: number) => {
+    if (runStart === null) return;
+    const x0 = Math.max(indexToX(runStart, view, layout) - halfBar, 0);
+    const x1 = Math.min(indexToX(endIdx, view, layout) + halfBar, layout.plotW);
+    if (x1 > x0) ctx.fillRect(x0, 0, x1 - x0, layout.plotH);
+    runStart = null;
+  };
+  for (let i = first; i <= last; i++) {
+    const minuteOfDay = (((bars.t[i] / 60_000 + etOff) % 1440) + 1440) % 1440;
+    const extended = minuteOfDay < RTH_START_MIN || minuteOfDay >= RTH_END_MIN;
+    if (extended && runStart === null) runStart = i;
+    if (!extended) flush(i - 1);
+  }
+  flush(last);
+}
+
 /** Session-day boundaries: a full-height line + date chip at the first bar of
- * each new ET trading day, so day breaks read at a glance on intraday zooms. */
+ * each new ET trading day, across ALL visible history. Day detection is pure
+ * arithmetic on the cached ET offset — no per-bar Intl calls. */
 function drawSessionBoundaries(
   ctx: CanvasRenderingContext2D,
   layout: Layout,
@@ -1619,14 +1675,16 @@ function drawSessionBoundaries(
   view: ViewState,
   first: number,
   last: number,
+  etOff: number,
 ) {
+  const dayIndex = (i: number) => Math.floor((bars.t[i] / 60_000 + etOff) / 1440);
   ctx.textBaseline = "top";
   ctx.textAlign = "left";
   for (let i = Math.max(first, 1); i <= last; i++) {
-    if (fmtDayET(bars.t[i]) === fmtDayET(bars.t[i - 1])) continue;
+    if (dayIndex(i) === dayIndex(i - 1)) continue;
     const x = indexToX(i, view, layout) - layout.plotW / view.barsVisible / 2;
     if (x < 0 || x > layout.plotW) continue;
-    ctx.strokeStyle = "#2a2a2a";
+    ctx.strokeStyle = "#3a3a3a";
     ctx.setLineDash([2, 4]);
     ctx.lineWidth = 1;
     ctx.beginPath();
