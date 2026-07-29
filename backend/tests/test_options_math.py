@@ -17,6 +17,24 @@ from app.services.options_math import (
 )
 
 
+def test_bp_estimate_margin_model():
+    from app.services.options_math import bp_per_set_estimate
+
+    # Risk reversal w/ deep-ITM short put: naked margin ~ 20% of spot,
+    # NOT full cash-secured strike value (which froze sizing at 0).
+    rr = [Leg("P", 750.0, 1, -1, 9.3, 0.2), Leg("C", 744.0, 1, 1, 1.6, 0.2)]
+    bp = bp_per_set_estimate(rr, 743.57)
+    assert 14_000 < bp < 16_000
+
+    # Defined-risk debit spread: BP = structural max loss (the debit).
+    debit = [Leg("C", 450.0, 1, 1, 4.0, 0.2), Leg("C", 455.0, 1, -1, 1.8, 0.2)]
+    assert abs(bp_per_set_estimate(debit, 452.0) - 220.0) < 1e-6
+
+    # Far-OTM naked put: 10%-of-strike floor binds.
+    csp = [Leg("P", 300.0, 1, -1, 0.10, 0.3)]
+    assert abs(bp_per_set_estimate(csp, 743.57) - 0.1 * 300 * 100) < 1e-6
+
+
 def test_bs_known_values():
     # Hull-style reference: S=42, K=40, r=0.10, sigma=0.2, T=0.5 -> C≈4.759, P≈0.808
     c = bs_price(42, 40, 0.5, 0.2, "C", r=0.10)

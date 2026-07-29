@@ -117,6 +117,7 @@ export function useDesigner(): Designer {
       risk?.max_loss_pct ?? 0.02,
       slPremium,
       risk?.bp_cap_pct ?? 0.25,
+      spot,
     );
     const probabilities = computeProbabilitiesClient(legs, spot, hte, tpPremium, slPremium);
     const autoQty = sizing.contracts;

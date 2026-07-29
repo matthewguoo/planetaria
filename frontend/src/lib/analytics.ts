@@ -5,6 +5,7 @@
  */
 
 import {
+  bpPerSetEstimate,
   breakevens,
   payoffAtExpiry,
   positionEntryCost,
@@ -106,6 +107,7 @@ export function computeSizingClient(
   maxLossPct: number,
   slPremium: number,
   bpCapPct: number,
+  spot = 0,
 ): ClientSizing {
   const reasons: string[] = [];
   const entry = positionEntryCost(legs); // +debit / -credit, per share
@@ -120,21 +122,21 @@ export function computeSizingClient(
   if (perSetRisk <= 0) {
     return { ...empty, reasons: ["stop-loss premium must be below entry"] };
   }
-  // Capital per set: debit paid for longs; margin (structural max loss) for
-  // defined-risk credit; stop-risk proxy for undefined-risk shorts.
+  // Capital per set: broker-margin style. Naked shorts charge the standard
+  // 20%-of-spot formula, NOT full cash-secured/structural value — a short
+  // ITM index put would otherwise consume $70k+/set of "BP" and zero out
+  // sizing that the enforced stop actually bounds.
   const structural = structuralMaxLoss(legs);
-  let perSetCost: number;
-  let perSetStructural: number;
-  if (entry > 0) {
-    perSetCost = entry * 100;
-    perSetStructural = structural !== null ? structural * 100 : entry * 100;
-  } else if (structural === null) {
-    perSetCost = perSetRisk * 3;
-    perSetStructural = perSetCost;
-    reasons.push("undefined risk (net short calls) - stop-based sizing only");
-  } else {
-    perSetCost = structural * 100;
-    perSetStructural = structural * 100;
+  const perSetCost = spot > 0 ? bpPerSetEstimate(legs, spot)
+    : entry > 0 ? entry * 100
+    : structural !== null ? structural * 100
+    : perSetRisk * 3;
+  const perSetStructural =
+    structural !== null ? structural * 100 : Math.max(perSetCost, perSetRisk * 3);
+  if (structural === null) {
+    reasons.push("undefined risk (net short calls) - stop + margin sizing only");
+  } else if (spot > 0 && perSetCost < structural * 100 && entry < 0) {
+    reasons.push("BP from naked-short margin estimate (broker applies its own)");
   }
   const budget = accountEquity * maxLossPct;
   let contracts = Math.floor(budget / perSetRisk);

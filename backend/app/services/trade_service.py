@@ -256,15 +256,23 @@ class TradeService:
             )
 
         account = await self.get_account()
-        # Capital consumed: debit paid for longs; margin (structural worst case)
-        # for credit structures; stop-risk proxy when risk is undefined.
+        # Capital consumed: broker-margin estimate. Naked shorts charge the
+        # standard 20%-of-spot formula rather than full cash-secured value —
+        # a jade lizard's short put must not consume $70k/set of "BP" that
+        # Alpaca itself would never require in a margin account.
         max_loss = (entry_limit - sl) * 100 * qty
-        if entry_limit > 0:
+        from app.services.options_math import Leg, bp_per_set_estimate
+
+        spot = self.market.spot(payload["underlying"].upper())
+        leg_objs = [Leg.from_dict(leg) for leg in legs]
+        if spot > 0:
+            entry_cost = bp_per_set_estimate(leg_objs, spot) * qty
+        elif entry_limit > 0:
             entry_cost = entry_limit * 100 * qty
         else:
-            from app.services.options_math import Leg, structural_max_loss
+            from app.services.options_math import structural_max_loss
 
-            structural = structural_max_loss([Leg.from_dict(leg) for leg in legs])
+            structural = structural_max_loss(leg_objs)
             entry_cost = (structural * 100 * qty) if structural is not None else max_loss * 3
         expiry = max(leg["expiry"] for leg in legs)
         # Stream age: None while a tick has never arrived reads as "no data",

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { apiError, postOrder } from "../../lib/api";
 import { playCue } from "../../lib/audio";
+import { nakedShortUnits } from "../../lib/optionsMath";
 import type { Designer } from "../../lib/useDesigner";
 import { useAccountStore } from "../../store/accountStore";
 import { useStrategyStore } from "../../store/strategyStore";
@@ -68,8 +69,13 @@ export function OrderPanel({ designer }: { designer: Designer }) {
   const [error, setError] = useState<string | null>(null);
   const [placed, setPlaced] = useState<string | null>(null);
 
+  const nakedCalls = designer.legs ? nakedShortUnits(designer.legs, "C") : 0;
   const canTrade =
-    designer.ready && designer.qty > 0 && !designer.demo && designer.instantExit === null;
+    designer.ready &&
+    designer.qty > 0 &&
+    !designer.demo &&
+    designer.instantExit === null &&
+    nakedCalls === 0;
 
   const submit = async () => {
     if (!designer.legs) return;
@@ -223,6 +229,15 @@ export function OrderPanel({ designer }: { designer: Designer }) {
           >
             ⚠ {designer.instantExit.toUpperCase()} already breached at current price — order
             would exit instantly
+          </div>
+        )}
+        {nakedCalls > 0 && (
+          <div
+            className="text-[10px] leading-tight text-bb-loss"
+            title="Verified against the paper API: Alpaca Level 3 accounts reject any order leaving uncovered short calls ('account not eligible to trade uncovered option contracts'). Uncovered short puts are accepted."
+          >
+            ⚠ {nakedCalls} uncovered short call{nakedCalls > 1 ? "s" : ""} — Alpaca rejects
+            naked calls at this account level; add a long call wing to cover
           </div>
         )}
         {placed && (

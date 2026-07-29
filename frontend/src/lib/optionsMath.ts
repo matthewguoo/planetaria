@@ -420,6 +420,66 @@ export function structuralMaxLoss(legs: Leg[]): number | null {
   return -Math.min(worst, 0);
 }
 
+/**
+ * Buying-power estimate per contract-set, broker-margin style.
+ *
+ * Defined-risk structures consume their structural max loss (spread margin).
+ * Uncovered short units use the standard naked-option formula
+ *   max(20% * spot - OTM amount, 10% * strike-or-spot floor) * 100
+ * instead of full cash-secured/structural value — a short ITM SPY put would
+ * otherwise "cost" $74k/set and zero out sizing that the enforced stop
+ * actually bounds. Net debit is added when paid. An estimate, not the
+ * broker's number: Alpaca applies its real margin at submit.
+ */
+/** Uncovered short units of one right (shorts beyond long coverage).
+ * Alpaca L3 accounts cannot hold uncovered short CALLS at all — the broker
+ * rejects the order ("account not eligible to trade uncovered option
+ * contracts", verified empirically); uncovered short puts are accepted. */
+export function nakedShortUnits(legs: Leg[], right: "C" | "P"): number {
+  return Math.max(
+    -legs.filter((l) => l.right === right).reduce((a, l) => a + l.side * l.qty, 0),
+    0,
+  );
+}
+
+export function bpPerSetEstimate(legs: Leg[], spot: number): number {
+  const entry = positionEntryCost(legs);
+  const debit = Math.max(entry, 0) * 100;
+  const structural = structuralMaxLoss(legs);
+  const nakedCalls = nakedShortUnits(legs, "C");
+  const nakedPuts = nakedShortUnits(legs, "P");
+  if (nakedCalls === 0 && nakedPuts === 0 && structural !== null) {
+    return Math.max(structural * 100, debit);
+  }
+  let margin = 0;
+  if (spot > 0) {
+    const shortLegs = (right: "C" | "P") =>
+      legs.filter((l) => l.right === right && l.side < 0);
+    // Charge the most expensive uncovered units: highest-strike puts /
+    // lowest-strike calls are closest to the money among shorts.
+    let putsLeft = nakedPuts;
+    for (const leg of shortLegs("P").sort((a, b) => b.strike - a.strike)) {
+      const units = Math.min(leg.qty, putsLeft);
+      if (units <= 0) continue;
+      putsLeft -= units;
+      const otm = Math.max(spot - leg.strike, 0);
+      margin += units * Math.max(0.2 * spot - otm, 0.1 * leg.strike) * 100;
+    }
+    let callsLeft = nakedCalls;
+    for (const leg of shortLegs("C").sort((a, b) => a.strike - b.strike)) {
+      const units = Math.min(leg.qty, callsLeft);
+      if (units <= 0) continue;
+      callsLeft -= units;
+      const otm = Math.max(leg.strike - spot, 0);
+      margin += units * Math.max(0.2 * spot - otm, 0.1 * spot) * 100;
+    }
+  }
+  // Covered residue (e.g. the spread part of a jade lizard) still consumes
+  // its defined-risk margin when one exists.
+  const coveredPart = structural !== null && nakedCalls === 0 && nakedPuts === 0 ? structural * 100 : 0;
+  return Math.max(margin + debit + coveredPart, debit, 1);
+}
+
 export function breakevens(legs: Leg[], lo: number, hi: number, steps = 2000): number[] {
   const out: number[] = [];
   let prevS = lo;

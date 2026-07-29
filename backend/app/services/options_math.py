@@ -189,6 +189,56 @@ def structural_max_loss(legs: list[Leg]) -> float | None:
     return -min(worst, 0.0)
 
 
+def bp_per_set_estimate(legs: list[Leg], spot: float) -> float:
+    """Buying-power estimate per contract-set, broker-margin style (mirrors
+    frontend bpPerSetEstimate — parity-tested).
+
+    Defined-risk structures consume structural max loss. Uncovered short
+    units use the standard naked-option margin
+        max(20% * spot - OTM, 10% * strike-or-spot floor) * 100
+    instead of full cash-secured/structural value. Net debit adds when paid.
+    An estimate: the broker applies its real margin at submit.
+    """
+    entry = position_entry_cost(legs)
+    debit = max(entry, 0.0) * 100
+    structural = structural_max_loss(legs)
+
+    def short_units(right: str) -> int:
+        return max(-sum(l.side * l.qty for l in legs if l.right == right), 0)
+
+    naked_calls = short_units("C")
+    naked_puts = short_units("P")
+    if naked_calls == 0 and naked_puts == 0 and structural is not None:
+        return max(structural * 100, debit)
+
+    margin = 0.0
+    if spot > 0:
+        puts_left = naked_puts
+        for leg in sorted((l for l in legs if l.right == "P" and l.side < 0),
+                          key=lambda l: -l.strike):
+            units = min(leg.qty, puts_left)
+            if units <= 0:
+                continue
+            puts_left -= units
+            otm = max(spot - leg.strike, 0.0)
+            margin += units * max(0.2 * spot - otm, 0.1 * leg.strike) * 100
+        calls_left = naked_calls
+        for leg in sorted((l for l in legs if l.right == "C" and l.side < 0),
+                          key=lambda l: l.strike):
+            units = min(leg.qty, calls_left)
+            if units <= 0:
+                continue
+            calls_left -= units
+            otm = max(leg.strike - spot, 0.0)
+            margin += units * max(0.2 * spot - otm, 0.1 * spot) * 100
+    covered_part = (
+        structural * 100
+        if structural is not None and naked_calls == 0 and naked_puts == 0
+        else 0.0
+    )
+    return max(margin + debit + covered_part, debit, 1.0)
+
+
 def breakevens(legs: list[Leg], lo: float, hi: float, steps: int = 2000) -> list[float]:
     """Zero crossings of expiry payoff, refined by bisection."""
     out: list[float] = []

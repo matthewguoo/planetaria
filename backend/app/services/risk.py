@@ -194,6 +194,18 @@ class RiskService:
             if await self.recent_duplicate(underlying, [l["symbol"] for l in legs]):
                 violations.append("duplicate guard: identical order submitted seconds ago")
 
+        # Uncovered short calls are unplaceable at Alpaca L3 (verified against
+        # the paper API: "account not eligible to trade uncovered option
+        # contracts") — fail here with a fix hint instead of at the broker.
+        naked_calls = max(
+            -sum(l["side"] * l.get("ratio", 1) for l in legs if l["right"] == "C"), 0
+        )
+        if naked_calls > 0:
+            violations.append(
+                "uncovered short calls not permitted at this account level - "
+                "add a long call wing to cover"
+            )
+
         if max_loss_dollars > account_equity * cfg["max_loss_pct"] + 0.01:
             violations.append(
                 f"max loss ${max_loss_dollars:.0f} exceeds "
