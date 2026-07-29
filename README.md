@@ -193,6 +193,21 @@ legs), and POS in a collapsible pane. A prominent pinned TRADE button
 opens the full ticket sheet; ACCOUNT opens the dashboard. `?unlock` still
 forces the desktop layout in a small window.
 
+**Preview on your phone:** the app talks same-origin (`/api`, `/ws` are
+proxied by the vite dev/preview server), so any host works:
+
+```bash
+cd frontend && npm run phone     # builds + serves on your LAN
+# open http://<your-computer-ip>:4173 on the phone (same Wi-Fi)
+```
+
+or share it anywhere with a quick tunnel from your machine:
+
+```bash
+cloudflared tunnel --url http://localhost:4173
+# open the https://…trycloudflare.com URL it prints
+```
+
 ### Theta-sell system
 
 The THETA chip in the HUD turns on the premium-seller's workspace:

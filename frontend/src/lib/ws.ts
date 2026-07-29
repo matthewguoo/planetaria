@@ -18,7 +18,12 @@ type SubSpec =
   | { channel: "plans" }
   | { channel: "oquotes"; symbols: string[] };
 
-const WS_URL = (import.meta.env.VITE_WS_URL ?? "ws://localhost:8000") + "/ws/stream";
+// Same-origin by default (dev/preview server proxies /ws), matching api.ts —
+// works from any host including phones and tunnels.
+const WS_URL =
+  (import.meta.env.VITE_WS_URL ??
+    `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.host}`) +
+  "/ws/stream";
 
 function subKey(spec: SubSpec): string {
   if (spec.channel === "bars") return `bars:${spec.symbol}:${spec.tf}`;

@@ -1,7 +1,10 @@
 import axios from "axios";
 
+// Same-origin by default (vite dev/preview proxy /api to the backend), so
+// the app works from any host — laptop, LAN phone, or a tunnel — without
+// baking in localhost. VITE_API_URL still overrides for split deployments.
 export const api = axios.create({
-  baseURL: import.meta.env.VITE_API_URL ?? "http://localhost:8000",
+  baseURL: import.meta.env.VITE_API_URL ?? "",
   timeout: 10_000,
 });
 
