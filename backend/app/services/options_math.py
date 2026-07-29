@@ -213,6 +213,9 @@ def bp_per_set_estimate(legs: list[Leg], spot: float) -> float:
 
     margin = 0.0
     if spot > 0:
+        # Uncovered short puts: CASH-SECURED strike value. Broker-verified:
+        # an oversized jade-lizard probe was rejected with cost_basis
+        # $70,087/set for a 700P — Alpaca charges ~strike*100, not 20% Reg-T.
         puts_left = naked_puts
         for leg in sorted((l for l in legs if l.right == "P" and l.side < 0),
                           key=lambda l: -l.strike):
@@ -220,8 +223,7 @@ def bp_per_set_estimate(legs: list[Leg], spot: float) -> float:
             if units <= 0:
                 continue
             puts_left -= units
-            otm = max(spot - leg.strike, 0.0)
-            margin += units * max(0.2 * spot - otm, 0.1 * leg.strike) * 100
+            margin += units * leg.strike * 100
         calls_left = naked_calls
         for leg in sorted((l for l in legs if l.right == "C" and l.side < 0),
                           key=lambda l: l.strike):

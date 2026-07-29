@@ -6,6 +6,7 @@
 
 import {
   bpPerSetEstimate,
+  nakedShortUnits,
   breakevens,
   payoffAtExpiry,
   positionEntryCost,
@@ -98,6 +99,9 @@ export type ClientSizing = {
   maxLossStructural: number;
   buyingPowerPct: number;
   perContractRisk: number;
+  /** What the stop-risk budget ALONE would allow — when BP binds below this,
+   * the gap is the price of undefined risk (naked short margin). */
+  riskBudgetContracts: number;
   reasons: string[];
 };
 
@@ -112,7 +116,7 @@ export function computeSizingClient(
   const reasons: string[] = [];
   const entry = positionEntryCost(legs); // +debit / -credit, per share
   const empty = { contracts: 0, entryCost: 0, maxLossAtStop: 0, maxLossStructural: 0,
-                  buyingPowerPct: 0, perContractRisk: 0 };
+                  buyingPowerPct: 0, perContractRisk: 0, riskBudgetContracts: 0 };
   if (Math.abs(entry) < 0.01) {
     return { ...empty, reasons: ["net premium is zero - nothing to size"] };
   }
@@ -122,10 +126,9 @@ export function computeSizingClient(
   if (perSetRisk <= 0) {
     return { ...empty, reasons: ["stop-loss premium must be below entry"] };
   }
-  // Capital per set: broker-margin style. Naked shorts charge the standard
-  // 20%-of-spot formula, NOT full cash-secured/structural value — a short
-  // ITM index put would otherwise consume $70k+/set of "BP" and zero out
-  // sizing that the enforced stop actually bounds.
+  // Capital per set is the BROKER's number, estimated: debit for longs,
+  // structural width for defined risk, cash-secured strike value for
+  // uncovered short puts (verified against Alpaca's own cost basis).
   const structural = structuralMaxLoss(legs);
   const perSetCost = spot > 0 ? bpPerSetEstimate(legs, spot)
     : entry > 0 ? entry * 100
@@ -135,20 +138,24 @@ export function computeSizingClient(
     structural !== null ? structural * 100 : Math.max(perSetCost, perSetRisk * 3);
   if (structural === null) {
     reasons.push("undefined risk (net short calls) - stop + margin sizing only");
-  } else if (spot > 0 && perSetCost < structural * 100 && entry < 0) {
-    reasons.push("BP from naked-short margin estimate (broker applies its own)");
   }
   const budget = accountEquity * maxLossPct;
-  let contracts = Math.floor(budget / perSetRisk);
+  const riskBudgetContracts = Math.max(Math.floor(budget / perSetRisk), 0);
+  let contracts = riskBudgetContracts;
   if (contracts < 1) {
     reasons.push(`risk/contract $${perSetRisk.toFixed(0)} exceeds budget $${budget.toFixed(0)}`);
-    contracts = 0;
   }
   const bpBudget = accountEquity * bpCapPct;
   if (contracts * perSetCost > bpBudget && perSetCost > 0) {
-    const capped = Math.floor(bpBudget / perSetCost);
-    if (capped < contracts) {
-      contracts = capped;
+    contracts = Math.min(contracts, Math.floor(bpBudget / perSetCost));
+    const nakedPuts = nakedShortUnits(legs, "P");
+    if (nakedPuts > 0) {
+      reasons.push(
+        `BP-bound: uncovered short put is cash-secured (~$${(perSetCost / 1000).toFixed(1)}k/set at the broker). ` +
+        `Stop-risk budget alone allows ${riskBudgetContracts} — add a protective put wing to size by stop risk, ` +
+        `or raise BP CAP (ACCOUNT tab)`,
+      );
+    } else {
       reasons.push(`capped by buying-power limit ${(bpCapPct * 100).toFixed(0)}%`);
     }
   }
@@ -159,6 +166,7 @@ export function computeSizingClient(
     maxLossStructural: contracts * perSetStructural,
     buyingPowerPct: accountEquity ? (contracts * perSetCost) / accountEquity : 0,
     perContractRisk: perSetRisk,
+    riskBudgetContracts,
     reasons,
   };
 }

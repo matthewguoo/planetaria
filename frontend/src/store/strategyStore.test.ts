@@ -154,25 +154,25 @@ describe("credit-aware sizing", () => {
     expect(computeSizingClient(legs, 25_000, 0.02, 2.5, 0.25).contracts).toBe(0);
   });
 
-  it("naked-short margin BP unlocks sizing that full structural value froze", () => {
-    // Risk reversal with a deep-ITM short put: structural loss ~ strike value
-    // ($74k/set) but broker margin ~ 20% of spot. With spot passed, sizing
-    // must produce a nonzero AUTO under a 25% BP cap on $100k.
+  it("cash-secured naked-put BP binds honestly, with the risk-budget gap surfaced", () => {
+    // Risk reversal with a short 750P. Broker-verified: Alpaca cash-secures
+    // uncovered short puts (~strike*100/set), so a 25% BP cap on $100k allows
+    // ZERO sets — and the reason string must say the stop budget alone would
+    // allow more, plus what to do about it.
     const legs: Leg[] = [
       { right: "P", strike: 750, qty: 1, side: -1, entry: 9.3, iv: 0.2 },
       { right: "C", strike: 744, qty: 1, side: 1, entry: 1.6, iv: 0.2 },
     ];
     const entry = positionEntryCost(legs); // -7.7 credit
     const sl = entry - 3.95; // stop $395/set below entry
-    const withSpot = computeSizingClient(legs, 100_000, 0.02, sl, 0.25, 743.57);
-    expect(withSpot.contracts).toBeGreaterThan(0);
-    expect(withSpot.contracts).toBeLessThanOrEqual(5); // risk budget still caps
-    // BP estimate ~ max(0.2*743.57, 0.1*750)*100 ~ $14.9k/set -> cap allows 1.
-    expect(withSpot.entryCost / withSpot.contracts).toBeGreaterThan(10_000);
-    expect(withSpot.entryCost / withSpot.contracts).toBeLessThan(20_000);
-    // Without spot, legacy structural charge -> zero contracts (the lockout).
-    const withoutSpot = computeSizingClient(legs, 100_000, 0.02, sl, 0.25);
-    expect(withoutSpot.contracts).toBe(0);
+    const capped = computeSizingClient(legs, 100_000, 0.02, sl, 0.25, 743.57);
+    expect(capped.contracts).toBe(0);
+    expect(capped.riskBudgetContracts).toBe(5);
+    expect(capped.reasons.some((r) => /cash-secured/.test(r) && /allows 5/.test(r))).toBe(true);
+    // Raising the BP cap to 100% admits what the broker actually permits: 1.
+    const full = computeSizingClient(legs, 100_000, 0.02, sl, 1.0, 743.57);
+    expect(full.contracts).toBe(1);
+    expect(full.entryCost).toBeCloseTo(75_000, 0);
   });
 });
 

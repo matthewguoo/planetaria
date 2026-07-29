@@ -455,16 +455,18 @@ export function bpPerSetEstimate(legs: Leg[], spot: number): number {
   if (spot > 0) {
     const shortLegs = (right: "C" | "P") =>
       legs.filter((l) => l.right === right && l.side < 0);
-    // Charge the most expensive uncovered units: highest-strike puts /
-    // lowest-strike calls are closest to the money among shorts.
+    // Uncovered short puts: CASH-SECURED strike value. Broker-verified: an
+    // oversized jade lizard probe was rejected with cost_basis $70,087/set
+    // for a 700P — Alpaca charges ~strike x 100, NOT the 20% Reg-T formula.
     let putsLeft = nakedPuts;
     for (const leg of shortLegs("P").sort((a, b) => b.strike - a.strike)) {
       const units = Math.min(leg.qty, putsLeft);
       if (units <= 0) continue;
       putsLeft -= units;
-      const otm = Math.max(spot - leg.strike, 0);
-      margin += units * Math.max(0.2 * spot - otm, 0.1 * leg.strike) * 100;
+      margin += units * leg.strike * 100;
     }
+    // Uncovered short calls are unplaceable at this account level (guarded
+    // upstream); the Reg-T formula stands in for display-only estimates.
     let callsLeft = nakedCalls;
     for (const leg of shortLegs("C").sort((a, b) => a.strike - b.strike)) {
       const units = Math.min(leg.qty, callsLeft);
