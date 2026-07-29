@@ -172,6 +172,91 @@ export const STRATEGIES = {
     group: "INCOME / NEUTRAL",
     legs: [{ right: "P", side: -1, ratio: 1, offset: -2 }],
   },
+  risk_reversal: {
+    label: "RISK REVERSAL",
+    group: "DIRECTIONAL",
+    legs: [
+      { right: "P", side: -1, ratio: 1, offset: -3 },
+      { right: "C", side: 1, ratio: 1, offset: 3 },
+    ],
+  },
+  call_ratio_spread: {
+    label: "CALL RATIO SPREAD (1×2)",
+    group: "SPREADS",
+    legs: [
+      { right: "C", side: 1, ratio: 1, offset: 0 },
+      { right: "C", side: -1, ratio: 2, offset: 3 },
+    ],
+  },
+  put_ratio_spread: {
+    label: "PUT RATIO SPREAD (1×2)",
+    group: "SPREADS",
+    legs: [
+      { right: "P", side: 1, ratio: 1, offset: 0 },
+      { right: "P", side: -1, ratio: 2, offset: -3 },
+    ],
+  },
+  call_backspread: {
+    label: "CALL BACKSPREAD (2×1)",
+    group: "VOLATILITY",
+    legs: [
+      { right: "C", side: -1, ratio: 1, offset: 0 },
+      { right: "C", side: 1, ratio: 2, offset: 3 },
+    ],
+  },
+  put_backspread: {
+    label: "PUT BACKSPREAD (2×1)",
+    group: "VOLATILITY",
+    legs: [
+      { right: "P", side: -1, ratio: 1, offset: 0 },
+      { right: "P", side: 1, ratio: 2, offset: -3 },
+    ],
+  },
+  broken_wing_call_fly: {
+    label: "BROKEN-WING CALL FLY",
+    group: "INCOME / NEUTRAL",
+    legs: [
+      { right: "C", side: 1, ratio: 1, offset: -3 },
+      { right: "C", side: -1, ratio: 2, offset: 0 },
+      { right: "C", side: 1, ratio: 1, offset: 5 }, // skipped strike: no upside risk for a credit
+    ],
+  },
+  broken_wing_put_fly: {
+    label: "BROKEN-WING PUT FLY",
+    group: "INCOME / NEUTRAL",
+    legs: [
+      { right: "P", side: 1, ratio: 1, offset: 3 },
+      { right: "P", side: -1, ratio: 2, offset: 0 },
+      { right: "P", side: 1, ratio: 1, offset: -5 },
+    ],
+  },
+  jade_lizard: {
+    label: "JADE LIZARD",
+    group: "INCOME / NEUTRAL",
+    legs: [
+      { right: "P", side: -1, ratio: 1, offset: -3 },
+      { right: "C", side: -1, ratio: 1, offset: 2 },
+      { right: "C", side: 1, ratio: 1, offset: 4 }, // credit > call width => no upside risk
+    ],
+  },
+  reverse_jade_lizard: {
+    label: "REVERSE JADE LIZARD",
+    group: "INCOME / NEUTRAL",
+    legs: [
+      { right: "P", side: 1, ratio: 1, offset: -4 },
+      { right: "P", side: -1, ratio: 1, offset: -2 },
+      { right: "C", side: -1, ratio: 1, offset: 3 }, // credit > put width => no downside risk
+    ],
+  },
+  big_lizard: {
+    label: "BIG LIZARD",
+    group: "INCOME / NEUTRAL",
+    legs: [
+      { right: "P", side: -1, ratio: 1, offset: 0 },
+      { right: "C", side: -1, ratio: 1, offset: 0 },
+      { right: "C", side: 1, ratio: 1, offset: 2 }, // straddle + call wing: credit > wing width
+    ],
+  },
 } as const satisfies Record<string, StrategyDef>;
 
 export type StrategyKind = keyof typeof STRATEGIES;

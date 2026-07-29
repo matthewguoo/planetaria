@@ -215,6 +215,39 @@ describe("smile-aware scenario pricing (sticky moneyness)", () => {
   });
 });
 
+describe("every strategy preset resolves on a live chain", () => {
+  const chain = syntheticChain();
+  const expiry = chain.expirations[0];
+
+  for (const kind of Object.keys(STRATEGIES) as (keyof typeof STRATEGIES)[]) {
+    it(`${kind} builds priced legs matching its template`, () => {
+      useStrategyStore.setState({ chain, expiry, modified: false });
+      useStrategyStore.getState().setKind(kind);
+      const s = useStrategyStore.getState();
+      const legs = buildLegs(s);
+      const template = STRATEGIES[kind].legs;
+      expect(legs).not.toBeNull();
+      expect(legs!).toHaveLength(template.length);
+      expect(template.length).toBeLessThanOrEqual(4); // Alpaca MLEG limit
+      template.forEach((t, i) => {
+        expect(legs![i].right).toBe(t.right);
+        expect(legs![i].side).toBe(t.side);
+        expect(legs![i].qty).toBe(t.ratio);
+        expect(legs![i].entry).toBeGreaterThan(0);
+        expect(legs![i].iv).toBeGreaterThan(0);
+      });
+      // Strikes are monotone with template offsets (no crossed structures).
+      const offsets = template.map((t) => t.offset);
+      const strikesInOffsetOrder = [...s.strikes];
+      offsets.forEach((off, i) => {
+        offsets.forEach((off2, j) => {
+          if (off < off2) expect(strikesInOffsetOrder[i]).toBeLessThan(strikesInOffsetOrder[j]);
+        });
+      });
+    });
+  }
+});
+
 describe("custom leg composition (chain-panel clicks)", () => {
   const chain = syntheticChain();
   const expiry = chain.expirations[0];
