@@ -173,6 +173,56 @@ export type AccountRisk = {
 export const getAccountRisk = () =>
   api.get<AccountRisk>("/api/account/risk").then((r) => r.data);
 
+export type SystemState = {
+  asof: number;
+  feed: {
+    configured: boolean;
+    demo: boolean;
+    sources: Record<string, string>;
+    stream_age_s: number | null;
+    stock_symbols: string[];
+    option_symbols: number;
+  };
+  broker: { configured: boolean; paper: boolean; account_status: string };
+  db: { ok: boolean; latency_ms: number | null; engine: string };
+  redis: { ok: boolean };
+  enforcer: {
+    monitors: number;
+    monitored_plan_ids: string[];
+    ghost_keys: number;
+    last_reconcile_age_s: number | null;
+  };
+  tasks: Record<string, string>;
+};
+
+export type FeedSettings = {
+  chain_refresh_s: number;
+  positions_poll_s: number;
+  account_poll_s: number;
+  public_poll_s: number;
+  stock_feed: "iex" | "sip";
+  option_feed: "indicative" | "opra";
+  restart_required_keys: string[];
+};
+
+export type PlanEvent = {
+  ts: string | null;
+  event: string;
+  source: string;
+  target: string | null;
+  applied: boolean;
+  detail: string | null;
+};
+
+export const getSystemState = () =>
+  api.get<SystemState>("/api/system/state").then((r) => r.data);
+export const getFeedSettings = () =>
+  api.get<FeedSettings>("/api/settings/feed").then((r) => r.data);
+export const putFeedSettings = (patch: Partial<FeedSettings>) =>
+  api.put<FeedSettings>("/api/settings/feed", patch).then((r) => r.data);
+export const getPlanEvents = (planId: string) =>
+  api.get<{ events: PlanEvent[] }>(`/api/positions/${planId}/events`).then((r) => r.data.events);
+
 /** Client-side mirror of the server's plan_stop_risk: dollars lost if this
  * plan exits exactly at its stop. */
 export function planStopRisk(plan: {

@@ -29,29 +29,45 @@ function usePhoneViewport(): boolean {
   return phone;
 }
 
-/** Background data pumps: chain (10s), account (30s), positions (5s). */
+/** Background data pumps; cadences come from the feed settings (SYSTEM ⚙
+ * menu) with sane defaults until they load. */
 function useDataPumps() {
   const symbol = useTradingStore((s) => s.symbol);
   const loadChain = useStrategyStore((s) => s.loadChain);
   const refreshAccount = useAccountStore((s) => s.refreshAccount);
   const refreshPositions = useAccountStore((s) => s.refreshPositions);
+  const [cadence, setCadence] = useState({ chain: 10_000, account: 30_000, positions: 5_000 });
+
+  useEffect(() => {
+    import("./lib/api").then(({ getFeedSettings }) =>
+      getFeedSettings()
+        .then((cfg) =>
+          setCadence({
+            chain: cfg.chain_refresh_s * 1000,
+            account: cfg.account_poll_s * 1000,
+            positions: cfg.positions_poll_s * 1000,
+          }),
+        )
+        .catch(() => {}),
+    );
+  }, []);
 
   useEffect(() => {
     void loadChain(symbol);
-    const id = window.setInterval(() => void loadChain(symbol), 10_000);
+    const id = window.setInterval(() => void loadChain(symbol), cadence.chain);
     return () => window.clearInterval(id);
-  }, [symbol, loadChain]);
+  }, [symbol, loadChain, cadence.chain]);
 
   useEffect(() => {
     void refreshAccount();
     void refreshPositions();
-    const acctId = window.setInterval(() => void refreshAccount(), 30_000);
-    const posId = window.setInterval(() => void refreshPositions(), 5_000);
+    const acctId = window.setInterval(() => void refreshAccount(), cadence.account);
+    const posId = window.setInterval(() => void refreshPositions(), cadence.positions);
     return () => {
       window.clearInterval(acctId);
       window.clearInterval(posId);
     };
-  }, [refreshAccount, refreshPositions]);
+  }, [refreshAccount, refreshPositions, cadence.account, cadence.positions]);
 }
 
 // ?unlock forces the desktop layout in small panes (QA/testing).

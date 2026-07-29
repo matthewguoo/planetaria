@@ -104,3 +104,31 @@ class AppSetting(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow
     )
+
+
+class PlanEventRow(Base):
+    """Append-only journal of every lifecycle event that reached the FSM —
+    including DROPPED ones (illegal in state, lost CAS, failed guard). The
+    audit trail for "why did this position do that": nothing mutates a plan
+    without a row here, and rows are never updated or deleted."""
+
+    __tablename__ = "plan_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    plan_id: Mapped[str] = mapped_column(String(32), index=True)
+    event: Mapped[str] = mapped_column(String(32))
+    source_status: Mapped[str] = mapped_column(String(24))
+    target_status: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    applied: Mapped[int] = mapped_column(Integer)  # 1 applied / 0 dropped
+    detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    def to_dict(self) -> dict:
+        return {
+            "ts": self.ts.isoformat() if self.ts else None,
+            "event": self.event,
+            "source": self.source_status,
+            "target": self.target_status,
+            "applied": bool(self.applied),
+            "detail": self.detail,
+        }

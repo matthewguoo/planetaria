@@ -120,6 +120,8 @@ class DemoFeed:
         self._rngs: dict[str, random.Random] = {}
         self._sources: dict[str, str] = {}  # symbol -> "public" | "synthetic"
         self._http: httpx.AsyncClient | None = None
+        # Live-adjustable via the feed settings API.
+        self.poll_s: float = POLL_INTERVAL_S
         # ensure() is called concurrently (WS subscribe + chain fetch); the
         # lock prevents double history fetch / duplicate poll tasks.
         self._ensure_lock = asyncio.Lock()
@@ -234,8 +236,8 @@ class DemoFeed:
                 if failures in (1, 10):  # log first and then rarely
                     log.warning("public poll %s failed (%d): %s", symbol, failures, exc)
             # Back off while failing; recover automatically when Yahoo returns.
-            await asyncio.sleep(min(POLL_INTERVAL_S * (2 ** min(failures, 4)), 60.0)
-                                if failures else POLL_INTERVAL_S)
+            await asyncio.sleep(min(self.poll_s * (2 ** min(failures, 4)), 60.0)
+                                if failures else self.poll_s)
 
     # ------------------------------------------------------------ synthetic
 

@@ -240,6 +240,30 @@ The THETA chip in the HUD turns on the premium-seller's workspace:
   spread friction — the honest number for whether the structure is worth
   selling after costs.
 
+### System menu & lifecycle journal
+
+The ⚙ button (desktop and phone headers) opens the SYSTEM menu:
+
+- **State** — live health of every subsystem: market data (source + stream
+  age), subscriptions, broker/account, trading stream, DB (engine +
+  latency), redis, the exit enforcer (active monitors, unresolved ghost
+  orders), and the reconcile loop with its last-run age. Refreshes every
+  5s while open.
+- **Feed / API settings** — runtime knobs persisted in the DB: chain
+  refresh, positions/account poll cadences, the keyless public feed's
+  poll interval (all applied live), and the Alpaca stock/option feed
+  tiers (IEX/SIP, INDICATIVE/OPRA — applied at next restart, flagged ↻).
+
+Every event that reaches the plan FSM — including DROPPED ones (illegal
+in state, lost compare-and-set, stale order guard) — is journaled to an
+append-only `plan_events` table in the SAME transaction as the state
+change, and served per plan at `/api/positions/{id}/events`: the audit
+trail for "why did this position do that". Exit execution is additionally
+serialized per plan (a manual close racing a monitor trigger queues
+instead of interleaving orders), and the reconcile loop runs under the
+same supervisor as the market streams, so a fatal error restarts it with
+backoff instead of silently ending truth-sync.
+
 ### Portfolio risk (account page)
 
 `GET /api/account/risk` + a PORTFOLIO RISK panel on the account page:

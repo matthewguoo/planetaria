@@ -156,12 +156,18 @@ class PlanStateMachine:
                         "plan %s: event %s ignored in state %s",
                         plan_id, event.value, source.value,
                     )
+                    self._journal(session, plan_id, event, source, None, False, "illegal in state")
+                    await session.commit()
                     return TransitionResult(False, plan, event, source, None)
                 if guard and any(getattr(plan, k) != v for k, v in guard.items()):
                     log.warning(
                         "plan %s: event %s dropped - guard %s does not match row",
                         plan_id, event.value, guard,
                     )
+                    self._journal(
+                        session, plan_id, event, source, None, False, f"stale guard {guard}"
+                    )
+                    await session.commit()
                     return TransitionResult(False, plan, event, source, None)
 
                 conditions = [TradePlan.id == plan_id, TradePlan.status == source.value]
@@ -170,15 +176,23 @@ class PlanStateMachine:
                 result = await session.execute(
                     update(TradePlan).where(*conditions).values(status=target.value, **fields)
                 )
-                await session.commit()
                 if result.rowcount == 0:
                     # Out-of-band writer beat us (multi-process safety net).
                     log.error(
                         "plan %s: compare-and-set lost for %s (%s -> %s) - event dropped",
                         plan_id, event.value, source.value, target.value,
                     )
+                    self._journal(
+                        session, plan_id, event, source, target, False, "compare-and-set lost"
+                    )
+                    await session.commit()
                     plan = await session.get(TradePlan, plan_id, populate_existing=True)
                     return TransitionResult(False, plan, event, source, None)
+                # CAS + audit row commit ATOMICALLY: no state change without
+                # its journal entry, and no extra connection per event.
+                detail = ", ".join(f"{k}={v}" for k, v in fields.items())[:300] or None
+                self._journal(session, plan_id, event, source, target, True, detail)
+                await session.commit()
                 plan = await session.get(TradePlan, plan_id, populate_existing=True)
 
             log.info(
@@ -189,6 +203,35 @@ class PlanStateMachine:
             # holds a reference would let two locks guard the same plan. A few
             # bytes per plan per process lifetime is the cheaper invariant.
             return TransitionResult(True, plan, event, source, target)
+
+    def _journal(self, session, plan_id: str, event: PlanEvent, source: PlanState,
+                 target: PlanState | None, applied: bool, detail: str | None) -> None:
+        """Append the audit row to the CALLER's open session, committed with
+        the state change itself — one transaction, one connection."""
+        from app.models.trade import PlanEventRow
+
+        session.add(PlanEventRow(
+            plan_id=plan_id,
+            event=event.value,
+            source_status=source.value,
+            target_status=target.value if target else None,
+            applied=1 if applied else 0,
+            detail=detail,
+        ))
+
+    async def events_for(self, plan_id: str, limit: int = 100) -> list[dict]:
+        from sqlalchemy import select
+
+        from app.models.trade import PlanEventRow
+
+        async with self.db.session() as session:
+            result = await session.execute(
+                select(PlanEventRow)
+                .where(PlanEventRow.plan_id == plan_id)
+                .order_by(PlanEventRow.id.desc())
+                .limit(limit)
+            )
+            return [row.to_dict() for row in result.scalars().all()]
 
     async def update_fields(self, plan_id: str, **fields) -> TradePlan:
         """Field-only update (exit tightening, notes) — state unchanged, same

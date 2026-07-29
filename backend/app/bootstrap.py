@@ -29,6 +29,18 @@ async def startup(app: FastAPI, settings: Settings) -> None:
     db = Database()
     await db.connect(settings.database_url)
 
+    # Persisted feed settings override env defaults for the feed tiers —
+    # applied here because the stream clients are constructed once.
+    from app.services.system_state import FeedSettingsService
+
+    feed_settings = FeedSettingsService(db)
+    try:
+        feed_cfg = await feed_settings.get()
+        settings.alpaca_stock_feed = feed_cfg["stock_feed"]
+        settings.alpaca_option_feed = feed_cfg["option_feed"]
+    except Exception:
+        log.exception("feed settings load failed - using env defaults")
+
     alpaca = AlpacaService(settings)
     broadcaster = Broadcaster()
     bars = BarStore(redis, max_1m_bars=settings.bar_cache_days * 3900)
@@ -50,10 +62,19 @@ async def startup(app: FastAPI, settings: Settings) -> None:
     from app.services.portfolio_risk import PortfolioRisk
 
     app.state.portfolio_risk = PortfolioRisk(trade, market)
+    app.state.feed_settings = feed_settings
     app.state.trading_stream = None
     app.state.trading_stream_task = None
 
     await market.start()
+
+    # Apply persisted feed settings that can take effect live.
+    try:
+        feed_cfg = await app.state.feed_settings.get()
+        if market.demo is not None:
+            market.demo.poll_s = float(feed_cfg["public_poll_s"])
+    except Exception:
+        log.exception("feed settings load failed - using defaults")
 
     app.state.reconcile_task = None
     app.state.reconcile_loop_task = None
@@ -73,8 +94,10 @@ async def startup(app: FastAPI, settings: Settings) -> None:
         # Periodic REST truth-sync: the TradingStream is the fast path for
         # fills, but a fill landing during a stream gap must not leave a live
         # position unmanaged. Also re-arms any open plan missing its monitor.
+        # Supervised: a fatal error in the loop restarts it with backoff
+        # instead of silently ending truth-sync forever.
         app.state.reconcile_loop_task = asyncio.create_task(
-            enforcer.reconcile_loop(), name="reconcile-loop"
+            supervise("reconcile-loop", enforcer.reconcile_loop), name="reconcile-loop"
         )
 
 

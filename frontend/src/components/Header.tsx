@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { cycleAudioMode, getAudioMode, onAudioModeChange } from "../lib/audio";
+import { SystemMenu } from "./System/SystemMenu";
 import { useTradingStore } from "../store/tradingStore";
 import { useUiStore } from "../store/uiStore";
 
@@ -67,6 +68,23 @@ function StatusPill() {
   );
 }
 
+function SystemButton() {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <button
+        className="px-1 text-[13px] text-bb-muted hover:text-bb-amber"
+        onClick={() => setOpen(true)}
+        title="System state + feed/API settings"
+        aria-label="System menu"
+      >
+        ⚙
+      </button>
+      {open && <SystemMenu onClose={() => setOpen(false)} />}
+    </>
+  );
+}
+
 export function Header() {
   const symbol = useTradingStore((s) => s.symbol);
   const quote = useTradingStore((s) => s.quote);
@@ -103,6 +121,7 @@ export function Header() {
           </button>
         ))}
         <AudioToggle />
+        <SystemButton />
         <StatusPill />
         <span className="border border-bb-border px-2 py-0.5 text-bb-orange">PAPER</span>
       </div>

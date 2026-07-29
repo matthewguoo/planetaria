@@ -36,6 +36,10 @@ class ExitEnforcer:
         # them may have landed at the broker anyway ("ghost" order — never
         # recorded on the plan). Tracked until resolved or the plan closes.
         self._ghost_keys: dict[str, list[str]] = {}
+        # One exit ladder per plan at a time: a manual close, a monitor
+        # trigger, and flatten-all must serialize, not interleave orders.
+        self._exit_locks: dict[str, asyncio.Lock] = {}
+        self.last_reconcile_ts: float | None = None
         # Timing knobs (instance-level so pressure tests can compress them).
         self.escalation = list(ESCALATION)
         self.verify_poll_s = 5.0
@@ -64,7 +68,10 @@ class ExitEnforcer:
                 log.exception("periodic reconcile failed")
 
     async def reconcile_once(self, orphan_scan: bool = False) -> None:
+        import time as _time
+
         async with self._reconcile_lock:
+            self.last_reconcile_ts = _time.time()
             plans = await self.trade.risk.open_plans()
             if orphan_scan:
                 log.info("reconciling %d open plans", len(plans))
@@ -357,7 +364,14 @@ class ExitEnforcer:
 
         Each rung submits under a fresh idempotency key (unique per
         invocation, stable within the submit) so an ambiguous broker failure
-        recovers the SAME order instead of stacking a second close."""
+        recovers the SAME order instead of stacking a second close.
+        Serialized per plan: concurrent triggers (manual close racing a
+        monitor, flatten-all racing both) queue instead of interleaving."""
+        lock = self._exit_locks.setdefault(plan_id, asyncio.Lock())
+        async with lock:
+            await self._execute_exit_locked(plan_id, reason)
+
+    async def _execute_exit_locked(self, plan_id: str, reason: str) -> None:
         token = uuid4().hex[:6]
         for rung, (buffer, wait) in enumerate(self.escalation):
             plan = await self.trade.get_plan(plan_id)

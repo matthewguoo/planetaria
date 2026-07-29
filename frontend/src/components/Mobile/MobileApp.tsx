@@ -19,6 +19,7 @@ import { OrderPanel } from "../Panels/OrderPanel";
 import { SizingPanel } from "../Panels/SizingPanel";
 import { StrategyPanel } from "../Panels/StrategyPanel";
 import { SymbolSearch } from "../SymbolSearch";
+import { SystemMenu } from "../System/SystemMenu";
 import { MobileDataTabs } from "./MobileDataTabs";
 import { Sheet } from "./Sheet";
 
@@ -45,6 +46,7 @@ function MobileHeader() {
   const quote = useTradingStore((s) => s.quote);
   const status = useTradingStore((s) => s.status);
   const [audio, setAudio] = useState(getAudioMode());
+  const [systemOpen, setSystemOpen] = useState(false);
   useEffect(() => onAudioModeChange(setAudio), []);
   const pill = statusColor(status, symbol);
 
@@ -66,8 +68,16 @@ function MobileHeader() {
         >
           {audio === "off" ? "🔇" : audio === "fx" ? "🔊" : "🗣"}
         </button>
+        <button
+          className="text-[13px] text-bb-muted active:text-bb-amber"
+          onClick={() => setSystemOpen(true)}
+          aria-label="System menu"
+        >
+          ⚙
+        </button>
         <span className={`h-2 w-2 rounded-full ${pill.cls}`} title={pill.label} />
       </span>
+      {systemOpen && <SystemMenu onClose={() => setSystemOpen(false)} />}
     </header>
   );
 }
