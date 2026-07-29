@@ -17,6 +17,40 @@ function etToUtcIso(timeEt: string): string {
   return new Date(etTarget.getTime() + offsetMs).toISOString();
 }
 
+/** What crossing the spread RIGHT NOW pays/receives: every leg filled at its
+ * natural price (buy at ask, sell at bid) instead of mid. The gap vs the mid
+ * limit is the instant cost of immediacy — the honest "what do I get if it
+ * fills this second" number. */
+function InstantFillRow({ designer }: { designer: Designer }) {
+  const legs = designer.legs!;
+  const halfSpreadSum = legs.reduce((acc, leg) => acc + leg.qty * leg.halfSpread, 0);
+  const natPerShare = designer.entry + halfSpreadSum; // debit worse, credit smaller
+  const isCredit = designer.entry < 0;
+  const natTotal = Math.abs(natPerShare) * 100 * designer.qty;
+  const slipPerSet = halfSpreadSum * 100;
+  return (
+    <div
+      className="-mt-0.5 flex items-baseline justify-between gap-2"
+      title={
+        "Instant fill at NATURAL price: every leg crossed at bid/ask instead of mid. " +
+        `Spread give-up ≈ $${slipPerSet.toFixed(0)}/set each way.`
+      }
+    >
+      <span className="text-[10px] text-bb-muted">
+        INSTANT {isCredit ? "CREDIT" : "DEBIT"} (NAT)
+      </span>
+      <span data-numeric className={"text-[11px] " + (isCredit ? "text-bb-profit" : "text-bb-amber")}>
+        {natPerShare === designer.entry
+          ? "= MID"
+          : `${Math.abs(natPerShare).toFixed(2)} · $${natTotal.toLocaleString("en-US", { maximumFractionDigits: 0 })}`}
+        <span className="ml-1 text-[9px] text-bb-orange">
+          {slipPerSet > 0 ? `(−$${slipPerSet.toFixed(0)}/set vs mid)` : ""}
+        </span>
+      </span>
+    </div>
+  );
+}
+
 export function OrderPanel({ designer }: { designer: Designer }) {
   const symbol = useTradingStore((s) => s.symbol);
   const kind = useStrategyStore((s) => s.kind);
@@ -152,6 +186,9 @@ export function OrderPanel({ designer }: { designer: Designer }) {
             {designer.ready ? `${Math.abs(designer.entry).toFixed(2)} × ${designer.qty}` : "—"}
           </span>
         </div>
+        {designer.ready && designer.legs && (
+          <InstantFillRow designer={designer} />
+        )}
 
         <div className="mt-auto flex gap-1">
           <button

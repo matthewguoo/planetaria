@@ -41,6 +41,12 @@ export type HeatmapRequest = {
   /** P/L basis override (position view: the plan's actual fill premium);
    * null/undefined => net of the legs' entry fields (designer). */
   entryOverride?: number | null;
+  /** Contour-solve bounds. The GRID window follows the visible view (dense
+   * sampling where the eyes are); the SOLVES need the wide structural window
+   * so TP/SL/BE boundaries that sit off-screen still resolve for the axis
+   * chips. Defaults to the grid window. */
+  solveLo?: number;
+  solveHi?: number;
 };
 
 export type HeatmapResult = {
@@ -104,8 +110,10 @@ self.onmessage = (event: MessageEvent<HeatmapRequest>) => {
     }
     // Contours: underlying level where SMILE-AWARE position value crosses
     // each premium threshold at this tau.
+    const sLo = req.solveLo ?? priceLo;
+    const sHi = req.solveHi ?? priceHi;
     const solve = (target: number | null): number =>
-      target === null ? NaN : solveCrossing((s) => value(s, tau) - target, priceLo, priceHi);
+      target === null ? NaN : solveCrossing((s) => value(s, tau) - target, sLo, sHi);
     breakevenLine[ti] = solve(entry);
     tpLine[ti] = solve(req.tpPremium);
     slLine[ti] = solve(req.slPremium);

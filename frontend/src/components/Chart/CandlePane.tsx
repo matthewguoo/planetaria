@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { barsTable } from "../../lib/perspective";
 import { focusFeed, onSnapshot } from "../../lib/barFeed";
 import type { HeatmapResult } from "../../lib/heatmap.worker";
@@ -25,6 +25,7 @@ import {
 import { buildPositionView } from "../../lib/positionView";
 import type { Designer } from "../../lib/useDesigner";
 import { ChartHud } from "./ChartHud";
+import { publishScale, sharedBars } from "../../lib/chartShared";
 import { useHeatmap } from "../../lib/useHeatmap";
 import { useAccountStore } from "../../store/accountStore";
 import { TF_MS, useTradingStore, type IndicatorToggles } from "../../store/tradingStore";
@@ -87,7 +88,9 @@ const STRIKE_HIT_PX = 6;
 /** Inset of the strike-handle rail from the plot's right edge. */
 const RAIL_INSET = 16;
 const RAIL_HIT_PX = 9;
-const CHIP_X = 6;
+// Strike chips start right of the LegRail strip (44px, desktop) so the two
+// leg affordances never overlap; on mobile the inset is just breathing room.
+const CHIP_X = 48;
 const CHIP_H = 18;
 const CHIP_ZONE = 14; // width of the − / + click zones on a strike chip
 
@@ -197,7 +200,8 @@ export function CandlePane({
   hudVariant,
 }: {
   designer: Designer;
-  hudVariant?: "full" | "chips";
+  /** "none": the host renders ChartHud itself (desktop left sidebar). */
+  hudVariant?: "full" | "chips" | "none";
 }) {
   const symbol = useTradingStore((s) => s.symbol);
   const tf = useTradingStore((s) => s.tf);
@@ -243,6 +247,10 @@ export function CandlePane({
   const dragTargetRef = useRef<DragTarget | null>(null);
   const surfaceRef = useRef<HeatmapResult | null>(null);
   const overlayRef = useRef<StrategyOverlay | null>(null);
+  // Visible y-domain, quantized to 25% steps of its own span: pans/zooms
+  // only trigger a surface recompute when the view moves meaningfully.
+  const [viewWindow, setViewWindow] = useState<[number, number] | null>(null);
+  const viewWindowRef = useRef<[number, number] | null>(null);
   const indicatorsRef = useRef<IndicatorToggles>(indicatorToggles);
   indicatorsRef.current = indicatorToggles;
   const rafRef = useRef(0);
@@ -367,9 +375,10 @@ export function CandlePane({
       }
       const ctx = canvas.getContext("2d")!;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      const layout = computeLayout(cssW, cssH);
       render(
         ctx,
-        computeLayout(cssW, cssH),
+        layout,
         barsRef.current,
         viewRef.current,
         mouseRef.current,
@@ -379,10 +388,27 @@ export function CandlePane({
         dragTargetRef.current,
         indicatorsRef.current,
       );
+      // Feed HTML layers outside the canvas (sidebar HUD, leg rail).
+      sharedBars.current = barsRef.current;
+      const [lo, hi] = currentDomain(
+        barsRef.current, viewRef.current, overlayRef.current, surfaceRef.current,
+      );
+      publishScale({ lo, hi, volTopPx: layout.volTop });
+      // Quantized view window for the heatmap grid (see useHeatmap).
+      const step = Math.max((hi - lo) * 0.25, 1e-6);
+      const qLo = Math.floor(lo / step) * step;
+      const qHi = Math.ceil(hi / step) * step;
+      const prev = viewWindowRef.current;
+      if (!prev || Math.abs(prev[0] - qLo) > step * 0.5 || Math.abs(prev[1] - qHi) > step * 0.5) {
+        viewWindowRef.current = [qLo, qHi];
+        setViewWindow([qLo, qHi]);
+      }
     });
   }, [tf]);
 
-  // Surface recompute (worker) — remaps on pan/zoom without recompute.
+  // Surface recompute (worker). The grid follows the QUANTIZED visible
+  // window (dense vertical sampling at any zoom — see useHeatmap); pans
+  // inside the same quantized window still remap without recompute.
   const surfaceInputs = useMemo(() => {
     if (!overlay || !overlay.legs) return null;
     const risk =
@@ -398,8 +424,10 @@ export function CandlePane({
       volShift: overlay.volShift,
       skewBeta: overlay.skewBeta,
       entryOverride: overlay.entryBasis,
+      viewLo: viewWindow ? viewWindow[0] : null,
+      viewHi: viewWindow ? viewWindow[1] : null,
     };
-  }, [overlay]);
+  }, [overlay, viewWindow]);
 
   useHeatmap(surfaceInputs, (result) => {
     surfaceRef.current = result;
@@ -791,7 +819,9 @@ export function CandlePane({
 
   return (
     <div ref={wrapRef} className="relative h-full w-full cursor-crosshair overflow-hidden">
-      <ChartHud designer={designer} barsRef={barsRef} variant={hudVariant} />
+      {hudVariant !== "none" && (
+        <ChartHud designer={designer} barsRef={barsRef} variant={hudVariant} />
+      )}
       {/* Pointer events (not mouse) so touch drives the same pan/drag
           interactions on phones; touch-none stops the page from scrolling
           while dragging the chart. */}

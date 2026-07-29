@@ -128,8 +128,11 @@ export function ChartHud({
   designer: Designer;
   barsRef: React.RefObject<Bars>;
   /** "chips": toggles + one legend line only — the phone layout hosts the
-   * MC/theta data in tabs below the chart instead of floating over it. */
-  variant?: "full" | "chips";
+   * MC/theta data in tabs below the chart instead of floating over it.
+   * "sidebar": same content as "full" but rendered as a permanent static
+   * column (desktop hosts it left of the chart so it never occludes the
+   * canvas or its drag handles). */
+  variant?: "full" | "chips" | "sidebar";
 }) {
   const indicators = useTradingStore((s) => s.indicators);
   const toggleIndicator = useTradingStore((s) => s.toggleIndicator);
@@ -143,7 +146,7 @@ export function ChartHud({
   mcRef.current = mc;
 
   const mcInputs: McInputs | null = useMemo(() => {
-    if (variant !== "full" || !indicators.sim || !designer.ready || !designer.legs) return null;
+    if (variant === "chips" || !indicators.sim || !designer.ready || !designer.legs) return null;
     return {
       legs: designer.legs,
       entry: designer.entry,
@@ -172,8 +175,13 @@ export function ChartHud({
 
   const p = designer.probabilities;
 
+  const rootCls =
+    variant === "sidebar"
+      ? "flex h-full w-52 shrink-0 flex-col gap-1 overflow-y-auto bg-bb-panel p-1.5 text-[10px]"
+      : "pointer-events-none absolute left-1.5 top-1.5 z-10 flex w-56 flex-col gap-1 text-[10px]";
+
   return (
-    <div className="pointer-events-none absolute left-1.5 top-1.5 z-10 flex w-56 flex-col gap-1 text-[10px]">
+    <div className={rootCls}>
       <div className="pointer-events-auto flex flex-wrap gap-px">
         {TOGGLES.map(({ key, label, title }) => (
           <button
@@ -238,9 +246,9 @@ export function ChartHud({
         </span>
       </div>
 
-      {variant === "full" && indicators.theta && <ThetaBlock designer={designer} />}
+      {variant !== "chips" && indicators.theta && <ThetaBlock designer={designer} />}
 
-      {variant === "full" && indicators.sim && designer.ready && p && (
+      {variant !== "chips" && indicators.sim && designer.ready && p && (
         <div
           className="pointer-events-none flex flex-col gap-0.5 border border-bb-border/60 bg-black/75 px-1.5 py-1"
           title="Monte Carlo: 2000 paths with the enforcer's exact exit rules, net of spread friction. Analytic rows: risk-neutral GBM."

@@ -4,6 +4,9 @@ import { Header } from "./components/Header";
 import { CandlePane } from "./components/Chart/CandlePane";
 import { ChainPanel } from "./components/Chart/ChainPanel";
 import { ChartControls } from "./components/Chart/ChartControls";
+import { ChartHud } from "./components/Chart/ChartHud";
+import { LegRail } from "./components/Chart/LegRail";
+import { sharedBars } from "./lib/chartShared";
 import { MobileApp } from "./components/Mobile/MobileApp";
 import { OrderPanel } from "./components/Panels/OrderPanel";
 import { SizingPanel } from "./components/Panels/SizingPanel";
@@ -93,8 +96,14 @@ export default function App() {
           <main className="panel flex min-h-0 flex-1 flex-col">
             <ChartControls />
             <div className="flex min-h-0 flex-1">
+              {/* Permanent HUD sidebar: overlays/sim/theta live OFF the
+                  canvas so they never occlude drag handles or contours. */}
+              <aside className="shrink-0 border-r border-bb-border">
+                <ChartHud designer={designer} barsRef={sharedBars} variant="sidebar" />
+              </aside>
               <div className="relative min-h-0 min-w-0 flex-1">
-                <CandlePane designer={designer} />
+                <CandlePane designer={designer} hudVariant="none" />
+                <LegRail designer={designer} />
               </div>
               {chainOpen && (
                 <aside className="w-72 shrink-0 border-l border-bb-border">

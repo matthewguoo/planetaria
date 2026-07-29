@@ -1,7 +1,11 @@
 /**
- * Owns the heatmap web worker. Recomputes the P/L surface when the strategy
- * changes (legs/exits/expiry) or spot drifts — NOT on pan/zoom; the surface
- * covers a fixed ±4σ√τ window around spot and the renderer just remaps it.
+ * Owns the heatmap web worker. The GRID is computed over the VISIBLE price
+ * window (padded + quantized) so vertical resolution follows the zoom — a
+ * butterfly's 4-point tent gets dense sampling instead of dissolving into
+ * blobs inside a fixed ±4σ window. Contour solves still use the wide
+ * structural window so off-screen TP/SL/BE boundaries keep resolving.
+ * Quantization means pans only recompute when the view actually shifts a
+ * meaningful fraction; the worker round-trip is a few ms.
  */
 
 import { useEffect, useRef } from "react";
@@ -19,6 +23,9 @@ export type SurfaceInputs = {
   volShift: number;
   skewBeta: boolean;
   entryOverride?: number | null;
+  /** Visible y-domain (quantized by the chart); null before first draw. */
+  viewLo: number | null;
+  viewHi: number | null;
 };
 
 export function useHeatmap(inputs: SurfaceInputs | null, onResult: (r: HeatmapResult) => void) {
@@ -67,26 +74,42 @@ export function useHeatmap(inputs: SurfaceInputs | null, onResult: (r: HeatmapRe
       volShift,
       skewBeta,
       inputs.entryOverride ?? null,
+      inputs.viewLo,
+      inputs.viewHi,
     ]);
     if (key === lastKeyRef.current) return;
     lastKeyRef.current = key;
 
     const sigma = positionIv(legs) || 0.2;
     const tau = Math.max(hoursToExpiry, 0.5) / TRADING_HOURS_PER_YEAR;
-    // Cover ±4σ√τ AND every strike (wide condor wings must not fall off the
-    // surface), with a little slack past the farthest strike.
+    // Wide structural window: ±4σ√τ AND every strike (condor wings must not
+    // fall outside the contour-solve bracket).
     const strikeReach = Math.max(...legs.map((l) => Math.abs(l.strike - qSpot)), 0);
     const span = Math.max(
       spot * 4 * sigma * Math.sqrt(tau),
       strikeReach * 1.25,
       spot * 0.004,
     );
+    const solveLo = Math.max(qSpot - span, 0.01);
+    const solveHi = qSpot + span;
+    // Grid window: the visible view padded 30% each side, so vertical
+    // resolution tracks the zoom. Falls back to the wide window pre-draw.
+    let gridLo = solveLo;
+    let gridHi = solveHi;
+    const { viewLo, viewHi } = inputs;
+    if (viewLo !== null && viewHi !== null && viewHi > viewLo) {
+      const pad = (viewHi - viewLo) * 0.3;
+      gridLo = Math.max(viewLo - pad, 0.01);
+      gridHi = viewHi + pad;
+    }
     const request: HeatmapRequest = {
       id: ++seqRef.current,
       legs,
       hoursToExpiry,
-      priceLo: Math.max(qSpot - span, 0.01),
-      priceHi: qSpot + span,
+      priceLo: gridLo,
+      priceHi: gridHi,
+      solveLo,
+      solveHi,
       priceSteps: 128,
       timeSteps: 64,
       tpPremium,

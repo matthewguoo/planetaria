@@ -1,6 +1,7 @@
 import type { Designer } from "../../lib/useDesigner";
 import {
   availableStrikes,
+  findContract,
   STRATEGIES,
   useStrategyStore,
   type StrategyKind,
@@ -76,7 +77,12 @@ export function StrategyPanel({ designer }: { designer: Designer }) {
           </div>
         )}
         <div className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto p-2">
-          {strikes.map((_, i) => (
+          {strikes.map((_, i) => {
+            const contract =
+              chain && expiry && strikes[i] !== undefined
+                ? findContract(chain, expiry, rights[i], strikes[i])
+                : null;
+            return (
             <div key={i} className="flex items-center gap-2">
               <span
                 className={
@@ -85,6 +91,20 @@ export function StrategyPanel({ designer }: { designer: Designer }) {
               >
                 {sides[i] > 0 ? "+" : "−"}
                 {ratios[i] ?? 1} {rights[i]}
+              </span>
+              <span
+                data-numeric
+                className="w-24 shrink-0 truncate text-[9px] text-bb-muted"
+                title={
+                  contract
+                    ? `${contract.bid.toFixed(2)} × ${contract.ask.toFixed(2)} · IV ${(contract.iv * 100).toFixed(1)}%` +
+                      (contract.delta !== null ? ` · Δ ${contract.delta.toFixed(3)}` : "")
+                    : "no quote"
+                }
+              >
+                {contract
+                  ? `${contract.mid.toFixed(2)}${contract.delta !== null ? ` Δ${contract.delta.toFixed(2)}` : ""}`
+                  : "—"}
               </span>
               <select
                 className="min-w-0 flex-1 border border-bb-border bg-black px-1 py-0.5 text-right text-[11px] text-white outline-none"
@@ -123,7 +143,8 @@ export function StrategyPanel({ designer }: { designer: Designer }) {
                 </button>
               </span>
             </div>
-          ))}
+            );
+          })}
           <div className="mt-auto flex items-baseline justify-between text-[11px]">
             <span className="text-bb-muted">
               NET {designer.ready && designer.entry < 0 ? "CREDIT" : "DEBIT"}
