@@ -27,6 +27,10 @@ DEFAULT_RISK = {
     "max_spread_pct": 0.15,      # per-leg half-spread / mid cap (illiquidity guard)
     "entry_ttl_min": 5,          # unfilled entries auto-cancel (no stale chasing)
     "max_trades_per_day": 20,    # overtrading breaker
+    # SL denoising: a breach must PERSIST this long before firing (median-
+    # filtered mids; deep breaches >=25% of the TP-SL span fire instantly).
+    # 0 disables the dwell — every breach fires immediately.
+    "sl_confirm_s": 3.0,
 }
 
 RISK_KEY = "risk"
@@ -71,6 +75,7 @@ class RiskService:
                     "default_tp_pct": (0.05, 10.0),
                     "default_sl_pct": (0.05, 0.95),
                     "max_spread_pct": (0.01, 0.50),
+                    "sl_confirm_s": (0.0, 30.0),
                 }[key]
                 if not limits[0] <= fv <= limits[1]:
                     raise ValueError(f"{key} out of bounds {limits}")

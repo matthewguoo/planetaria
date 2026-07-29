@@ -6,14 +6,22 @@
  * chart pan/zoom/drag pass straight through.
  */
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  getPlanEvents,
+  getSystemState,
+  type PlanEvent,
+  type SystemState,
+} from "../../lib/api";
 import { computeAtr, realizedVolAnnualized } from "../../lib/indicators";
 import type { McResult } from "../../lib/mcSim";
 import { bsThetaPerDay, structuralMaxLoss, TRADING_HOURS_PER_YEAR } from "../../lib/optionsMath";
 import { useMonteCarlo, type McInputs } from "../../lib/useMonteCarlo";
 import type { Designer } from "../../lib/useDesigner";
+import { useAccountStore } from "../../store/accountStore";
 import { THETA_TEMPLATES, useStrategyStore } from "../../store/strategyStore";
 import { TF_MS, useTradingStore } from "../../store/tradingStore";
+import { useUiStore } from "../../store/uiStore";
 import type { Bars } from "./scales";
 
 const TOGGLES = [
@@ -35,6 +43,99 @@ function StatRow({ label, value, cls }: { label: string; value: string; cls?: st
       <span data-numeric className={cls ?? "text-white"}>
         {value}
       </span>
+    </div>
+  );
+}
+
+function etCountdown(iso: string | null): string {
+  if (!iso) return "—";
+  const ms = Date.parse(iso) - Date.now();
+  if (ms <= 0) return "due";
+  const m = Math.floor(ms / 60000);
+  return m >= 90 ? `${(m / 60).toFixed(1)}h` : `${m}m`;
+}
+
+/** "What is the enforcer doing for THIS position right now" — the live
+ * conditionals of the bracket, shown while viewing a position on the chart.
+ * Polls system state (monitor/health) and the plan's lifecycle journal. */
+function EnforcerBlock({ planId }: { planId: string }) {
+  const plan = useAccountStore((s) => s.positions.find((p) => p.id === planId) ?? null);
+  const [sys, setSys] = useState<SystemState | null>(null);
+  const [events, setEvents] = useState<PlanEvent[]>([]);
+
+  useEffect(() => {
+    let live = true;
+    const tick = () => {
+      getSystemState().then((s) => live && setSys(s)).catch(() => {});
+      getPlanEvents(planId).then((e) => live && setEvents(e.slice(0, 3))).catch(() => {});
+    };
+    tick();
+    const id = window.setInterval(tick, 5000);
+    return () => {
+      live = false;
+      window.clearInterval(id);
+    };
+  }, [planId]);
+
+  if (!plan) return null;
+  const monitored = sys?.enforcer.monitored_plan_ids.includes(planId) ?? null;
+  const health = sys?.enforcer.monitors_without_mid?.[planId];
+  const mark = plan.mark;
+  const span = Math.abs(plan.tp_premium - plan.sl_premium) || 1;
+  const slDist = mark != null ? ((mark - plan.sl_premium) / span) * 100 : null;
+
+  return (
+    <div
+      className="pointer-events-none flex flex-col gap-0.5 border border-bb-amber/50 bg-black/80 px-1.5 py-1"
+      title="Live bracket state: exactly what the exit enforcer is watching and will do for this position"
+    >
+      <div className="flex justify-between gap-2">
+        <span className="tracking-widest text-bb-amber">ENFORCER</span>
+        <span
+          className={
+            monitored === null
+              ? "text-bb-muted"
+              : monitored && !health
+                ? "text-bb-profit"
+                : "text-bb-orange"
+          }
+        >
+          {monitored === null ? "…" : !monitored ? "⚠ NO MONITOR" : health ? `⚠ ${health}` : "● WATCHING"}
+        </span>
+      </div>
+      <StatRow
+        label="MARK vs SL/TP"
+        value={
+          mark != null
+            ? `${mark.toFixed(2)} in [${plan.sl_premium.toFixed(2)} … ${plan.tp_premium.toFixed(2)}]`
+            : "—"
+        }
+        cls={slDist != null && slDist < 25 ? "text-bb-orange" : "text-white"}
+      />
+      {slDist != null && (
+        <StatRow
+          label="TO STOP"
+          value={`${Math.max(slDist, 0).toFixed(0)}% of bracket`}
+          cls={slDist < 25 ? "text-bb-loss" : "text-bb-muted"}
+        />
+      )}
+      <StatRow
+        label="TP"
+        value={plan.tp_order_id ? "RESTING @ BROKER" : "software trigger"}
+        cls={plan.tp_order_id ? "text-bb-profit" : "text-bb-muted"}
+      />
+      <StatRow
+        label="SL"
+        value="median mid + dwell → ladder −2%→−6%→MKT"
+        cls="text-bb-muted"
+      />
+      <StatRow label="TIME STOP" value={etCountdown(plan.time_stop_utc)} cls="text-bb-orange" />
+      {events.map((e, i) => (
+        <div key={i} className="truncate text-[9px] leading-tight text-bb-muted">
+          {e.ts ? e.ts.slice(11, 19) : "—"} {e.event}
+          {e.target ? `→${e.target}` : ""} {e.applied ? "" : "(dropped)"}
+        </div>
+      ))}
     </div>
   );
 }
@@ -133,6 +234,7 @@ export function ChartHud({
 }) {
   const indicators = useTradingStore((s) => s.indicators);
   const toggleIndicator = useTradingStore((s) => s.toggleIndicator);
+  const viewingPlanId = useUiStore((s) => s.viewingPlanId);
   const tf = useTradingStore((s) => s.tf);
   const volShift = useStrategyStore((s) => s.volShift);
   const setVolShift = useStrategyStore((s) => s.setVolShift);
@@ -237,6 +339,8 @@ export function ChartHud({
           {ivRv !== null && ` · ${ivRv >= 0 ? "+" : ""}${(ivRv * 100).toFixed(1)}pt`}
         </span>
       </div>
+
+      {viewingPlanId && <EnforcerBlock planId={viewingPlanId} />}
 
       {variant === "full" && indicators.theta && <ThetaBlock designer={designer} />}
 

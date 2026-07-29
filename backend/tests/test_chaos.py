@@ -236,6 +236,9 @@ async def stack(tmp_path):
     # Resting TP off by default so the software-trigger scenarios stay pure;
     # dedicated tests flip it on.
     enforcer.resting_tp = False
+    # SL dwell off by default (legacy instant-fire semantics for the storm
+    # scenarios); the denoising tests configure their own dwell.
+    await risk.update_settings({"sl_confirm_s": 0.0})
     yield SimpleNamespace(
         db=db, broker=broker, alpaca=alpaca, market=market, trade=trade, enforcer=enforcer
     )
@@ -668,5 +671,96 @@ async def test_underlying_tick_triggers_fast_sl(stack):
         assert status == "closed", f"stuck in {status}"
         assert (await stack.trade.get_plan(plan.id)).exit_reason == "sl"
         assert elapsed < 5.0, f"SL took {elapsed:.1f}s - underlying trigger did not fire"
+    finally:
+        filler.cancel()
+
+
+@pytest.mark.asyncio
+async def test_sl_single_spike_does_not_shake_out(stack):
+    """One junk print below the stop (spread bounce, stale side) must NOT
+    fire the SL: the median filter absorbs isolated spikes entirely."""
+    await stack.trade.risk.update_settings({"sl_confirm_s": 0.4})
+    plan = await make_plan(stack.db, broker=stack.broker)
+    stack.enforcer.quote_poll_s = 0.05
+    stack.enforcer.quote_poll_near_s = 0.05
+    try:
+        await stack.enforcer.arm(plan.id)
+        # Healthy mids, one spike, healthy mids again.
+        for mid in (2.0, 2.0, 0.4, 2.0, 2.0, 2.0):
+            stack.market.quotes[SYM] = {"bid": mid - 0.01, "ask": mid + 0.01, "mid": mid}
+            stack.market.pump(SYM, mid)
+            await asyncio.sleep(0.08)
+        await asyncio.sleep(1.0)
+        refreshed = await stack.trade.get_plan(plan.id)
+        assert refreshed.status == "filled", (
+            f"spike shook the position out (status={refreshed.status})"
+        )
+    finally:
+        stack.enforcer.disarm(plan.id)
+
+
+@pytest.mark.asyncio
+async def test_sl_sustained_breach_fires_after_dwell(stack):
+    """A REAL breach (persisting on filtered mids) fires after the dwell."""
+    await stack.trade.risk.update_settings({"sl_confirm_s": 0.4})
+    plan = await make_plan(stack.db, broker=stack.broker)
+    stack.enforcer.quote_poll_s = 0.05
+    stack.enforcer.quote_poll_near_s = 0.05
+    filler = asyncio.create_task(
+        auto_filler(stack.broker, stack.trade, deliver_events=False, price=0.8)
+    )
+    try:
+        await stack.enforcer.arm(plan.id)
+        t0 = time.monotonic()
+
+        async def pump_breach():
+            while True:
+                stack.market.quotes[SYM] = {"bid": 0.79, "ask": 0.81, "mid": 0.8}
+                stack.market.pump(SYM, 0.8)
+                await asyncio.sleep(0.05)
+
+        pumper = asyncio.create_task(pump_breach())
+        try:
+            status = await wait_status(stack.trade, plan.id, deadline=10.0)
+        finally:
+            pumper.cancel()
+        elapsed = time.monotonic() - t0
+        assert status == "closed"
+        assert (await stack.trade.get_plan(plan.id)).exit_reason == "sl"
+        assert elapsed >= 0.35, f"dwell not respected ({elapsed:.2f}s)"
+    finally:
+        filler.cancel()
+
+
+@pytest.mark.asyncio
+async def test_sl_deep_breach_fires_immediately(stack):
+    """A crash far past the stop (>=25% of the TP-SL span) must NOT wait for
+    the dwell — blowup prevention beats shakeout prevention."""
+    await stack.trade.risk.update_settings({"sl_confirm_s": 5.0})  # long dwell
+    plan = await make_plan(stack.db, broker=stack.broker)
+    stack.enforcer.quote_poll_s = 0.05
+    stack.enforcer.quote_poll_near_s = 0.05
+    filler = asyncio.create_task(
+        auto_filler(stack.broker, stack.trade, deliver_events=False, price=0.1)
+    )
+    try:
+        await stack.enforcer.arm(plan.id)
+        t0 = time.monotonic()
+
+        async def pump_crash():
+            while True:
+                stack.market.quotes[SYM] = {"bid": 0.09, "ask": 0.11, "mid": 0.1}
+                stack.market.pump(SYM, 0.1)
+                await asyncio.sleep(0.05)
+
+        pumper = asyncio.create_task(pump_crash())
+        try:
+            status = await wait_status(stack.trade, plan.id, deadline=10.0)
+        finally:
+            pumper.cancel()
+        elapsed = time.monotonic() - t0
+        assert status == "closed"
+        assert (await stack.trade.get_plan(plan.id)).exit_reason == "sl"
+        assert elapsed < 3.0, f"deep breach waited for dwell ({elapsed:.2f}s)"
     finally:
         filler.cancel()

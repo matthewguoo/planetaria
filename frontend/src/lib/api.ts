@@ -29,6 +29,9 @@ export type RiskSettings = {
   max_spread_pct: number;
   entry_ttl_min: number;
   max_trades_per_day: number;
+  /** SL breach must persist this long (median-filtered) before firing;
+   * deep breaches fire immediately. 0 = instant. */
+  sl_confirm_s: number;
 };
 
 export type Account = {
@@ -71,6 +74,7 @@ export type Plan = {
   exit_premium: number | null;
   realized_pnl: number | null;
   mark?: number | null;
+  tp_order_id?: string | null;
   unrealized_pnl?: number | null;
   quote_stale?: boolean;
 };

@@ -24,6 +24,15 @@ log = logging.getLogger("app.enforcer")
 
 ESCALATION = [(0.02, 5.0), (0.06, 5.0), (None, 0.0)]  # (buffer, wait_after)
 
+# SL denoising (option mids flicker: spread bounce, stale sides, junk
+# prints). A breach must persist sl_confirm_s on MEDIAN-filtered mids —
+# unless it is DEEP (>= this fraction of the TP-SL span past the stop),
+# in which case it fires immediately: real crashes are large, noise is
+# small. Hysteresis stops re-arm churn at the line.
+SL_DEEP_FRAC = 0.25
+SL_HYSTERESIS_FRAC = 0.02
+MID_FILTER_WINDOW = 3
+
 
 def model_position_value(plan: TradePlan, spot: float, now_ms: float) -> float | None:
     """BSM position value from the plan's stored leg IVs at a given spot —
@@ -328,7 +337,9 @@ class ExitEnforcer:
         rearm = False
         try:
             plan = await self.trade.get_plan(plan_id)
-            entry_ttl_min = float((await self.trade.risk.get_settings())["entry_ttl_min"])
+            risk_cfg = await self.trade.risk.get_settings()
+            entry_ttl_min = float(risk_cfg["entry_ttl_min"])
+            sl_confirm_s = float(risk_cfg.get("sl_confirm_s", 3.0))
             symbols = [leg["symbol"] for leg in plan.legs]
             await self.market.subscribe_options(symbols)
 
@@ -356,6 +367,11 @@ class ExitEnforcer:
             next_tp_rest_try = 0.0
             wait_s = self.quote_poll_near_s
             msg: dict | None = None
+            from collections import deque
+            from statistics import median
+
+            recent_mids: deque = deque(maxlen=MID_FILTER_WINDOW)
+            sl_breach_since: float | None = None
             try:
                 while True:
                     # Underlying ticks can arrive at stream rate; re-reading
@@ -471,20 +487,55 @@ class ExitEnforcer:
                             )
                         continue
                     self.monitor_health[plan_id] = "ok"
+                    # Median filter kills single-tick spikes (spread bounce,
+                    # one junk print) at the cost of tiny lag.
+                    recent_mids.append(mid)
+                    fmid = median(recent_mids)
                     # Adaptive cadence: tighten the poll floor near thresholds.
                     span = abs(plan.tp_premium - plan.sl_premium) or 1.0
-                    dist = min(abs(mid - plan.tp_premium), abs(mid - plan.sl_premium))
+                    dist = min(abs(fmid - plan.tp_premium), abs(fmid - plan.sl_premium))
                     wait_s = self.quote_poll_near_s if dist < 0.2 * span else self.quote_poll_s
                     # TP side: software trigger only when no broker-resting TP
                     # is working the level already.
-                    if not plan.tp_order_id and mid >= plan.tp_premium:
-                        log.info("TP hit for plan %s (mid %.2f)", plan.id, mid)
+                    if not plan.tp_order_id and fmid >= plan.tp_premium:
+                        log.info("TP hit for plan %s (mid %.2f)", plan.id, fmid)
                         await self._execute_exit(plan_id, "tp")
                         return
-                    if mid <= plan.sl_premium:
-                        log.warning("SL hit for plan %s (mid %.2f)", plan.id, mid)
-                        await self._execute_exit(plan_id, "sl")
-                        return
+                    # SL: deep breaches fire NOW; shallow ones must persist
+                    # (dwell) so quote noise can't shake the position out.
+                    if fmid <= plan.sl_premium:
+                        depth = plan.sl_premium - fmid
+                        now_mono = time.monotonic()
+                        if depth >= SL_DEEP_FRAC * span or sl_confirm_s <= 0:
+                            log.warning("SL hit for plan %s (mid %.2f, deep breach)",
+                                        plan.id, fmid)
+                            await self._execute_exit(plan_id, "sl")
+                            return
+                        if sl_breach_since is None:
+                            sl_breach_since = now_mono
+                            log.info("plan %s: SL breach @ %.2f - confirming for %.1fs",
+                                     plan.id, fmid, sl_confirm_s)
+                        elif now_mono - sl_breach_since >= sl_confirm_s:
+                            log.warning("SL hit for plan %s (mid %.2f, held %.1fs)",
+                                        plan.id, fmid, now_mono - sl_breach_since)
+                            await self._execute_exit(plan_id, "sl")
+                            return
+                        self.monitor_health[plan_id] = (
+                            f"sl-confirming ({time.monotonic() - sl_breach_since:.1f}s)"
+                        )
+                        # Re-check on fresh quotes at a tight cadence while
+                        # the clock runs on the breach.
+                        wait_s = min(wait_s, 0.5)
+                        try:
+                            await self.market.refresh_option_quotes(symbols, max_age_s=0.5)
+                        except Exception:
+                            pass
+                    elif sl_breach_since is not None and (
+                        fmid > plan.sl_premium + SL_HYSTERESIS_FRAC * span
+                    ):
+                        log.info("plan %s: SL breach cleared (mid %.2f) - dwell reset",
+                                 plan.id, fmid)
+                        sl_breach_since = None
             finally:
                 for sym in symbols:
                     self.market.broadcast.unsubscribe(f"oquote:{sym}", queue)

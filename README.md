@@ -292,6 +292,32 @@ If a mid is ever uncomputable (a leg with no quote even via REST), the
 monitor says so: throttled log naming the legs, per-plan health in
 `/api/system/state`, and a NO-QUOTE warning in the SYSTEM menu.
 
+### Denoised stop (no shakeouts, no blowups)
+
+Raw option mids are chaotic — a one-tick spread blowout can print a mid
+below the stop for 200ms and vanish. The SL trigger therefore runs the
+standard production combo (there is no single named algorithm; real desks
+converge on exactly this):
+
+- **Median filter** — the trigger evaluates the median of the last 3 mids,
+  so a single bad print can never fire the stop by itself.
+- **Confirmation dwell** — a breach must persist `sl_confirm_s` seconds
+  (risk setting, default 3s, 0 = instant) before the exit ladder starts.
+  While confirming, the monitor re-checks every 0.5s with forced quote
+  refreshes and reports `sl-confirming (Ns)` in its health.
+- **Deep-breach override** — if the (filtered) mid is ≥25% of the TP-SL
+  span past the stop, it fires immediately: a real collapse never waits
+  out the dwell. This bounds the extra loss the dwell can cost.
+- **Hysteresis** — the confirmation timer only resets once the mid recovers
+  2% of the span back above the stop, so a mid oscillating exactly on the
+  line can't reset the clock forever.
+
+The live conditionals are visible in the chart HUD: viewing a position
+shows an ENFORCER block with monitor health, mark vs bracket, distance to
+stop, whether TP is resting at the broker, and the last journal events.
+The ACCOUNT tab's EXIT QUALITY panel tracks realized stop slippage
+(specified SL vs actual exit) so you can verify the cap holds in practice.
+
 ### System menu & lifecycle journal
 
 The ⚙ button (desktop and phone headers) opens the SYSTEM menu:

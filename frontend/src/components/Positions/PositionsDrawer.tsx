@@ -413,6 +413,7 @@ function AccountTab() {
         {numField("max_spread_pct", "MAX LEG SPREAD", 100, "%", 1)}
         {numField("entry_ttl_min", "ENTRY TTL", 1, "m", 1)}
         {numField("max_trades_per_day", "MAX TRADES/DAY", 1, "", 1)}
+        {numField("sl_confirm_s", "SL CONFIRM DWELL", 1, "s", 0.5)}
         <label className="flex items-center justify-between gap-2 text-[11px]">
           <span className="text-bb-muted">TIME STOP (ET)</span>
           <input

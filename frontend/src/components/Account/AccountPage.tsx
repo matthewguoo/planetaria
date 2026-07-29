@@ -155,6 +155,73 @@ function RiskPanel({ risk }: { risk: AccountRisk | null }) {
   );
 }
 
+/** Realized-vs-specified exit quality: does your 50% stop actually lose
+ * ~50%? Slippage per SL exit = specified stop premium − realized exit
+ * premium (positive = filled worse than the line); TP improvement = fill
+ * better than the line (resting limits fill at-or-better by construction).
+ * Pure client-side math over closed trades. */
+function ExitQualityPanel({ closed }: { closed: Plan[] | null }) {
+  if (!closed) return null;
+  const basis = (t: Plan) => Math.abs(t.fill_premium ?? t.entry_limit) || 1;
+  const qty = (t: Plan) => t.filled_qty || t.qty;
+
+  const slExits = closed.filter(
+    (t) => t.exit_reason === "sl" && t.exit_premium != null,
+  );
+  const tpExits = closed.filter(
+    (t) => t.exit_reason === "tp" && t.exit_premium != null,
+  );
+  if (!slExits.length && !tpExits.length) return null;
+
+  const slRows = slExits.map((t) => {
+    const slip = t.sl_premium - (t.exit_premium as number); // premium/share
+    return { t, slip, slipPct: slip / basis(t), dollars: slip * 100 * qty(t) };
+  });
+  const tpRows = tpExits.map((t) => {
+    const improve = (t.exit_premium as number) - t.tp_premium;
+    return { t, improve, improvePct: improve / basis(t) };
+  });
+  const avg = (xs: number[]) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : 0);
+  const worstSl = slRows.length ? slRows.reduce((a, b) => (b.slip > a.slip ? b : a)) : null;
+
+  return (
+    <div className="panel flex shrink-0 flex-col">
+      <div
+        className="panel-title"
+        title="Slippage = how much worse than your specified stop each SL exit actually filled (ladder + spread + gap). TP fills at-or-better by construction (broker-resting limit)."
+      >
+        EXIT QUALITY · realized vs specified
+      </div>
+      <div className="grid grid-cols-2 gap-px md:grid-cols-4">
+        <div className="flex flex-col gap-0.5 p-2">
+          <span className="text-[9px] tracking-wider text-bb-muted">SL EXITS</span>
+          <span data-numeric className="text-[12px] text-white">{slRows.length}</span>
+        </div>
+        <div className="flex flex-col gap-0.5 p-2" title="Average slip past the stop line, as % of entry premium">
+          <span className="text-[9px] tracking-wider text-bb-muted">AVG SLIP</span>
+          <span data-numeric className={"text-[12px] " + (avg(slRows.map((r) => r.slipPct)) > 0.1 ? "text-bb-orange" : "text-white")}>
+            {slRows.length ? `${(avg(slRows.map((r) => r.slipPct)) * 100).toFixed(1)}% · $${avg(slRows.map((r) => r.dollars)).toFixed(0)}` : "—"}
+          </span>
+        </div>
+        <div className="flex flex-col gap-0.5 p-2" title="Worst single SL fill vs its line">
+          <span className="text-[9px] tracking-wider text-bb-muted">WORST SLIP</span>
+          <span data-numeric className="text-[12px] text-bb-loss">
+            {worstSl ? `${(worstSl.slipPct * 100).toFixed(1)}% (${worstSl.t.underlying})` : "—"}
+          </span>
+        </div>
+        <div className="flex flex-col gap-0.5 p-2" title="TP fills at-or-better than the line (resting limit)">
+          <span className="text-[9px] tracking-wider text-bb-muted">TP EXITS · AVG BETTER</span>
+          <span data-numeric className="text-[12px] text-bb-profit">
+            {tpRows.length
+              ? `${tpRows.length} · +${(avg(tpRows.map((r) => r.improvePct)) * 100).toFixed(1)}%`
+              : "—"}
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function EquityCurve({ history }: { history: PortfolioHistory | null }) {
   const ref = useRef<HTMLCanvasElement>(null);
 
@@ -336,6 +403,7 @@ export function AccountPage() {
       </div>
 
       <RiskPanel risk={risk} />
+      <ExitQualityPanel closed={closed} />
 
       <div className="panel flex min-h-[10rem] shrink-0 flex-col">
         <div className="panel-title">
