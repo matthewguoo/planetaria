@@ -251,6 +251,22 @@ describe("custom leg composition (chain-panel clicks)", () => {
     expect(useStrategyStore.getState().strikes).toHaveLength(4);
   });
 
+  it("decRatio decrements above 1 and removes the leg at 1", () => {
+    freshStore();
+    useStrategyStore.getState().addLeg({ right: "P", side: -1, strike: 447.5 });
+    useStrategyStore.getState().setRatio(1, 2);
+    useStrategyStore.getState().decRatio(1); // 2 -> 1, leg stays
+    expect(useStrategyStore.getState().strikes).toHaveLength(2);
+    expect(useStrategyStore.getState().ratios[1]).toBe(1);
+    useStrategyStore.getState().decRatio(1); // at 1 -> leg removed
+    const s = useStrategyStore.getState();
+    expect(s.strikes).toEqual([452.5]);
+    expect(s.rights).toEqual(["C"]);
+    // Last remaining leg survives the minus (>= 1 leg invariant).
+    useStrategyStore.getState().decRatio(0);
+    expect(useStrategyStore.getState().strikes).toHaveLength(1);
+  });
+
   it("removeLeg splices all parallel arrays and never drops below one leg", () => {
     freshStore();
     useStrategyStore.getState().addLeg({ right: "P", side: -1, strike: 447.5 });

@@ -29,6 +29,7 @@ export function StrategyPanel({ designer }: { designer: Designer }) {
   const modified = useStrategyStore((s) => s.modified);
   const setStrike = useStrategyStore((s) => s.setStrike);
   const setRatio = useStrategyStore((s) => s.setRatio);
+  const decRatio = useStrategyStore((s) => s.decRatio);
   const removeLeg = useStrategyStore((s) => s.removeLeg);
 
   const snaps = availableStrikes(chain, expiry);
@@ -121,7 +122,8 @@ export function StrategyPanel({ designer }: { designer: Designer }) {
               <span className="flex shrink-0 gap-px">
                 <button
                   className="border border-bb-border px-1.5 text-[11px] text-bb-muted hover:text-bb-amber"
-                  onClick={() => setRatio(i, (ratios[i] ?? 1) - 1)}
+                  onClick={() => decRatio(i)}
+                  title="Fewer contracts — removes the leg at ×1"
                   aria-label={`Leg ${i + 1} fewer contracts`}
                 >
                   −

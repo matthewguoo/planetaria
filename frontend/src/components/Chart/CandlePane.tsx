@@ -222,6 +222,7 @@ export function CandlePane({
   const indicatorToggles = useTradingStore((s) => s.indicators);
   const setStrike = useStrategyStore((s) => s.setStrike);
   const setRatio = useStrategyStore((s) => s.setRatio);
+  const decRatio = useStrategyStore((s) => s.decRatio);
   const setTpPct = useStrategyStore((s) => s.setTpPct);
   const setSlPct = useStrategyStore((s) => s.setSlPct);
   const setTimeStopEt = useStrategyStore((s) => s.setTimeStopEt);
@@ -650,7 +651,7 @@ export function CandlePane({
       if (chip) {
         const ratios = overlayRef.current?.ratios ?? [];
         if (chip.zone === "minus") {
-          setRatio(chip.i, (ratios[chip.i] ?? 1) - 1);
+          decRatio(chip.i);
         } else if (chip.zone === "plus") {
           setRatio(chip.i, (ratios[chip.i] ?? 1) + 1);
         } else {
@@ -681,7 +682,7 @@ export function CandlePane({
         };
       }
     },
-    [hitTestChip, hitTestRail, hitTestExit, hitTestStrike, setRatio],
+    [hitTestChip, hitTestRail, hitTestExit, hitTestStrike, setRatio, decRatio],
   );
 
   const onMouseMove = useCallback(

@@ -214,6 +214,9 @@ type StrategyState = {
   setKind: (kind: StrategyKind) => void;
   setStrike: (index: number, strike: number) => void;
   setRatio: (index: number, ratio: number) => void;
+  /** "−" semantics: decrement the ratio; at 1 the leg is removed entirely
+   * (except the last remaining leg, which the ≥1-leg invariant protects). */
+  decRatio: (index: number) => void;
   /** Chain-panel click: add (or stack onto) a leg. Max 4 legs (MLEG limit). */
   addLeg: (leg: { right: "C" | "P"; side: 1 | -1; strike: number }) => void;
   removeLeg: (index: number) => void;
@@ -456,6 +459,14 @@ export const useStrategyStore = create<StrategyState>((set, get) => ({
       ratios[index] = Math.max(1, Math.min(Math.round(ratio), 9));
       return { ratios };
     }),
+  decRatio: (index) => {
+    const s = get();
+    if ((s.ratios[index] ?? 1) > 1) {
+      s.setRatio(index, (s.ratios[index] ?? 1) - 1);
+    } else {
+      s.removeLeg(index);
+    }
+  },
   addLeg: ({ right, side, strike }) =>
     set((s) => {
       // Stack onto an identical leg first (ratio up to 9).
