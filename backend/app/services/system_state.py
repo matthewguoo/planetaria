@@ -154,6 +154,13 @@ async def system_state(app_state) -> dict:
             "monitored_plan_ids": sorted(enforcer._monitors.keys())[:20],
             "ghost_keys": sum(len(v) for v in enforcer._ghost_keys.values()),
             "last_reconcile_age_s": reconcile_age,
+            # Monitors that currently CANNOT evaluate TP/SL (no quote for
+            # some leg even after REST polling) — must be zero in health.
+            "monitors_without_mid": {
+                pid: status
+                for pid, status in enforcer.monitor_health.items()
+                if status != "ok"
+            },
         },
         "tasks": {
             "trading_stream": _task_state(getattr(app_state, "trading_stream_task", None)),

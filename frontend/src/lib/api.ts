@@ -191,6 +191,7 @@ export type SystemState = {
     monitored_plan_ids: string[];
     ghost_keys: number;
     last_reconcile_age_s: number | null;
+    monitors_without_mid: Record<string, string>;
   };
   tasks: Record<string, string>;
 };

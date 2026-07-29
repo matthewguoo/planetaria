@@ -188,6 +188,7 @@ class FakeMarket:
         self.broadcast = Broadcaster()
         self.quotes: dict[str, dict] = {}
         self.stream_age_s = 1.0
+        self.refresh_calls = 0
 
     def latest_quote(self, symbol):
         return self.quotes.get(symbol)
@@ -197,6 +198,10 @@ class FakeMarket:
 
     async def unsubscribe_options(self, symbols):
         pass
+
+    async def refresh_option_quotes(self, symbols, max_age_s: float = 30.0):
+        # REST/demo fallback is a no-op here; quotes are set by the tests.
+        self.refresh_calls += 1
 
     def pump(self, symbol: str, mid: float) -> None:
         self.quotes[symbol] = {"bid": mid - 0.01, "ask": mid + 0.01, "mid": mid}
@@ -503,3 +508,42 @@ async def test_storm_all_plans_close_exactly_once(stack):
     finally:
         filler.cancel()
         reconciler.cancel()
+
+
+@pytest.mark.asyncio
+async def test_tp_fires_from_polled_quotes_without_stream_ticks(stack):
+    """THE after-hours / illiquid-leg case: the option stream never ticks
+    (no oquote broadcasts at all), but cached/REST-polled quotes exist.
+    Monitors must evaluate TP/SL on the poll cadence, not wait forever."""
+    plan = await make_plan(stack.db, broker=stack.broker)
+    stack.enforcer.quote_poll_s = 0.05  # compress the poll cadence
+    # Quote present in the cache (as REST seeding would leave it) — but
+    # never broadcast: the monitor gets zero wake-up ticks.
+    stack.market.quotes[SYM] = {"bid": 4.49, "ask": 4.51, "mid": 4.5}  # >= TP 4.0
+    filler = asyncio.create_task(auto_filler(stack.broker, stack.trade, price=4.4))
+    try:
+        await stack.enforcer.arm(plan.id)
+        status = await wait_status(stack.trade, plan.id, deadline=10.0)
+        assert status == "closed", f"plan stuck in {status} - poll path did not evaluate"
+        done = await stack.trade.get_plan(plan.id)
+        assert done.exit_reason == "tp"
+        assert stack.market.refresh_calls > 0  # the poll fallback actually ran
+    finally:
+        filler.cancel()
+
+
+@pytest.mark.asyncio
+async def test_monitor_reports_unevaluable_mid(stack):
+    """No quote for a leg even after polling: the monitor must surface
+    no-mid health instead of silently doing nothing."""
+    plan = await make_plan(stack.db, broker=stack.broker)
+    stack.enforcer.quote_poll_s = 0.05
+    # NO quotes at all for the leg.
+    try:
+        await stack.enforcer.arm(plan.id)
+        await asyncio.sleep(0.5)
+        health = stack.enforcer.monitor_health.get(plan.id, "")
+        assert health.startswith("no-mid"), f"health not surfaced: {health!r}"
+        assert SYM in health
+    finally:
+        stack.enforcer.disarm(plan.id)

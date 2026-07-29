@@ -190,6 +190,40 @@ class DemoFeed:
                 pass
             self._http = None
 
+    def publish_option_quotes(self, symbols: list[str]) -> None:
+        """Synthesize option quotes for keyless mode so the exit enforcer can
+        evaluate TP/SL against modeled premiums (BSM off the public-feed
+        spot — consistent with the demo chain's pricing)."""
+        from app.services.options_math import (
+            TRADING_HOURS_PER_YEAR,
+            bs_price,
+            trading_hours_to_expiry,
+        )
+        from app.services.trade_service import parse_occ_symbol
+
+        now_ms = time.time() * 1000
+        for sym in symbols:
+            occ = parse_occ_symbol(sym)
+            if not occ:
+                continue
+            bars = self.market.bars.get_bars(occ["underlying"], "1m")
+            spot = float(bars[-1]["c"]) if bars else self._prices.get(occ["underlying"], 0.0)
+            if spot <= 0:
+                continue
+            tau = trading_hours_to_expiry(occ["expiry"], now_ms) / TRADING_HOURS_PER_YEAR
+            mid = bs_price(spot, occ["strike"], max(tau, 0.0), 0.20, occ["right"])
+            half = max(0.01, mid * 0.03)
+            msg = {
+                "t": "oquote",
+                "symbol": sym,
+                "bid": round(max(mid - half, 0.0), 2),
+                "ask": round(mid + half, 2),
+                "mid": round(mid, 4),
+                "ts": int(now_ms),
+            }
+            self.market._latest_quotes[sym] = msg
+            self.market.broadcast.publish(f"oquote:{sym}", msg)
+
     # ------------------------------------------------------------ real data
 
     def _publish_quote(self, symbol: str, price: float) -> None:

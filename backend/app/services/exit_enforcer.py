@@ -10,6 +10,7 @@ Escalation ladder for exits (illiquid-friendly):
 
 import asyncio
 import logging
+import time
 from datetime import datetime, timezone
 from uuid import uuid4
 
@@ -40,6 +41,13 @@ class ExitEnforcer:
         # trigger, and flatten-all must serialize, not interleave orders.
         self._exit_locks: dict[str, asyncio.Lock] = {}
         self.last_reconcile_ts: float | None = None
+        # Monitors are quote-OR-poll driven: when the option stream is quiet
+        # (illiquid wings, after hours), each monitor polls REST at this
+        # cadence instead of waiting forever for a tick that never comes.
+        self.quote_poll_s = 15.0
+        # plan_id -> "ok" | "no-mid: SYM,..." — surfaced in /api/system/state
+        # so a monitor that CANNOT evaluate TP/SL is visible, never silent.
+        self.monitor_health: dict[str, str] = {}
         # Timing knobs (instance-level so pressure tests can compress them).
         self.escalation = list(ESCALATION)
         self.verify_poll_s = 5.0
@@ -68,10 +76,8 @@ class ExitEnforcer:
                 log.exception("periodic reconcile failed")
 
     async def reconcile_once(self, orphan_scan: bool = False) -> None:
-        import time as _time
-
         async with self._reconcile_lock:
-            self.last_reconcile_ts = _time.time()
+            self.last_reconcile_ts = time.time()
             plans = await self.trade.risk.open_plans()
             if orphan_scan:
                 log.info("reconciling %d open plans", len(plans))
@@ -193,6 +199,7 @@ class ExitEnforcer:
 
     def disarm(self, plan_id: str) -> None:
         task = self._monitors.pop(plan_id, None)
+        self.monitor_health.pop(plan_id, None)
         if task:
             task.cancel()
 
@@ -286,6 +293,13 @@ class ExitEnforcer:
 
             log.info("monitor armed: plan %s TP=%.2f SL=%.2f stop=%s",
                      plan.id, plan.tp_premium, plan.sl_premium, plan.time_stop_utc)
+            # Seed the quote cache NOW (REST / demo-synth): a leg that never
+            # ticks on the stream must not leave TP/SL unevaluable.
+            try:
+                await self.market.refresh_option_quotes(symbols, max_age_s=0)
+            except Exception as exc:
+                log.warning("initial option quote seed failed for %s: %s", plan_id, exc)
+            last_no_mid_warn = 0.0
             try:
                 while True:
                     plan = await self.trade.get_plan(plan_id)
@@ -320,16 +334,38 @@ class ExitEnforcer:
                         log.warning("plan %s exiting with no live order - resubmitting", plan.id)
                         await self._execute_exit(plan_id, plan.exit_reason or "manual")
                         return
+                    # Wake on a stream tick OR the poll cadence — the stream
+                    # is the fast path, but TP/SL must keep evaluating when
+                    # the stream is quiet (illiquid legs, after hours).
                     try:
-                        msg = await asyncio.wait_for(queue.get(), timeout=min(max(timeout, 0.1), 15.0))
+                        await asyncio.wait_for(
+                            queue.get(),
+                            timeout=min(max(timeout, 0.1), self.quote_poll_s),
+                        )
                     except asyncio.TimeoutError:
-                        continue
-                    if msg.get("t") != "oquote" or plan.status not in MONITOR_STATUSES:
+                        try:
+                            await self.market.refresh_option_quotes(symbols)
+                        except Exception as exc:
+                            log.warning("quote poll failed for %s: %s", plan_id, exc)
+                    if plan.status not in MONITOR_STATUSES:
                         continue
                     quotes = {s: self.market.latest_quote(s) for s in symbols}
                     mid = position_mid_from_quotes(plan.legs, quotes)
                     if mid is None:
+                        missing = [s for s in symbols
+                                   if not quotes.get(s)
+                                   or not (quotes[s].get("bid") or quotes[s].get("ask"))]
+                        self.monitor_health[plan_id] = f"no-mid: {','.join(missing)}"
+                        now_mono = time.monotonic()
+                        if now_mono - last_no_mid_warn > 60:
+                            last_no_mid_warn = now_mono
+                            log.warning(
+                                "plan %s: TP/SL UNEVALUABLE - no quote for %s "
+                                "(stream quiet and REST returned nothing)",
+                                plan_id, missing,
+                            )
                         continue
+                    self.monitor_health[plan_id] = "ok"
                     if mid >= plan.tp_premium:
                         log.info("TP hit for plan %s (mid %.2f)", plan.id, mid)
                         await self._execute_exit(plan_id, "tp")
@@ -352,6 +388,7 @@ class ExitEnforcer:
             # Deregister SELF first; the replacement (if any) is armed after,
             # so it can't be clobbered by this cleanup.
             self._monitors.pop(plan_id, None)
+            self.monitor_health.pop(plan_id, None)
         if rearm:
             await asyncio.sleep(self.rearm_delay_s)
             await self.arm(plan_id)
