@@ -314,6 +314,12 @@ type StrategyState = {
   sides: (1 | -1)[];
   /** true once the leg set deviates from the selected preset */
   modified: boolean;
+  /** true once ANY user tweak (strike drag, ratio) diverges from the preset's
+   * defaults. Drives the selector's "· EDITED" sentinel so re-picking the
+   * SAME preset still fires a change event and re-conjures its defaults —
+   * a controlled <select> showing the old kind never fires onChange for a
+   * same-value pick, which read as "the selector sticks". */
+  edited: boolean;
   qty: number; // desired contract sets (0 = auto from sizing)
   tpPct: number; // TP as fraction of |entry premium| gained (1.0 = +100%)
   slPct: number; // SL as fraction of |entry premium| lost (0.5 = -50%)
@@ -502,6 +508,7 @@ export const useStrategyStore = create<StrategyState>((set, get) => ({
   rights: templateArrays("long_call").rights,
   sides: templateArrays("long_call").sides,
   modified: false,
+  edited: false,
   qty: 0,
   tpPct: 1.0,
   slPct: 0.5,
@@ -519,7 +526,7 @@ export const useStrategyStore = create<StrategyState>((set, get) => ({
         state.expiry && data.expirations.includes(state.expiry)
           ? state.expiry
           : data.expirations[0] ?? null;
-      let { strikes, ratios, rights, sides, modified } = state;
+      let { strikes, ratios, rights, sides, modified, edited } = state;
       const chainStrikes = new Set(
         data.contracts.filter((c) => c.expiry === expiry).map((c) => c.strike),
       );
@@ -534,8 +541,9 @@ export const useStrategyStore = create<StrategyState>((set, get) => ({
         ratios = defaultRatios(state.kind);
         ({ rights, sides } = templateArrays(state.kind));
         modified = false;
+        edited = false;
       }
-      set({ chain: data, chainError: null, expiry, strikes, ratios, rights, sides, modified });
+      set({ chain: data, chainError: null, expiry, strikes, ratios, rights, sides, modified, edited });
     } catch (err) {
       set({ chainError: String((err as Error).message ?? err) });
     }
@@ -549,6 +557,7 @@ export const useStrategyStore = create<StrategyState>((set, get) => ({
       ratios: defaultRatios(kind),
       ...templateArrays(kind),
       modified: false,
+      edited: false,
     });
   },
   setKind: (kind) => {
@@ -559,19 +568,26 @@ export const useStrategyStore = create<StrategyState>((set, get) => ({
       ratios: defaultRatios(kind),
       ...templateArrays(kind),
       modified: false,
+      edited: false,
     });
   },
+  // Index guards: a strike drag holds its leg index for the whole gesture,
+  // so a drag that outlives a leg-set change (preset switch, pointercancel
+  // the browser never followed with pointerup) must not write past the end
+  // of the parallel arrays — a sparse strikes array kills buildLegs.
   setStrike: (index, strike) =>
     set((s) => {
+      if (index < 0 || index >= s.strikes.length) return {};
       const strikes = [...s.strikes];
       strikes[index] = strike;
-      return { strikes };
+      return { strikes, edited: true };
     }),
   setRatio: (index, ratio) =>
     set((s) => {
+      if (index < 0 || index >= s.ratios.length) return {};
       const ratios = [...s.ratios];
       ratios[index] = Math.max(1, Math.min(Math.round(ratio), 9));
-      return { ratios };
+      return { ratios, edited: true };
     }),
   decRatio: (index) => {
     const s = get();

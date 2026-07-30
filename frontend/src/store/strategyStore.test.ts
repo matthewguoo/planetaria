@@ -381,6 +381,56 @@ describe("custom leg composition (chain-panel clicks)", () => {
   });
 });
 
+describe("edited flag / preset re-selection (sticky-selector fix)", () => {
+  const chain = syntheticChain();
+  const expiry = chain.expirations[0];
+
+  function freshStore() {
+    useStrategyStore.setState({
+      chain, expiry, modified: false, edited: false,
+    });
+    useStrategyStore.getState().setKind("call_debit_spread");
+  }
+
+  it("dragging a strike marks edited; re-selecting the SAME preset re-conjures defaults", () => {
+    freshStore();
+    const defaults = [...useStrategyStore.getState().strikes];
+    useStrategyStore.getState().setStrike(0, 440);
+    useStrategyStore.getState().setStrike(1, 470);
+    let s = useStrategyStore.getState();
+    expect(s.edited).toBe(true);
+    expect(s.modified).toBe(false); // strikes moved, leg SET unchanged
+    expect(s.strikes).not.toEqual(defaults);
+    // The UI can now re-fire setKind with the same kind (sentinel value).
+    useStrategyStore.getState().setKind("call_debit_spread");
+    s = useStrategyStore.getState();
+    expect(s.edited).toBe(false);
+    expect(s.strikes).toEqual(defaults);
+  });
+
+  it("ratio tweaks mark edited; setExpiry clears it", () => {
+    freshStore();
+    useStrategyStore.getState().setRatio(0, 2);
+    expect(useStrategyStore.getState().edited).toBe(true);
+    useStrategyStore.getState().setExpiry(expiry);
+    expect(useStrategyStore.getState().edited).toBe(false);
+  });
+
+  it("setStrike/setRatio ignore stale out-of-range indices (dead drag targets)", () => {
+    freshStore();
+    useStrategyStore.getState().setKind("long_call"); // 1 leg
+    // A strike drag armed on leg 3 of the previous 2-leg spread must not
+    // punch a sparse hole into the new single-leg arrays.
+    useStrategyStore.getState().setStrike(3, 455);
+    useStrategyStore.getState().setRatio(3, 2);
+    const s = useStrategyStore.getState();
+    expect(s.strikes).toHaveLength(1);
+    expect(s.ratios).toHaveLength(1);
+    expect(s.edited).toBe(false); // stale writes don't dirty the selection
+    expect(buildLegs(s)).not.toBeNull();
+  });
+});
+
 describe("theta-sell templates", () => {
   const spot = 450;
   const expiry = "2099-01-15";

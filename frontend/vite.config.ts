@@ -12,6 +12,7 @@ const proxy = {
 export default defineConfig({
   plugins: [react()],
   build: { target: "esnext" },
-  server: { port: 5173, strictPort: true, proxy, allowedHosts: true },
+  // PORT env (when set) wins so parallel dev servers don't fight over 5173.
+  server: { port: Number(process.env.PORT) || 5173, strictPort: true, proxy, allowedHosts: true },
   preview: { port: 4173, proxy, allowedHosts: true },
 });

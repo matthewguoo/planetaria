@@ -29,6 +29,7 @@ export function StrategyPanel({ designer }: { designer: Designer }) {
   const rights = useStrategyStore((s) => s.rights);
   const sides = useStrategyStore((s) => s.sides);
   const modified = useStrategyStore((s) => s.modified);
+  const edited = useStrategyStore((s) => s.edited);
   const setStrike = useStrategyStore((s) => s.setStrike);
   const setRatio = useStrategyStore((s) => s.setRatio);
   const decRatio = useStrategyStore((s) => s.decRatio);
@@ -43,12 +44,22 @@ export function StrategyPanel({ designer }: { designer: Designer }) {
       </div>
       <div className="flex min-h-0 flex-1 flex-col">
         <div className="flex items-center gap-1 border-b border-bb-border p-1">
+          {/* Once the legs deviate from the preset (strike drags, ratio
+              tweaks, chain-panel edits) the select's value moves to a hidden
+              sentinel. A controlled <select> fires no change event when the
+              picked option equals its current value — so without this,
+              re-selecting the displayed preset to reset it did nothing. */}
           <select
             className="min-w-0 flex-1 border border-bb-border bg-black px-1 py-0.5 text-[11px] text-bb-amber outline-none"
-            value={kind}
+            value={modified || edited ? "__edited__" : kind}
             onChange={(e) => setKind(e.target.value as StrategyKind)}
             aria-label="Strategy preset"
           >
+            {(modified || edited) && (
+              <option value="__edited__" disabled hidden>
+                {modified ? "CUSTOM" : `${STRATEGIES[kind].label} · EDITED`}
+              </option>
+            )}
             {GROUPS.map((group) => (
               <optgroup key={group} label={group}>
                 {(Object.keys(STRATEGIES) as StrategyKind[])

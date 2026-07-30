@@ -173,6 +173,7 @@ export function LegRail({ designer }: { designer: Designer }) {
               onPointerMove={(e) => onPointerMove(e, i)}
               onPointerUp={() => setDragging(null)}
               onPointerCancel={() => setDragging(null)}
+              onLostPointerCapture={() => setDragging(null)}
               aria-label={`Leg ${i + 1}: drag to change strike`}
             >
               {sides[i] > 0 ? "+" : "−"}
