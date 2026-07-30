@@ -80,6 +80,8 @@ export type Plan = {
   /** History enrichment: actual entry/exit event times from the journal. */
   entered_at?: string | null;
   exited_at?: string | null;
+  /** Chunked closing waves (external liquidations): one chart marker each. */
+  exit_fills?: { ts: string; premium: number; qty: number }[] | null;
 };
 
 export type UntrackedPosition = {

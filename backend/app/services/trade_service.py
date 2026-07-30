@@ -18,7 +18,7 @@ from alpaca.trading.requests import (
     OptionLegRequest,
 )
 
-from app.models.trade import OPEN_STATUSES, TradePlan
+from app.models.trade import OPEN_STATUSES, TradePlan, as_utc, utcnow
 from app.services.alpaca import AlpacaService
 from app.services.plan_fsm import (
     TERMINAL_STATES,
@@ -534,7 +534,11 @@ class TradeService:
                 if avg is not None and plan.fill_premium is not None:
                     realized = round((avg - plan.fill_premium) * 100 * plan.effective_qty, 2)
                 fsm_event = PlanEvent.EXIT_FILLED
-                fields = {"exit_premium": avg, "realized_pnl": realized}
+                fields = {
+                    "exit_premium": avg,
+                    "realized_pnl": realized,
+                    "exited_at": as_utc(getattr(order, "filled_at", None)) or utcnow(),
+                }
             elif event == "partial_fill" and is_entry:
                 fsm_event = PlanEvent.ENTRY_PARTIAL_FILL
                 fields = {"fill_premium": avg, "filled_qty": filled_qty}
@@ -706,6 +710,7 @@ class TradeService:
             plan_id, PlanEvent.EXIT_FILLED,
             guard={"exit_order_id": order_id},
             exit_premium=avg, realized_pnl=realized,
+            exited_at=as_utc(getattr(order, "filled_at", None)) or utcnow(),
         )
         if result.applied and self.enforcer:
             self.enforcer.disarm(plan_id)

@@ -130,6 +130,9 @@ type StrategyOverlay = {
   exitPremium: number | null;
   exitReason: string | null;
   realizedPnl: number | null;
+  /** Chunked closing waves — one marker per wave when the close landed in
+   * pieces (broker auto-liquidation). Empty = single exit marker only. */
+  exitEvents: { hours: number; premium: number; qty: number }[];
 };
 
 /** Bar index the surface's t=0 column maps to: entry bar for a position
@@ -337,6 +340,7 @@ export function CandlePane({
           exitPremium: positionView.exitPremium,
           exitReason: positionView.exitReason,
           realizedPnl: positionView.realizedPnl,
+          exitEvents: positionView.exitEvents,
         };
       }
     }
@@ -389,6 +393,7 @@ export function CandlePane({
       exitPremium: null,
       exitReason: null,
       realizedPnl: null,
+      exitEvents: [],
     };
   }, [chain, expiry, kind, strikes, ratios, legRights, legSides, tpPct, slPct, timeStopEt, quote, volShift, skewBeta, viewingPlan, pnlMode]);
 
@@ -922,6 +927,11 @@ export function CandlePane({
         onPointerDown={onMouseDown}
         onPointerMove={onMouseMove}
         onPointerUp={endDrag}
+        // A cancelled pointer (touch gesture takeover, capture loss) never
+        // sends pointerup; without these a strike drag stays armed and every
+        // later hover keeps rewriting that leg — presets appeared "stuck".
+        onPointerCancel={endDrag}
+        onLostPointerCapture={endDrag}
         onPointerLeave={onMouseLeave}
         onDoubleClick={onDoubleClick}
       />
@@ -1296,37 +1306,63 @@ function drawHeatmap(
   );
   if (overlay.readOnly) vline(x0, "#9c8cff", "ENTRY", 1.2);
 
-  // Closed-trade EXIT marker: solid line at the actual exit event with an
-  // outcome chip (reason · exit premium · realized P/L).
+  // Closed-trade EXIT markers. A close that landed in WAVES (broker
+  // auto-liquidation chunks) draws one line + chip per wave at its own
+  // time and premium; the summary chip (reason · net premium · realized
+  // P/L) anchors at the LAST wave. Single-fill exits keep one marker.
   if (overlay.exitHours !== null) {
-    const xExit = indexToX(futureIndex(overlay.exitHours, anchorIdx, tfMinutes), view, layout);
-    if (xExit >= 0 && xExit <= layout.plotW) {
-      const win = (overlay.realizedPnl ?? 0) >= 0;
-      const color = win ? COLORS.tp : COLORS.sl;
+    const waves =
+      overlay.exitEvents.length > 1
+        ? overlay.exitEvents
+        : [{
+            hours: overlay.exitHours,
+            premium: overlay.exitPremium ?? NaN,
+            qty: NaN,
+          }];
+    const win = (overlay.realizedPnl ?? 0) >= 0;
+    const color = win ? COLORS.tp : COLORS.sl;
+    ctx.font = "11px 'SF Mono', Consolas, monospace";
+    let chipY = 20;
+    const chip = (text: string, xAt: number, emphasize: boolean) => {
+      const w = ctx.measureText(text).width + 10;
+      const cx = Math.min(Math.max(xAt - w / 2, 2), layout.plotW - w - 2);
+      ctx.fillStyle = "rgba(0,0,0,0.88)";
+      ctx.fillRect(cx, chipY, w, CHIP_H);
+      ctx.globalAlpha = emphasize ? 1 : 0.75;
       ctx.strokeStyle = color;
-      ctx.lineWidth = 1.6;
+      ctx.strokeRect(cx, chipY, w, CHIP_H);
+      ctx.fillStyle = color;
+      ctx.textAlign = "left";
+      ctx.textBaseline = "middle";
+      ctx.fillText(text, cx + 5, chipY + CHIP_H / 2);
+      ctx.globalAlpha = 1;
+      chipY += CHIP_H + 4; // stack chips of near-coincident waves
+    };
+    for (let i = 0; i < waves.length; i++) {
+      const wave = waves[i];
+      const last = i === waves.length - 1;
+      const xExit = indexToX(futureIndex(wave.hours, anchorIdx, tfMinutes), view, layout);
+      if (xExit < 0 || xExit > layout.plotW) continue;
+      ctx.strokeStyle = color;
+      ctx.globalAlpha = last ? 1 : 0.65;
+      ctx.lineWidth = last ? 1.6 : 1.2;
       ctx.beginPath();
       ctx.moveTo(xExit, 0);
       ctx.lineTo(xExit, layout.plotH);
       ctx.stroke();
+      ctx.globalAlpha = 1;
       ctx.lineWidth = 1;
-      const parts = [`EXIT ${(overlay.exitReason ?? "closed").toUpperCase()}`];
-      if (overlay.exitPremium !== null) parts.push(`@${overlay.exitPremium.toFixed(2)}`);
-      if (overlay.realizedPnl !== null) {
-        parts.push(`${overlay.realizedPnl >= 0 ? "+" : "−"}$${Math.abs(overlay.realizedPnl).toFixed(0)}`);
+      if (waves.length > 1) {
+        chip(`−${wave.qty}× @${wave.premium.toFixed(2)}`, xExit, false);
       }
-      const text = parts.join(" ");
-      ctx.font = "11px 'SF Mono', Consolas, monospace";
-      const w = ctx.measureText(text).width + 10;
-      const cx = Math.min(Math.max(xExit - w / 2, 2), layout.plotW - w - 2);
-      ctx.fillStyle = "rgba(0,0,0,0.88)";
-      ctx.fillRect(cx, 20, w, CHIP_H);
-      ctx.strokeStyle = color;
-      ctx.strokeRect(cx, 20, w, CHIP_H);
-      ctx.fillStyle = color;
-      ctx.textAlign = "left";
-      ctx.textBaseline = "middle";
-      ctx.fillText(text, cx + 5, 20 + CHIP_H / 2);
+      if (last) {
+        const parts = [`EXIT ${(overlay.exitReason ?? "closed").toUpperCase()}`];
+        if (overlay.exitPremium !== null) parts.push(`@${overlay.exitPremium.toFixed(2)}`);
+        if (overlay.realizedPnl !== null) {
+          parts.push(`${overlay.realizedPnl >= 0 ? "+" : "−"}$${Math.abs(overlay.realizedPnl).toFixed(0)}`);
+        }
+        chip(parts.join(" "), xExit, true);
+      }
     }
   }
 

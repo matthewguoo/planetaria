@@ -66,10 +66,20 @@ class TradePlan(Base):
     # filled: zero-latency TP fills that survive engine downtime. SL/time
     # remain software-enforced (no broker stop orders for options).
     tp_order_id: Mapped[str | None] = mapped_column(String(48), nullable=True)
-    exit_reason: Mapped[str | None] = mapped_column(String(24), nullable=True)  # tp|sl|time_stop|manual|flatten
+    exit_reason: Mapped[str | None] = mapped_column(String(24), nullable=True)  # tp|sl|time_stop|manual|flatten|external
     fill_premium: Mapped[float | None] = mapped_column(Float, nullable=True)
     exit_premium: Mapped[float | None] = mapped_column(Float, nullable=True)
     realized_pnl: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # ACTUAL closing-fill time at the broker. The lifecycle journal records
+    # when the ENGINE learned of the close — hours later for an external
+    # liquidation captured by reconcile — so the chart's exit marker needs
+    # the broker's own timestamp, not ours.
+    exited_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # External liquidations land in CHUNKS at different times and prices
+    # (broker auto-liquidate, expiry sweeps). Each event: {ts (ISO), premium
+    # (net per set), qty (sets)} — the chart draws one exit marker per event;
+    # exit_premium/exited_at above stay the qty-weighted total / last fill.
+    exit_fills: Mapped[list | None] = mapped_column(JSON, nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     @property
@@ -98,6 +108,8 @@ class TradePlan(Base):
             "fill_premium": self.fill_premium,
             "exit_premium": self.exit_premium,
             "realized_pnl": self.realized_pnl,
+            "exited_at": as_utc(self.exited_at).isoformat() if self.exited_at else None,
+            "exit_fills": self.exit_fills,
         }
 
 

@@ -159,6 +159,14 @@ class ExitEnforcer:
                 except Exception as exc:
                     log.warning("orphan scan failed: %s", exc)
 
+            # Startup-only: backfill closed plans that carry no exit data
+            # (external liquidation landed while the engine was down).
+            if orphan_scan and self.trade.alpaca.configured:
+                try:
+                    await self._repair_blank_exits()
+                except Exception:
+                    log.exception("blank-exit repair scan failed")
+
     async def _reconcile_plan(self, plan: TradePlan) -> None:
         """Sync one plan's order state from broker REST, then (re-)arm."""
         if plan.status == "planned" and not plan.entry_order_id:
@@ -250,6 +258,7 @@ class ExitEnforcer:
                     plan.id, PlanEvent.EXIT_FILLED,
                     guard={"exit_order_id": observed_order},
                     exit_premium=avg, realized_pnl=realized,
+                    exited_at=as_utc(getattr(order, "filled_at", None)),
                 )
                 return
             if status in ("canceled", "expired", "rejected"):
@@ -338,55 +347,131 @@ class ExitEnforcer:
             return False
         return not ({leg["symbol"] for leg in plan.legs} & positions)
 
-    async def _capture_external_exit(self, plan: TradePlan) -> tuple[float | None, str]:
+    @staticmethod
+    def _cluster_exit_events(
+        plan: TradePlan, records: list[dict], window_s: float = 90.0
+    ) -> list[dict]:
+        """Group raw per-leg closing fills into position-level exit EVENTS:
+        fills within `window_s` of each other belong to one closing wave
+        (an MLEG chunk, or a broker desk pairing single-leg closes seconds
+        apart). Each event: {ts, premium (net/set), qty (sets)}. Returns []
+        when the fills don't cleanly pair across legs — callers then fall
+        back to the single aggregate exit."""
+        leg_by_sym = {leg["symbol"]: leg for leg in plan.legs}
+        clusters: list[list[dict]] = []
+        for rec in sorted(records, key=lambda r: r["ts"]):
+            if clusters and (rec["ts"] - clusters[-1][0]["ts"]).total_seconds() <= window_s:
+                clusters[-1].append(rec)
+            else:
+                clusters.append([rec])
+        events: list[dict] = []
+        for cluster in clusters:
+            per_leg: dict[str, tuple[float, float]] = {}
+            for rec in cluster:
+                q0, notional = per_leg.get(rec["symbol"], (0.0, 0.0))
+                per_leg[rec["symbol"]] = (q0 + rec["qty"], notional + rec["qty"] * rec["avg"])
+            if set(per_leg) != set(leg_by_sym):
+                return []  # one-sided wave (assignment leg-out) — no clean pairing
+            sets_per_leg = [
+                per_leg[s][0] / max(leg_by_sym[s].get("ratio", 1), 1) for s in per_leg
+            ]
+            if len({round(q, 4) for q in sets_per_leg}) > 1:
+                return []  # unequal per-leg qty inside the wave
+            premium = sum(
+                leg["side"] * leg.get("ratio", 1) * (per_leg[s][1] / per_leg[s][0])
+                for s, leg in leg_by_sym.items()
+            )
+            events.append({
+                "ts": max(rec["ts"] for rec in cluster).isoformat(),
+                "premium": round(premium, 4),
+                "qty": int(round(sets_per_leg[0])),
+            })
+        return events
+
+    async def _capture_external_exit(
+        self, plan: TradePlan
+    ) -> tuple[float | None, int | None, datetime | None, list[dict] | None, str]:
         """The position vanished outside our exit path (manual close in the
-        broker UI, expiry liquidation). Recover the ACTUAL closing fills from
-        broker order history so the trade record and chart exit markers carry
-        real numbers, not blanks: net exit premium = side-weighted closing
-        avg per leg. Falls back to the last known fair value when history is
-        unreadable (e.g. exercised/expired without a closing order)."""
+        broker UI, broker auto-liquidation, expiry). Recover the ACTUAL
+        closing fills from broker order history so the trade record and chart
+        exit markers carry real numbers, not blanks.
+
+        Returns (net exit premium per set, contract sets captured, last
+        closing-fill time, per-wave exit events, detail). Premium =
+        side*ratio-weighted per-leg closing average, each leg's average
+        weighted by fill quantity — external liquidations land in CHUNKS at
+        different prices (verified 2026-07-29: Alpaca closed 22 sets via
+        auto_liquidate at 15:30 ET and the last 9 at 15:58 ET, at very
+        different prices).
+
+        The order scan deliberately carries NO `symbols` filter: Alpaca's
+        GET /orders drops MLEG parent orders when `symbols` is set (verified
+        against paper — the 22-set auto_liquidate MLEG order was invisible
+        with the filter, present without it), and missing a chunk silently
+        skews the average. Plan legs are matched in code instead."""
         from alpaca.trading.enums import QueryOrderStatus
         from alpaca.trading.requests import GetOrdersRequest
 
         leg_syms = {leg["symbol"] for leg in plan.legs}
         ours = {plan.entry_order_id, plan.exit_order_id, plan.tp_order_id} - {None}
+        orders: list = []
+        after = as_utc(plan.created_at)
         try:
-            request = GetOrdersRequest(
-                status=QueryOrderStatus.CLOSED,
-                symbols=sorted(leg_syms),
-                after=as_utc(plan.created_at),
-                limit=200,
-                nested=True,
-            )
-            orders = await self.trade.alpaca.call(
-                self.trade.alpaca.trading.get_orders, request, retries=1
-            )
+            for _page in range(5):  # paginate by submitted_at; bounded
+                request = GetOrdersRequest(
+                    status=QueryOrderStatus.CLOSED,
+                    after=after,
+                    limit=200,
+                    nested=True,
+                )
+                batch = await self.trade.alpaca.call(
+                    self.trade.alpaca.trading.get_orders, request, retries=1
+                )
+                orders.extend(batch)
+                if len(batch) < 200:
+                    break
+                last = max(
+                    (as_utc(getattr(o, "submitted_at", None)) for o in batch
+                     if getattr(o, "submitted_at", None) is not None),
+                    default=None,
+                )
+                if last is None or last <= after:
+                    break
+                after = last
         except Exception as exc:
             log.warning("external-exit order scan failed for %s: %s", plan.id, exc)
-            orders = []
 
-        # Flatten mleg children; keep filled closes that are NOT ours.
-        fills: dict[str, tuple[float, float]] = {}  # symbol -> (qty, avg)
+        # symbol -> [contracts closed, qty-weighted avg price, last fill ts]
+        fills: dict[str, list] = {}
+        # raw per-leg closing fills, for wave clustering
+        records: list[dict] = []
+
         def _absorb(order) -> None:
-            child_legs = getattr(order, "legs", None) or []
-            for child in child_legs:
-                _absorb(child)
-            symbol = getattr(order, "symbol", None)
-            if symbol not in leg_syms:
-                return
+            # Prune OUR OWN order trees BEFORE recursing: the children of our
+            # entry/exit/TP MLEG orders carry broker-generated client ids, so
+            # a per-node check would absorb our own exit legs as "external".
             if str(getattr(order, "id", "")) in ours:
                 return
             client_id = str(getattr(order, "client_order_id", "") or "")
             if client_id.startswith(plan.id):
-                return  # one of our own (entry/exit/tp/ghost) orders
+                return
+            for child in getattr(order, "legs", None) or []:
+                _absorb(child)
+            symbol = getattr(order, "symbol", None)
+            if symbol not in leg_syms:
+                return
             filled = float(getattr(order, "filled_qty", 0) or 0)
             avg = float(getattr(order, "filled_avg_price", 0) or 0)
             intent = str(getattr(order, "position_intent", "") or "")
-            if filled <= 0 or avg <= 0 or "close" not in intent:
+            if filled <= 0 or avg <= 0 or "close" not in intent.lower():
                 return
-            prev_qty, prev_avg = fills.get(symbol, (0.0, 0.0))
+            filled_at = as_utc(getattr(order, "filled_at", None))
+            prev_qty, prev_avg, prev_ts = fills.get(symbol, (0.0, 0.0, None))
             total = prev_qty + filled
-            fills[symbol] = (total, (prev_avg * prev_qty + avg * filled) / total)
+            latest = max((t for t in (prev_ts, filled_at) if t is not None), default=None)
+            fills[symbol] = [total, (prev_avg * prev_qty + avg * filled) / total, latest]
+            if filled_at is not None:
+                records.append({"symbol": symbol, "qty": filled, "avg": avg, "ts": filled_at})
 
         for order in orders:
             _absorb(order)
@@ -396,29 +481,125 @@ class ExitEnforcer:
                 leg["side"] * leg.get("ratio", 1) * fills[leg["symbol"]][1]
                 for leg in plan.legs
             )
-            return round(premium, 4), "closing fills recovered from broker history"
+            # Contract SETS closed = per-leg contracts / leg ratio; unequal
+            # per-leg counts (partial assignment, one-sided expiry) make the
+            # per-set premium approximate — say so instead of hiding it.
+            sets_per_leg = [
+                fills[leg["symbol"]][0] / max(leg.get("ratio", 1), 1)
+                for leg in plan.legs
+            ]
+            sets_closed = int(min(sets_per_leg))
+            exited_at = max(
+                (fills[s][2] for s in leg_syms if fills[s][2] is not None),
+                default=None,
+            )
+            detail = "closing fills recovered from broker history"
+            if len({round(s) for s in sets_per_leg}) > 1:
+                detail += f" (UNEQUAL per-leg close qty {sets_per_leg})"
+            events = self._cluster_exit_events(plan, records)
+            if sum(e["qty"] for e in events) != sets_closed:
+                events = []  # waves don't add up — trust only the aggregate
+            if len(events) > 1:
+                detail += f" in {len(events)} waves"
+            return round(premium, 4), sets_closed, exited_at, events or None, detail
 
         # Fallback: last defensible mark (stream cache) — approximate but
         # far better than a blank exit on the trade record.
         quotes = {s: self.market.latest_quote(s) for s in leg_syms}
         mid = position_mid_from_quotes(plan.legs, quotes)
         if mid is not None:
-            return round(mid, 4), "no external fills found; last mark used"
-        return None, "no fills or quotes recoverable"
+            return round(mid, 4), None, None, None, "no external fills found; last mark used"
+        return None, None, None, None, "no fills or quotes recoverable"
 
     async def _force_close_with_capture(self, plan: TradePlan, context: str) -> None:
-        premium, detail = await self._capture_external_exit(plan)
+        premium, sets_closed, exited_at, events, detail = (
+            await self._capture_external_exit(plan)
+        )
         realized = None
         if premium is not None and plan.fill_premium is not None:
-            realized = round((premium - plan.fill_premium) * 100 * plan.effective_qty, 2)
+            qty = sets_closed if sets_closed else plan.effective_qty
+            realized = round((premium - plan.fill_premium) * 100 * qty, 2)
+            if sets_closed and sets_closed < plan.effective_qty:
+                detail += (
+                    f"; only {sets_closed}/{plan.effective_qty} sets found in history"
+                    " - P/L covers the captured sets only"
+                )
         await self.trade.fsm.apply(
             plan.id, PlanEvent.FORCE_CLOSED,
             exit_premium=premium,
             realized_pnl=realized,
-            exit_reason=plan.exit_reason or "manual",
+            exited_at=exited_at,
+            exit_fills=events,
+            exit_reason=plan.exit_reason or "external",
             notes=f"{context}; {detail}",
         )
         await self._sweep_ghosts_on_close(plan.id)
+
+    async def _repair_blank_exits(self, max_age_days: float = 7.0) -> None:
+        """Self-heal trade records: a plan force-closed WITHOUT exit data
+        (engine down during an external liquidation, or closed by a build
+        that predates fill capture) gets its exit premium / P/L / exit time
+        backfilled from broker order history. Runs once per startup."""
+        from datetime import timedelta
+
+        from sqlalchemy import select
+
+        from sqlalchemy import and_, or_
+
+        cutoff = datetime.now(timezone.utc) - timedelta(days=max_age_days)
+        async with self.db.session() as session:
+            result = await session.execute(
+                select(TradePlan).where(
+                    TradePlan.status == "closed",
+                    TradePlan.fill_premium.is_not(None),
+                    or_(
+                        TradePlan.exit_premium.is_(None),
+                        # Externally-closed plans repaired before wave capture
+                        # existed: re-capture to fill in the per-wave events.
+                        and_(
+                            TradePlan.exit_reason == "external",
+                            TradePlan.exit_fills.is_(None),
+                        ),
+                    ),
+                )
+            )
+            plans = [
+                p for p in result.scalars()
+                if p.updated_at is not None and as_utc(p.updated_at) >= cutoff
+            ]
+        for plan in plans:
+            try:
+                premium, sets_closed, exited_at, events, detail = (
+                    await self._capture_external_exit(plan)
+                )
+                if premium is None:
+                    log.warning("blank-exit repair: nothing recoverable for %s", plan.id)
+                    continue
+                qty = sets_closed if sets_closed else plan.effective_qty
+                realized = (
+                    round((premium - plan.fill_premium) * 100 * qty, 2)
+                    if plan.fill_premium is not None
+                    else None
+                )
+                already_noted = "exit backfilled from broker history" in (plan.notes or "")
+                await self.trade.fsm.update_fields(
+                    plan.id,
+                    exit_premium=premium,
+                    realized_pnl=realized,
+                    exited_at=exited_at,
+                    exit_fills=events,
+                    exit_reason=plan.exit_reason or "external",
+                    notes=plan.notes if already_noted else (
+                        ((plan.notes + " | ") if plan.notes else "")
+                        + f"exit backfilled from broker history: {detail}"
+                    ),
+                )
+                log.warning(
+                    "blank-exit repair: plan %s backfilled exit=%.4f realized=%s (%s)",
+                    plan.id, premium, realized, detail,
+                )
+            except Exception:
+                log.exception("blank-exit repair failed for plan %s", plan.id)
 
     def _resolve_ghost_key(self, plan_id: str, key: str) -> None:
         keys = self._ghost_keys.get(plan_id)

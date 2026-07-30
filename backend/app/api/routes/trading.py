@@ -298,5 +298,8 @@ async def history(request: Request, limit: int = 200) -> dict:
                     exited[plan_id] = iso  # last exit event wins
             for row in rows:
                 row["entered_at"] = entered.get(row["id"])
-                row["exited_at"] = exited.get(row["id"])
+                # Broker fill time (exited_at column) wins; the journal ts is
+                # when the ENGINE learned of the close — hours late for an
+                # external liquidation captured by a later reconcile.
+                row["exited_at"] = row.get("exited_at") or exited.get(row["id"])
         return {"trades": rows}

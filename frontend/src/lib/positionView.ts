@@ -51,6 +51,9 @@ export type PositionView = {
   exitPremium: number | null;
   exitReason: string | null;
   realizedPnl: number | null;
+  /** Chunked closing waves (external liquidations land in pieces at
+   * different times/prices): one chart marker per wave. Empty = single exit. */
+  exitEvents: { hours: number; premium: number; qty: number }[];
 };
 
 export function buildPositionView(
@@ -121,6 +124,20 @@ export function buildPositionView(
     exitPremium: plan.exit_premium ?? null,
     exitReason: plan.exit_reason ?? (closed ? plan.status : null),
     realizedPnl: plan.realized_pnl ?? null,
+    exitEvents: (plan.exit_fills ?? [])
+      .map((f) => {
+        const ms = Date.parse(f.ts);
+        if (!Number.isFinite(ms)) return null;
+        return {
+          hours: Math.min(
+            Math.max(hoursTotal - tradingHoursToExpiry(expiry, ms), 0),
+            hoursTotal,
+          ),
+          premium: f.premium,
+          qty: f.qty,
+        };
+      })
+      .filter((e): e is { hours: number; premium: number; qty: number } => e !== null),
   };
 }
 
