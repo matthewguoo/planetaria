@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { AccountPage } from "./components/Account/AccountPage";
+import { EnforcementBanner } from "./components/EnforcementBanner";
 import { Header } from "./components/Header";
 import { CandlePane } from "./components/Chart/CandlePane";
 import { ChainPanel } from "./components/Chart/ChainPanel";
@@ -88,6 +89,7 @@ export default function App() {
   return (
     <div className="flex h-full flex-col gap-px bg-bb-black p-px">
       <Header />
+      <EnforcementBanner />
 
       {view === "account" ? (
         <AccountPage />

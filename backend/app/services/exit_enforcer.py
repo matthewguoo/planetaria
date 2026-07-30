@@ -105,6 +105,16 @@ class ExitEnforcer:
         self.verify_attempts = 120  # ~10 min of polls before loud rearm
         self.rearm_delay_s = 5.0
         self.reconcile_interval_s = 45.0
+        # Defense-in-depth for the TIME STOP (the one exit with no broker-side
+        # backstop): each monitor loop stamps a heartbeat; reconcile restarts
+        # monitors that stopped beating (wedged await), and fires an overdue
+        # time stop DIRECTLY when the monitor failed to. The monitor normally
+        # wakes at least every quote_poll_s, so a stop more than
+        # time_stop_grace_s overdue means enforcement is broken.
+        self.monitor_beat: dict[str, float] = {}
+        self.monitor_wedge_s = 90.0
+        self.time_stop_grace_s = 30.0
+        self._backstop_tasks: set[asyncio.Task] = set()
 
     # ----------------------------------------------------------- lifecycle
 
@@ -133,6 +143,20 @@ class ExitEnforcer:
             if orphan_scan:
                 log.info("reconciling %d open plans", len(plans))
             for plan in plans:
+                # Wedged-monitor watchdog: a monitor task that exists but has
+                # not completed a loop iteration recently is stuck inside an
+                # await — it will never fire TP/SL/time stop. Kill + rearm.
+                beat = self.monitor_beat.get(plan.id)
+                if (
+                    plan.id in self._monitors
+                    and beat is not None
+                    and time.monotonic() - beat > self.monitor_wedge_s
+                ):
+                    log.error(
+                        "monitor for plan %s WEDGED (no heartbeat for %.0fs) - restarting",
+                        plan.id, time.monotonic() - beat,
+                    )
+                    self.disarm(plan.id)
                 try:
                     await self._reconcile_plan(plan)
                 except Exception:
@@ -177,6 +201,31 @@ class ExitEnforcer:
                 notes="orphaned planned row (no order submitted)",
             )
             return
+        # TIME-STOP BACKSTOP, independent of the monitor task: an overdue stop
+        # on a held position means the monitor failed (wedged, crashed loop,
+        # engine just restarted after downtime) — fire the exit ladder NOW.
+        # Runs as its own task so a slow escalation can't stall reconcile.
+        if plan.status in ("filled", "partially_filled") and plan.time_stop_utc is not None:
+            overdue_s = (
+                datetime.now(timezone.utc) - as_utc(plan.time_stop_utc)
+            ).total_seconds()
+            if overdue_s > self.time_stop_grace_s:
+                log.error(
+                    "plan %s is %.0fs past its time stop with no exit - "
+                    "reconcile backstop firing time_stop", plan.id, overdue_s,
+                )
+                if plan.status == "partially_filled" and self.trade.alpaca.configured:
+                    try:
+                        await self.trade.cancel_entry(plan)
+                    except Exception:
+                        log.exception("backstop entry cancel failed for %s", plan.id)
+                task = asyncio.create_task(
+                    self._execute_exit(plan.id, "time_stop"),
+                    name=f"backstop-exit-{plan.id}",
+                )
+                self._backstop_tasks.add(task)
+                task.add_done_callback(self._backstop_tasks.discard)
+                return
         if not self.trade.alpaca.configured:
             await self.arm(plan.id)
             return
@@ -294,6 +343,7 @@ class ExitEnforcer:
     def disarm(self, plan_id: str) -> None:
         task = self._monitors.pop(plan_id, None)
         self.monitor_health.pop(plan_id, None)
+        self.monitor_beat.pop(plan_id, None)
         if task:
             task.cancel()
 
@@ -666,6 +716,9 @@ class ExitEnforcer:
             sl_breach_since: float | None = None
             try:
                 while True:
+                    # Liveness heartbeat: reconcile's wedged-monitor watchdog
+                    # restarts this task if the stamp goes stale.
+                    self.monitor_beat[plan_id] = time.monotonic()
                     # Underlying ticks can arrive at stream rate; re-reading
                     # the plan row every wake would hammer the DB. Refresh on
                     # plan pushes and at least once a second otherwise.
@@ -861,6 +914,7 @@ class ExitEnforcer:
             # so it can't be clobbered by this cleanup.
             self._monitors.pop(plan_id, None)
             self.monitor_health.pop(plan_id, None)
+            self.monitor_beat.pop(plan_id, None)
         if rearm:
             await asyncio.sleep(self.rearm_delay_s)
             await self.arm(plan_id)

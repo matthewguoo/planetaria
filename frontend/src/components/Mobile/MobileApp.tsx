@@ -12,6 +12,7 @@ import { useDesigner } from "../../lib/useDesigner";
 import { useAccountStore } from "../../store/accountStore";
 import { useStrategyStore } from "../../store/strategyStore";
 import { TIMEFRAMES, useTradingStore, type Timeframe } from "../../store/tradingStore";
+import { EnforcementBanner } from "../EnforcementBanner";
 import { PriceReadout } from "../PriceReadout";
 import { useUiStore } from "../../store/uiStore";
 import { AccountPage } from "../Account/AccountPage";
@@ -154,6 +155,7 @@ export function MobileApp() {
   return (
     <div className="flex h-[100dvh] flex-col bg-bb-black">
       <MobileHeader />
+      <EnforcementBanner />
       <MobilePositionBanner />
 
       <div className="flex shrink-0 items-center gap-1 border-b border-bb-border bg-bb-panel px-1 py-0.5">
