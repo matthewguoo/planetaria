@@ -27,6 +27,17 @@ type UiState = {
   toggleChain: () => void;
 };
 
+/** Any real trading action — symbol change, preset pick, strike/leg/exit
+ * edit — flips the chart back to the designer. Position and history views
+ * are read-only inspections, not a mode the user should have to find an
+ * escape hatch for: acting like a trader IS the escape hatch. Called from
+ * the trading/strategy store actions so every surface (panel, chain panel,
+ * rail, symbol search, mobile sheets) inherits the behavior. */
+export function exitPositionViewOnAction(): void {
+  const s = useUiStore.getState();
+  if (s.viewingPlanId) s.closePositionView();
+}
+
 export const useUiStore = create<UiState>((set) => ({
   view: "terminal",
   viewingPlanId: null,

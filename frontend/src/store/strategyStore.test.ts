@@ -416,6 +416,26 @@ describe("edited flag / preset re-selection (sticky-selector fix)", () => {
     expect(useStrategyStore.getState().edited).toBe(false);
   });
 
+  it("trading actions exit a read-only position/history view", async () => {
+    const { useUiStore } = await import("./uiStore");
+    freshStore();
+    const asView = () =>
+      useUiStore.setState({
+        viewingPlanId: "plan-1",
+        viewedHistorical: null,
+        view: "terminal",
+      });
+    asView();
+    useStrategyStore.getState().setKind("long_call");
+    expect(useUiStore.getState().viewingPlanId).toBeNull();
+    asView();
+    useStrategyStore.getState().setStrike(0, 455);
+    expect(useUiStore.getState().viewingPlanId).toBeNull();
+    asView();
+    useStrategyStore.getState().setTpPct(1.5);
+    expect(useUiStore.getState().viewingPlanId).toBeNull();
+  });
+
   it("setStrike/setRatio ignore stale out-of-range indices (dead drag targets)", () => {
     freshStore();
     useStrategyStore.getState().setKind("long_call"); // 1 leg

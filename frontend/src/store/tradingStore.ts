@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { exitPositionViewOnAction } from "./uiStore";
 
 export type Quote = { symbol: string; bid: number; ask: number; mid: number; ts: number };
 
@@ -68,7 +69,10 @@ export const useTradingStore = create<TradingState>((set) => ({
   quote: null,
   status: { configured: false, demo: false, sources: {}, redis: false, stream_age_s: null, connection: "connecting" },
   indicators: { heat: true, sim: true, theta: false, vwap: true, ema: false, bb: false },
-  setSymbol: (symbol) => set({ symbol: symbol.toUpperCase(), quote: null }),
+  setSymbol: (symbol) => {
+    exitPositionViewOnAction();
+    set({ symbol: symbol.toUpperCase(), quote: null });
+  },
   setTf: (tf) => set({ tf }),
   setQuote: (quote) => set({ quote }),
   patchStatus: (patch) => set((s) => ({ status: { ...s.status, ...patch } })),

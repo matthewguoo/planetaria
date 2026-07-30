@@ -10,6 +10,7 @@
 
 import { create } from "zustand";
 import { api } from "../lib/api";
+import { exitPositionViewOnAction } from "./uiStore";
 import {
   bsDelta,
   impliedVol,
@@ -549,7 +550,11 @@ export const useStrategyStore = create<StrategyState>((set, get) => ({
     }
   },
 
+  // NOTE: every user-intent designer action below (expiry/preset/strike/
+  // ratio/leg/exit edits) also exits any read-only position/history view —
+  // acting like a trader flips the chart back to the trading view.
   setExpiry: (expiry) => {
+    exitPositionViewOnAction();
     const { chain, kind } = get();
     set({
       expiry,
@@ -561,6 +566,7 @@ export const useStrategyStore = create<StrategyState>((set, get) => ({
     });
   },
   setKind: (kind) => {
+    exitPositionViewOnAction();
     const { chain, expiry } = get();
     set({
       kind,
@@ -578,6 +584,7 @@ export const useStrategyStore = create<StrategyState>((set, get) => ({
   setStrike: (index, strike) =>
     set((s) => {
       if (index < 0 || index >= s.strikes.length) return {};
+      exitPositionViewOnAction();
       const strikes = [...s.strikes];
       strikes[index] = strike;
       return { strikes, edited: true };
@@ -585,6 +592,7 @@ export const useStrategyStore = create<StrategyState>((set, get) => ({
   setRatio: (index, ratio) =>
     set((s) => {
       if (index < 0 || index >= s.ratios.length) return {};
+      exitPositionViewOnAction();
       const ratios = [...s.ratios];
       ratios[index] = Math.max(1, Math.min(Math.round(ratio), 9));
       return { ratios, edited: true };
@@ -599,6 +607,7 @@ export const useStrategyStore = create<StrategyState>((set, get) => ({
   },
   addLeg: ({ right, side, strike }) =>
     set((s) => {
+      exitPositionViewOnAction();
       // Stack onto an identical leg first (ratio up to 9).
       const existing = s.strikes.findIndex(
         (k, i) => k === strike && s.rights[i] === right && s.sides[i] === side,
@@ -620,6 +629,7 @@ export const useStrategyStore = create<StrategyState>((set, get) => ({
   removeLeg: (index) =>
     set((s) => {
       if (s.strikes.length <= 1) return {}; // never drop below one leg
+      exitPositionViewOnAction();
       const drop = <T,>(arr: T[]) => arr.filter((_, i) => i !== index);
       return {
         strikes: drop(s.strikes),
@@ -629,15 +639,28 @@ export const useStrategyStore = create<StrategyState>((set, get) => ({
         modified: true,
       };
     }),
-  setTpPct: (v) => set({ tpPct: Math.max(0.05, Math.min(v, 10)) }),
+  setTpPct: (v) => {
+    exitPositionViewOnAction();
+    set({ tpPct: Math.max(0.05, Math.min(v, 10)) });
+  },
   // SL beyond 100% of premium is meaningless for debit structures but is
   // THE standard stop for credit ones (stop at 1-2x the credit received).
-  setSlPct: (v) => set({ slPct: Math.max(0.05, Math.min(v, 3.0)) }),
-  setTimeStopEt: (v) => set({ timeStopEt: v }),
-  setQty: (v) => set({ qty: Math.max(0, Math.min(v, 100)) }),
+  setSlPct: (v) => {
+    exitPositionViewOnAction();
+    set({ slPct: Math.max(0.05, Math.min(v, 3.0)) });
+  },
+  setTimeStopEt: (v) => {
+    exitPositionViewOnAction();
+    set({ timeStopEt: v });
+  },
+  setQty: (v) => {
+    exitPositionViewOnAction();
+    set({ qty: Math.max(0, Math.min(v, 100)) });
+  },
   setVolShift: (v) => set({ volShift: Math.max(-0.5, Math.min(v, 0.5)) }),
   setSkewBeta: (v) => set({ skewBeta: v }),
   applyThetaTemplate: (id) => {
+    exitPositionViewOnAction();
     const { chain, expiry } = get();
     const template = THETA_TEMPLATES.find((t) => t.id === id);
     if (!chain || !template) return false;

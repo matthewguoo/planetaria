@@ -78,33 +78,59 @@ function MobileHeader() {
   );
 }
 
-/** Read-only position-view banner (desktop's lives in ChartControls). */
+/** Read-only position-view banner (desktop's lives in ChartControls).
+ * Resolves CLOSED trades from the history snapshot too — the ✕ must always
+ * be reachable from a position view. */
 function MobilePositionBanner() {
   const viewingPlanId = useUiStore((s) => s.viewingPlanId);
+  const viewedHistorical = useUiStore((s) => s.viewedHistorical);
   const pnlMode = useUiStore((s) => s.pnlMode);
   const setPnlMode = useUiStore((s) => s.setPnlMode);
   const closePositionView = useUiStore((s) => s.closePositionView);
   const positions = useAccountStore((s) => s.positions);
-  const plan = viewingPlanId ? positions.find((p) => p.id === viewingPlanId) ?? null : null;
+  const plan = viewingPlanId
+    ? positions.find((p) => p.id === viewingPlanId) ??
+      (viewedHistorical?.id === viewingPlanId ? viewedHistorical : null)
+    : null;
   if (!plan) return null;
+  const closed = ["closed", "cancelled", "rejected"].includes(plan.status);
   return (
-    <div className="flex items-center gap-2 border-b border-bb-amber/60 bg-bb-amber/10 px-2 py-1 text-[10px]">
-      <span className="tracking-widest text-bb-amber">POSITION</span>
+    <div
+      className={
+        "flex items-center gap-2 border-b px-2 py-1 text-[10px] " +
+        (closed ? "border-bb-border bg-bb-hover/40" : "border-bb-amber/60 bg-bb-amber/10")
+      }
+    >
+      <span className={"tracking-widest " + (closed ? "text-bb-muted" : "text-bb-amber")}>
+        {closed ? `CLOSED · ${(plan.exit_reason ?? plan.status).toUpperCase()}` : "POSITION"}
+      </span>
       <span className="truncate text-white">
         {plan.underlying} ×{plan.filled_qty || plan.qty}
       </span>
-      <button
-        className={"px-1 " + (pnlMode === "entry" ? "bg-bb-amber text-black" : "text-bb-muted")}
-        onClick={() => setPnlMode("entry")}
-      >
-        ENTRY
-      </button>
-      <button
-        className={"px-1 " + (pnlMode === "live" ? "bg-bb-amber text-black" : "text-bb-muted")}
-        onClick={() => setPnlMode("live")}
-      >
-        LIVE
-      </button>
+      {closed && plan.realized_pnl != null && (
+        <span
+          data-numeric
+          className={plan.realized_pnl >= 0 ? "text-bb-profit" : "text-bb-loss"}
+        >
+          {plan.realized_pnl >= 0 ? "+" : "−"}${Math.abs(plan.realized_pnl).toFixed(0)}
+        </span>
+      )}
+      {!closed && (
+        <>
+          <button
+            className={"px-1 " + (pnlMode === "entry" ? "bg-bb-amber text-black" : "text-bb-muted")}
+            onClick={() => setPnlMode("entry")}
+          >
+            ENTRY
+          </button>
+          <button
+            className={"px-1 " + (pnlMode === "live" ? "bg-bb-amber text-black" : "text-bb-muted")}
+            onClick={() => setPnlMode("live")}
+          >
+            LIVE
+          </button>
+        </>
+      )}
       <button className="ml-auto px-1 text-bb-muted" onClick={closePositionView}>
         ✕
       </button>
