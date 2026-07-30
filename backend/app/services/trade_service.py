@@ -52,6 +52,23 @@ def position_mid_from_quotes(legs: list[dict], quotes: dict[str, dict]) -> float
     return total
 
 
+def quality_fill(snapshot: dict, kind: str, fill: float) -> dict:
+    """Realized execution quality for one fill against its submit snapshot.
+
+    Signed-premium convention: entry cost = fill − fair (paying a HIGHER net
+    premium is worse, for credit entries too); exit cost = fair − fill
+    (receiving LESS is worse). spread_capture = 1 − cost/half_spread: 1.0 =
+    filled at fair value, 0.0 = crossed the whole half-spread, negative =
+    worse than the quoted touch. This is the effective-vs-quoted-spread
+    metric from Muravyev & Pearson (RFS 2020) applied per contract-set.
+    """
+    cost = (fill - snapshot["fair"]) if kind == "entry" else (snapshot["fair"] - fill)
+    out = {**snapshot, "fill": round(fill, 4), "cost": round(cost, 4)}
+    if snapshot.get("half_spread"):
+        out["spread_capture"] = round(1 - cost / snapshot["half_spread"], 3)
+    return out
+
+
 def staged_price_ok(entry_limit: float, live_mid: float, half_spread: float
                     ) -> tuple[bool, float, float]:
     """Fast-tape staleness check for a staged entry price.
@@ -347,6 +364,7 @@ class TradeService:
             sl_premium=sl,
             time_stop_utc=time_stop,
             status="planned",
+            exec_quality=self._quality_snapshot(legs, "entry"),
         )
         async with self.db.session() as session:
             session.add(plan)
@@ -366,6 +384,31 @@ class TradeService:
             await self.enforcer.arm(plan.id)
         log.info("plan %s submitted (%s x%d, order %s)", plan.id, plan.strategy, qty, order.id)
         return (await self.get_plan(plan.id)).to_dict()
+
+    def _quality_snapshot(self, legs: list, kind: str) -> dict | None:
+        """{kind: {fair, half_spread, ts}} from the live quote cache at
+        SUBMIT time — the baseline every later fill is measured against.
+        None when no leg has a usable quote (never blocks the order)."""
+        quotes = {leg["symbol"]: self.market.latest_quote(leg["symbol"]) for leg in legs}
+        from app.services.fair_value import position_quote_stats
+
+        stats = position_quote_stats(legs, quotes)
+        if stats is None:
+            return None
+        fair, half_spread = stats
+        return {kind: {
+            "fair": round(fair, 4),
+            "half_spread": round(half_spread, 4),
+            "ts": datetime.now(timezone.utc).isoformat(),
+        }}
+
+    def _quality_on_fill(self, plan: TradePlan, kind: str, fill: float | None) -> dict | None:
+        """Merged exec_quality with the realized fill folded into `kind`'s
+        snapshot; None when there is nothing to update (no snapshot/fill)."""
+        snapshot = (plan.exec_quality or {}).get(kind)
+        if snapshot is None or fill is None or "fair" not in snapshot:
+            return None
+        return {**(plan.exec_quality or {}), kind: quality_fill(snapshot, kind, fill)}
 
     async def _submit_entry(self, plan: TradePlan):
         legs = plan.legs
@@ -529,6 +572,8 @@ class TradeService:
             if event == "fill" and is_entry:
                 fsm_event = PlanEvent.ENTRY_FILLED
                 fields = {"fill_premium": avg, "filled_qty": filled_qty or plan.qty}
+                if (eq := self._quality_on_fill(plan, "entry", avg)) is not None:
+                    fields["exec_quality"] = eq
             elif event == "fill":
                 realized = None
                 if avg is not None and plan.fill_premium is not None:
@@ -539,9 +584,13 @@ class TradeService:
                     "realized_pnl": realized,
                     "exited_at": as_utc(getattr(order, "filled_at", None)) or utcnow(),
                 }
+                if (eq := self._quality_on_fill(plan, "exit", avg)) is not None:
+                    fields["exec_quality"] = eq
             elif event == "partial_fill" and is_entry:
                 fsm_event = PlanEvent.ENTRY_PARTIAL_FILL
                 fields = {"fill_premium": avg, "filled_qty": filled_qty}
+                if (eq := self._quality_on_fill(plan, "entry", avg)) is not None:
+                    fields["exec_quality"] = eq
             elif event in ("canceled", "expired", "rejected"):
                 if is_entry and filled_qty > 0:
                     # Entry died with a partial position: shrink to what
@@ -634,12 +683,20 @@ class TradeService:
         """
         client_order_id = f"{plan.id}-x{attempt_key}"
         request = self._close_request(plan, limit_price, client_order_id)
+        # Snapshot the book NOW (before the submit): each escalation rung
+        # re-snapshots, so the filling order is measured against the market
+        # it was actually submitted into.
+        snap = self._quality_snapshot(plan.legs, "exit")
         order = await self._submit_idempotent(request, client_order_id)
+        fields: dict = {}
+        if snap is not None:
+            fields["exec_quality"] = {**(plan.exec_quality or {}), **snap}
         await self.fsm.apply(
             plan.id,
             PlanEvent.EXIT_SUBMITTED,
             exit_order_id=str(order.id),
             exit_reason=reason,
+            **fields,
         )
 
     # ------------------------------------------------- broker-resting TP

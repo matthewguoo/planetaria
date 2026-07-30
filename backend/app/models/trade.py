@@ -80,6 +80,13 @@ class TradePlan(Base):
     # (net per set), qty (sets)} — the chart draws one exit marker per event;
     # exit_premium/exited_at above stay the qty-weighted total / last fill.
     exit_fills: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    # Execution-quality ledger: {entry|exit: {fair, half_spread, ts, fill,
+    # cost, spread_capture}}. fair = net microprice at SUBMIT; cost = signed
+    # premium given up vs fair (per set); spread_capture = 1 - cost/half_spread
+    # (1.0 = filled at fair, 0.0 = crossed the whole half-spread). The
+    # literature's verdict is that spread friction — not direction — is where
+    # retail options P/L dies; this measures ours on every fill.
+    exec_quality: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     @property
@@ -110,6 +117,7 @@ class TradePlan(Base):
             "realized_pnl": self.realized_pnl,
             "exited_at": as_utc(self.exited_at).isoformat() if self.exited_at else None,
             "exit_fills": self.exit_fills,
+            "exec_quality": self.exec_quality,
         }
 
 

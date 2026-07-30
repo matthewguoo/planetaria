@@ -22,6 +22,7 @@ _ADDITIVE_COLUMNS = {
         "tp_order_id": "VARCHAR(48)",
         "exited_at": "TIMESTAMP WITH TIME ZONE",
         "exit_fills": "JSON",
+        "exec_quality": "JSON",
     },
 }
 

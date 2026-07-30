@@ -131,7 +131,36 @@ function HistoricalBlock({
       {plan.exit_premium != null && (
         <StatRow label="EXIT" value={plan.exit_premium.toFixed(2)} />
       )}
+      <SpreadPaidRow plan={plan} qty={qty} />
     </div>
+  );
+}
+
+/** Realized spread friction vs the submit-time fair value — the cost channel
+ * the retail-options literature blames for ~60% of losses. Only renders when
+ * fills were measured (entry and/or exit snapshots existed at submit). */
+function SpreadPaidRow({ plan, qty }: { plan: Plan; qty: number }) {
+  const eq = plan.exec_quality;
+  if (!eq) return null;
+  const legs = (["entry", "exit"] as const)
+    .map((k) => ({ k, d: eq[k] }))
+    .filter((x): x is { k: "entry" | "exit"; d: NonNullable<typeof x.d> } =>
+      x.d?.cost !== undefined,
+    );
+  if (!legs.length) return null;
+  const totalDollars = legs.reduce((a, x) => a + (x.d.cost ?? 0), 0) * 100 * qty;
+  const capture = legs
+    .map((x) => x.d.spread_capture)
+    .filter((c): c is number => c !== undefined);
+  const captureLabel = capture.length
+    ? ` · capt ${Math.round((capture.reduce((a, c) => a + c, 0) / capture.length) * 100)}%`
+    : "";
+  return (
+    <StatRow
+      label="SPREAD PAID"
+      value={`${usd(-totalDollars)}${captureLabel}`}
+      cls={totalDollars <= 0 ? "text-bb-profit" : "text-bb-orange"}
+    />
   );
 }
 

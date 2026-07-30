@@ -303,11 +303,13 @@ class ExitEnforcer:
                     realized = round(
                         (avg - plan.fill_premium) * 100 * plan.effective_qty, 2
                     )
+                eq = self.trade._quality_on_fill(plan, "exit", avg)
                 await self.trade.fsm.apply(
                     plan.id, PlanEvent.EXIT_FILLED,
                     guard={"exit_order_id": observed_order},
                     exit_premium=avg, realized_pnl=realized,
                     exited_at=as_utc(getattr(order, "filled_at", None)),
+                    **({"exec_quality": eq} if eq is not None else {}),
                 )
                 return
             if status in ("canceled", "expired", "rejected"):

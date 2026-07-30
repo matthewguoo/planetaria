@@ -82,6 +82,20 @@ export type Plan = {
   exited_at?: string | null;
   /** Chunked closing waves (external liquidations): one chart marker each. */
   exit_fills?: { ts: string; premium: number; qty: number }[] | null;
+  /** Execution-quality ledger: realized fill vs submit-time fair value. */
+  exec_quality?: Partial<
+    Record<
+      "entry" | "exit",
+      {
+        fair: number;
+        half_spread: number;
+        ts: string;
+        fill?: number;
+        cost?: number;
+        spread_capture?: number;
+      }
+    >
+  > | null;
 };
 
 export type UntrackedPosition = {
