@@ -163,10 +163,27 @@ export function SystemMenu({ onClose }: { onClose: () => void }) {
               <Row label="REDIS" ok={state.redis.ok} warn={!state.redis.ok} value={state.redis.ok ? "connected" : "fallback (in-memory)"} />
               <Row
                 label="EXIT ENFORCER"
-                ok={state.enforcer.ghost_keys === 0}
-                warn={state.enforcer.ghost_keys > 0}
-                value={`${state.enforcer.monitors} monitors · ${state.enforcer.ghost_keys} ghosts`}
+                ok={
+                  state.enforcer.ghost_keys === 0 &&
+                  Object.keys(state.enforcer.monitors_without_mid ?? {}).length === 0
+                }
+                warn
+                value={
+                  `${state.enforcer.monitors} monitors · ${state.enforcer.ghost_keys} ghosts` +
+                  (Object.keys(state.enforcer.monitors_without_mid ?? {}).length
+                    ? ` · ${Object.keys(state.enforcer.monitors_without_mid).length} NO-QUOTE`
+                    : "")
+                }
               />
+              {Object.entries(state.enforcer.monitors_without_mid ?? {}).map(([pid, why]) => (
+                <div
+                  key={pid}
+                  className="border-b border-bb-border/40 px-2 py-1 text-[9px] leading-tight text-bb-orange"
+                  title="This monitor cannot evaluate TP/SL — no quote for the listed legs even via REST polling"
+                >
+                  ⚠ {pid.slice(0, 8)}: {why}
+                </div>
+              ))}
               <Row
                 label="RECONCILE"
                 ok={state.tasks.reconcile_loop === "running"}

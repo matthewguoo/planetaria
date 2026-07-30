@@ -17,7 +17,11 @@ import time
 from datetime import datetime, timedelta, timezone
 
 from alpaca.data.enums import DataFeed
-from alpaca.data.requests import StockBarsRequest, StockLatestQuoteRequest
+from alpaca.data.requests import (
+    OptionLatestQuoteRequest,
+    StockBarsRequest,
+    StockLatestQuoteRequest,
+)
 from alpaca.data.timeframe import TimeFrame
 
 from app.config import Settings
@@ -115,6 +119,9 @@ class MarketDataService:
         self._backfilled: set[str] = set()
         self._backfill_tasks: dict[str, asyncio.Task] = {}
         self._lock = asyncio.Lock()
+        # Last REST fetch attempt per option symbol (monotonic) — throttles
+        # the poll fallback so quiet markets don't hammer the API.
+        self._oquote_fetch_ts: dict[str, float] = {}
 
         # Synthetic feed when no keys (dev/UI QA); import here to avoid cycle.
         from app.services.demo_feed import DemoFeed
@@ -443,6 +450,54 @@ class MarketDataService:
         bars = result.data.get(symbol, [])
         return [_bar_from_alpaca(b) for b in bars]
 
+    async def refresh_option_quotes(self, symbols: list[str], max_age_s: float = 30.0) -> None:
+        """REST fallback for option quotes: the stream is the fast path, but
+        illiquid legs (condor wings) may not tick for minutes and NOTHING
+        ticks after hours — and the exit enforcer needs a mid for EVERY leg
+        to evaluate TP/SL. Fetch any leg whose cached quote is missing or
+        older than max_age_s, publish results as normal oquote messages
+        (cache + broadcast, so waiting monitors wake). Throttled per symbol
+        so quiet markets don't hammer the API. Keyless mode synthesizes
+        quotes from the public-feed spot instead."""
+        now_ms = time.time() * 1000
+        now_mono = time.monotonic()
+        stale = [
+            s for s in symbols
+            if (
+                (q := self._latest_quotes.get(s)) is None
+                or now_ms - q.get("ts", 0) > max_age_s * 1000
+            )
+            and now_mono - self._oquote_fetch_ts.get(s, 0.0) >= max_age_s
+        ]
+        if not stale:
+            return
+        for sym in stale:
+            self._oquote_fetch_ts[sym] = now_mono
+        if not self.alpaca.configured:
+            if self.demo:
+                self.demo.publish_option_quotes(stale)
+            return
+        try:
+            request = OptionLatestQuoteRequest(
+                symbol_or_symbols=stale, feed=self.alpaca.option_feed
+            )
+            result = await self.alpaca.call(
+                self.alpaca.option_data.get_option_latest_quote, request, retries=1
+            )
+        except Exception as exc:
+            log.warning("option quote refresh failed for %s: %s", stale, exc)
+            return
+        for sym, quote in result.items():
+            msg = self._quote_msg("oquote", sym, quote.bid_price, quote.ask_price,
+                                  quote.timestamp,
+                                  getattr(quote, "bid_size", None),
+                                  getattr(quote, "ask_size", None))
+            self._latest_quotes[sym] = msg
+            self.broadcast.publish(f"oquote:{sym}", msg)
+        missing = [s for s in stale if s not in result]
+        if missing:
+            log.warning("no option quote available (even via REST) for %s", missing)
+
     async def fetch_latest_stock_quote(self, symbol: str) -> dict | None:
         """Latest quote with staleness-aware refresh.
 
@@ -468,7 +523,11 @@ class MarketDataService:
             result = await self.alpaca.call(self.alpaca.stock_data.get_stock_latest_quote, request)
             quote = result[symbol]
             msg = self._quote_msg("quote", symbol, quote.bid_price, quote.ask_price,
-                                  quote.timestamp)
+                                  quote.timestamp,
+                                  getattr(quote, "bid_size", None),
+                                  getattr(quote, "ask_size", None))
+            # Keep the newer-wins guard: a REST response carrying an older
+            # broker timestamp must not clobber a fresher stream quote.
             if cached is None or msg["ts"] >= cached["ts"]:
                 self._latest_quotes[symbol] = msg
             return self._latest_quotes[symbol]
@@ -483,7 +542,8 @@ class MarketDataService:
 
     # -------------------------------------------------------------- handlers
 
-    def _quote_msg(self, kind: str, symbol: str, bid, ask, ts) -> dict:
+    def _quote_msg(self, kind: str, symbol: str, bid, ask, ts,
+                   bid_size=None, ask_size=None) -> dict:
         bid = float(bid or 0)
         ask = float(ask or 0)
         mid = (bid + ask) / 2 if bid and ask else (ask or bid)
@@ -493,6 +553,9 @@ class MarketDataService:
             "bid": bid,
             "ask": ask,
             "mid": round(mid, 4),
+            # Book pressure feeds the microprice trigger (fair_value.py).
+            "bid_size": float(bid_size) if bid_size else None,
+            "ask_size": float(ask_size) if ask_size else None,
             "ts": int(ts.timestamp() * 1000) if ts else int(time.time() * 1000),
         }
 
@@ -508,13 +571,19 @@ class MarketDataService:
 
     async def _on_stock_quote(self, quote) -> None:
         self._last_stream_msg = time.monotonic()
-        msg = self._quote_msg("quote", quote.symbol, quote.bid_price, quote.ask_price, quote.timestamp)
+        msg = self._quote_msg("quote", quote.symbol, quote.bid_price, quote.ask_price,
+                              quote.timestamp,
+                              getattr(quote, "bid_size", None),
+                              getattr(quote, "ask_size", None))
         self._latest_quotes[quote.symbol] = msg
         self.broadcast.publish(f"quote:{quote.symbol}", msg)
         await self.redis.set_json(f"quote:{quote.symbol}", json.dumps(msg), ttl_seconds=60)
 
     async def _on_option_quote(self, quote) -> None:
         self._last_stream_msg = time.monotonic()
-        msg = self._quote_msg("oquote", quote.symbol, quote.bid_price, quote.ask_price, quote.timestamp)
+        msg = self._quote_msg("oquote", quote.symbol, quote.bid_price, quote.ask_price,
+                              quote.timestamp,
+                              getattr(quote, "bid_size", None),
+                              getattr(quote, "ask_size", None))
         self._latest_quotes[quote.symbol] = msg
         self.broadcast.publish(f"oquote:{quote.symbol}", msg)

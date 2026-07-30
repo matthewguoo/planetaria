@@ -120,3 +120,24 @@ def test_synth_history_ends_today():
     import time as _time
 
     assert bars[-1]["t"] <= _time.time() * 1000
+
+
+@pytest.mark.asyncio
+async def test_demo_option_quotes_synthesized_for_exit_monitoring():
+    """Keyless mode must still give the exit enforcer option quotes —
+    synthesized BSM premiums off the public-feed spot."""
+    market = _FakeMarket()
+    market.bars.series = [{"t": 1, "o": 450, "h": 451, "l": 449, "c": 450.0, "v": 1}]
+    market.published: list = []
+    market.broadcast.publish = lambda topic, msg: market.published.append((topic, msg))
+    market.bars.get_bars = lambda symbol, tf: market.bars.series
+    feed = DemoFeed(market)
+
+    feed.publish_option_quotes(["SPY270115C00450000", "not-an-occ"])
+    quote = market._latest_quotes.get("SPY270115C00450000")
+    assert quote is not None, "no synthesized quote"
+    assert quote["mid"] > 0
+    assert 0 <= quote["bid"] < quote["ask"]
+    assert market.published and market.published[0][0] == "oquote:SPY270115C00450000"
+    # Non-OCC symbols are skipped, never crash.
+    assert "not-an-occ" not in market._latest_quotes

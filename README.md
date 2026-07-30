@@ -22,7 +22,10 @@ backend (FastAPI, single process)
    ├─ ChainService        0-3 DTE chains, IV solve/interpolation, 5s cache
    ├─ TradeService        validated placement -> DB plan -> Alpaca order
    ├─ PlanStateMachine    FIX-style FSM governing every plan's lifecycle
-   ├─ ExitEnforcer        quote-driven TP/SL + time stops; escalation ladder
+   ├─ ExitEnforcer        bracket engine: TP rests AT THE BROKER as a live
+   │                      limit; SL is software with a trigger hierarchy
+   │                      (option ticks -> underlying-tick model checks ->
+   │                      adaptive REST polling); escalation ladder
    │                      (limit @ mid-2% -> mid-6% -> market -> verify loop)
    ├─ RiskService         per-trade max loss, BP cap, max positions,
    │                      daily circuit breaker — server-side, not advisory
@@ -259,6 +262,77 @@ host (systemd/docker restart-always — restarts are safe, the reconcile
 machinery rebuilds all monitors from the DB) and keep the UI wherever
 you like. Until real capital or multi-user needs force a true two-process
 split, one supervised process is the more reliable shape.
+
+### Exit trigger hierarchy (how fast is the bracket?)
+
+The take-profit RESTS AT THE BROKER as a live limit close the moment the
+entry fills: zero software latency, and it fills even if the engine is
+down. (Idempotent per (plan, level): a crash between broker-accept and
+the DB write recovers the same order, never doubles it. Any other exit
+first pulls the resting TP down — and if the cancel loses the race to a
+fill, the position is recognized as already closed.)
+
+The stop-loss cannot rest (no broker stop orders for options), so it is
+software with a layered trigger chain, fastest first:
+
+1. **Option stream ticks** — every leg tick re-evaluates the position mid
+   (milliseconds, the normal RTH path).
+2. **Underlying stock ticks** — SPY quotes stream constantly even when
+   your specific contracts don't. Each tick re-marks the position with a
+   BSM model value from the plan's leg IVs; at ~15% of the TP-SL span
+   from a threshold it forces an immediate REST option-quote refresh and
+   evaluates real mids. Sub-second reaction to the thing that actually
+   moves.
+3. **Adaptive REST polling** — 1s cadence while the mid sits near a
+   threshold, 15s when far: the floor for a totally silent market, not
+   the reaction time.
+4. **Time stop** — quote-independent, always.
+
+If a mid is ever uncomputable (a leg with no quote even via REST), the
+monitor says so: throttled log naming the legs, per-plan health in
+`/api/system/state`, and a NO-QUOTE warning in the SYSTEM menu.
+
+### Fair-value stop trigger (no shakeouts, no blowups)
+
+Raw option mids are chaotic — a one-tick spread blowout can print a mid
+below the stop for 200ms and vanish. Triggers therefore never act on the
+raw mid: they act on the estimator stack production desks run
+(`app/services/fair_value.py`):
+
+- **Microprice, not mid** (Stoikov) — the size-weighted quote price
+  `I·ask + (1−I)·bid` with `I = bid_size/(bid_size+ask_size)` leans
+  toward resting book pressure and predicts the next trade better than
+  the midpoint. Quotes without sizes fall back to the mid.
+- **Spread-gated trust** — each observation enters a 1-D Kalman filter
+  with measurement variance = (position half-spread)². A tight two-sided
+  market snaps the fair value; a blown-out, one-sided, or crossed quote
+  barely moves it — so a junk print *cannot* fire the stop, even with
+  the dwell at zero. Persistently wide markets still converge the
+  estimate (information beats suspicion), just slowly.
+- **Theo-drift prediction** — between option quotes, the fair value is
+  moved by the *change* in the BSM model value driven by underlying
+  ticks (which stream constantly). Differencing cancels model level
+  bias; only its dynamics are trusted.
+
+On top of the estimator, the trigger-decision layer:
+
+- **Confirmation dwell** — a fair-value breach must persist `sl_confirm_s`
+  seconds (risk setting, default 3s, 0 = instant) before the exit ladder
+  starts. While confirming, the monitor re-checks every 0.5s with forced
+  quote refreshes and reports `sl-confirming (Ns)` in its health.
+- **Deep-breach override** — a fair value ≥25% of the TP-SL span past the
+  stop fires immediately; so does a *raw* microprice that deep when the
+  quote is quality (half-spread ≤10% of the span): a tight market
+  printing a crash is real, don't wait for the filter or the dwell.
+- **Hysteresis** — the confirmation timer only resets once the fair value
+  recovers 2% of the span back above the stop, so a value oscillating
+  exactly on the line can't reset the clock forever.
+
+The live conditionals are visible in the chart HUD: viewing a position
+shows an ENFORCER block with monitor health, mark vs bracket, distance to
+stop, whether TP is resting at the broker, and the last journal events.
+The ACCOUNT tab's EXIT QUALITY panel tracks realized stop slippage
+(specified SL vs actual exit) so you can verify the cap holds in practice.
 
 ### System menu & lifecycle journal
 

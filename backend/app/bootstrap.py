@@ -76,8 +76,6 @@ async def startup(app: FastAPI, settings: Settings) -> None:
     except Exception:
         log.exception("feed settings load failed - using defaults")
 
-    app.state.reconcile_task = None
-    app.state.reconcile_loop_task = None
     if alpaca.configured:
         stream = alpaca.make_trading_stream()
         stream.subscribe_trade_updates(trade.on_trade_update)
@@ -85,20 +83,22 @@ async def startup(app: FastAPI, settings: Settings) -> None:
         app.state.trading_stream_task = asyncio.create_task(
             supervise("trading-stream", stream._run_forever), name="trading-stream"
         )
-        # Reconcile in the background: it makes serial broker REST calls, and
-        # while the lifespan is awaiting, uvicorn accepts NO connections — this
-        # is exactly the "server up but nothing connects" startup window.
-        app.state.reconcile_task = asyncio.create_task(
-            _reconcile_with_retry(enforcer), name="startup-reconcile"
-        )
-        # Periodic REST truth-sync: the TradingStream is the fast path for
-        # fills, but a fill landing during a stream gap must not leave a live
-        # position unmanaged. Also re-arms any open plan missing its monitor.
-        # Supervised: a fatal error in the loop restarts it with backoff
-        # instead of silently ending truth-sync forever.
-        app.state.reconcile_loop_task = asyncio.create_task(
-            supervise("reconcile-loop", enforcer.reconcile_loop), name="reconcile-loop"
-        )
+    # Reconcile runs in BOTH modes (its broker calls are internally guarded):
+    # keyless plans still need their monitors armed so TP/SL evaluates
+    # against the synthesized quotes. Runs in the background: serial REST
+    # calls during lifespan would hold uvicorn's accept loop closed — the
+    # "server up but nothing connects" startup window.
+    app.state.reconcile_task = asyncio.create_task(
+        _reconcile_with_retry(enforcer), name="startup-reconcile"
+    )
+    # Periodic REST truth-sync: the TradingStream is the fast path for
+    # fills, but a fill landing during a stream gap must not leave a live
+    # position unmanaged. Also re-arms any open plan missing its monitor.
+    # Supervised: a fatal error in the loop restarts it with backoff
+    # instead of silently ending truth-sync forever.
+    app.state.reconcile_loop_task = asyncio.create_task(
+        supervise("reconcile-loop", enforcer.reconcile_loop), name="reconcile-loop"
+    )
 
 
 async def _reconcile_with_retry(enforcer: ExitEnforcer, attempts: int = 5) -> None:
