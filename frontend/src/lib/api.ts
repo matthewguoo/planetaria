@@ -77,6 +77,9 @@ export type Plan = {
   tp_order_id?: string | null;
   unrealized_pnl?: number | null;
   quote_stale?: boolean;
+  /** History enrichment: actual entry/exit event times from the journal. */
+  entered_at?: string | null;
+  exited_at?: string | null;
 };
 
 export type UntrackedPosition = {

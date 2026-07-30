@@ -259,6 +259,13 @@ async def cancel_order(request: Request, order_id: str) -> dict:
 
 @router.get("/history")
 async def history(request: Request, limit: int = 200) -> dict:
+    """Closed trades enriched with entry/exit timestamps from the lifecycle
+    journal — the chart's historical position view anchors its surface at the
+    actual entry fill and draws the exit marker at the actual exit event."""
+    from app.models.trade import PlanEventRow, as_utc
+
+    ENTRY_EVENTS = ("entry_filled", "entry_partial_fill")
+    EXIT_EVENTS = ("exit_filled", "force_closed")
     async with request.app.state.db.session() as session:
         result = await session.execute(
             select(TradePlan)
@@ -266,4 +273,30 @@ async def history(request: Request, limit: int = 200) -> dict:
             .order_by(TradePlan.created_at.desc())
             .limit(min(limit, 1000))
         )
-        return {"trades": [plan.to_dict() for plan in result.scalars()]}
+        plans = list(result.scalars())
+        rows = [plan.to_dict() for plan in plans]
+        ids = [plan.id for plan in plans]
+        if ids:
+            events = await session.execute(
+                select(PlanEventRow.plan_id, PlanEventRow.event, PlanEventRow.ts)
+                .where(
+                    PlanEventRow.plan_id.in_(ids),
+                    PlanEventRow.applied == 1,
+                    PlanEventRow.event.in_(ENTRY_EVENTS + EXIT_EVENTS),
+                )
+                .order_by(PlanEventRow.id.asc())
+            )
+            entered: dict[str, str] = {}
+            exited: dict[str, str] = {}
+            for plan_id, event, ts in events:
+                if ts is None:
+                    continue
+                iso = as_utc(ts).isoformat()
+                if event in ENTRY_EVENTS and plan_id not in entered:
+                    entered[plan_id] = iso
+                elif event in EXIT_EVENTS:
+                    exited[plan_id] = iso  # last exit event wins
+            for row in rows:
+                row["entered_at"] = entered.get(row["id"])
+                row["exited_at"] = exited.get(row["id"])
+        return {"trades": rows}

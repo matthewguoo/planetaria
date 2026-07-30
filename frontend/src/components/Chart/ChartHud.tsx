@@ -10,10 +10,12 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   getPlanEvents,
   getSystemState,
+  type Plan,
   type PlanEvent,
   type SystemState,
 } from "../../lib/api";
 import { computeAtr, realizedVolAnnualized } from "../../lib/indicators";
+import { buildPositionView, computeExcursions } from "../../lib/positionView";
 import type { McResult } from "../../lib/mcSim";
 import { bsThetaPerDay, structuralMaxLoss, TRADING_HOURS_PER_YEAR } from "../../lib/optionsMath";
 import { useMonteCarlo, type McInputs } from "../../lib/useMonteCarlo";
@@ -53,6 +55,84 @@ function etCountdown(iso: string | null): string {
   if (ms <= 0) return "due";
   const m = Math.floor(ms / 60000);
   return m >= 90 ? `${(m / 60).toFixed(1)}h` : `${m}m`;
+}
+
+/** Post-trade report for a CLOSED plan viewed on the chart: realized P/L,
+ * MAE/MFE reconstructed from the 1m bars over the holding window (entry-basis
+ * pricing — consistent with the surface), exit reason, time in trade. */
+function HistoricalBlock({
+  plan,
+  barsRef,
+}: {
+  plan: Plan;
+  barsRef: React.RefObject<Bars>;
+}) {
+  // Bars stream in after the symbol switch; re-evaluate periodically.
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const id = window.setInterval(() => setTick((t) => t + 1), 2000);
+    return () => window.clearInterval(id);
+  }, []);
+
+  const view = useMemo(() => buildPositionView(plan, null, "entry"), [plan]);
+  const bars = barsRef.current;
+  const excursions =
+    view && bars && bars.n ? computeExcursions(view, bars) : null;
+  if (!view) return null;
+
+  const qty = view.qty;
+  const holdMs = (view.exitMs ?? Date.now()) - view.anchorMs;
+  const holdLabel =
+    holdMs >= 90 * 60_000
+      ? `${(holdMs / 3_600_000).toFixed(1)}h`
+      : `${Math.max(Math.round(holdMs / 60_000), 1)}m`;
+  const basisDollars = Math.abs(view.entryBasis) * 100 * qty;
+  const pctOf = (v: number) =>
+    basisDollars >= 1 ? ` (${v >= 0 ? "+" : ""}${((v / basisDollars) * 100).toFixed(0)}%)` : "";
+  const win = (plan.realized_pnl ?? 0) >= 0;
+
+  return (
+    <div
+      className="pointer-events-none flex flex-col gap-0.5 border border-bb-neutral/50 bg-black/80 px-1.5 py-1"
+      title="Closed-trade replay: MAE/MFE are model-reconstructed from 1m bars at the entry basis (frozen fill IVs); exit marker on the chart is the actual exit event"
+    >
+      <div className="flex justify-between gap-2">
+        <span className="tracking-widest text-bb-neutral">CLOSED TRADE</span>
+        <span className={win ? "text-bb-profit" : "text-bb-loss"}>
+          {(plan.exit_reason ?? plan.status).toUpperCase()}
+        </span>
+      </div>
+      <StatRow
+        label="REALIZED"
+        value={
+          plan.realized_pnl !== null && plan.realized_pnl !== undefined
+            ? `${usd(plan.realized_pnl * 1)}${pctOf(plan.realized_pnl)}`
+            : "—"
+        }
+        cls={win ? "text-bb-profit" : "text-bb-loss"}
+      />
+      {excursions ? (
+        <>
+          <StatRow
+            label="MAE"
+            value={`${usd(excursions.maePerSet * qty)}${pctOf(excursions.maePerSet * qty)}`}
+            cls="text-bb-loss"
+          />
+          <StatRow
+            label="MFE"
+            value={`${usd(excursions.mfePerSet * qty)}${pctOf(excursions.mfePerSet * qty)}`}
+            cls="text-bb-profit"
+          />
+        </>
+      ) : (
+        <StatRow label="MAE/MFE" value="no bars in window" cls="text-bb-muted" />
+      )}
+      <StatRow label="TIME IN TRADE" value={holdLabel} />
+      {plan.exit_premium != null && (
+        <StatRow label="EXIT" value={plan.exit_premium.toFixed(2)} />
+      )}
+    </div>
+  );
 }
 
 /** "What is the enforcer doing for THIS position right now" — the live
@@ -238,6 +318,7 @@ export function ChartHud({
   const indicators = useTradingStore((s) => s.indicators);
   const toggleIndicator = useTradingStore((s) => s.toggleIndicator);
   const viewingPlanId = useUiStore((s) => s.viewingPlanId);
+  const viewedHistorical = useUiStore((s) => s.viewedHistorical);
   const tf = useTradingStore((s) => s.tf);
   const volShift = useStrategyStore((s) => s.volShift);
   const setVolShift = useStrategyStore((s) => s.setVolShift);
@@ -348,7 +429,11 @@ export function ChartHud({
         </span>
       </div>
 
-      {viewingPlanId && <EnforcerBlock planId={viewingPlanId} />}
+      {viewingPlanId && viewedHistorical?.id === viewingPlanId ? (
+        <HistoricalBlock plan={viewedHistorical} barsRef={barsRef} />
+      ) : (
+        viewingPlanId && <EnforcerBlock planId={viewingPlanId} />
+      )}
 
       {variant !== "chips" && indicators.theta && <ThetaBlock designer={designer} />}
 

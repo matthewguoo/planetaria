@@ -12,7 +12,13 @@
  */
 
 import type { Plan } from "./api";
-import { tradingHoursToExpiry, type Leg, type Smiles } from "./optionsMath";
+import {
+  positionValue,
+  TRADING_HOURS_PER_YEAR,
+  tradingHoursToExpiry,
+  type Leg,
+  type Smiles,
+} from "./optionsMath";
 import type { Chain } from "../store/strategyStore";
 import { smileFromChain } from "../store/strategyStore";
 
@@ -35,6 +41,16 @@ export type PositionView = {
   strikes: number[];
   qty: number;
   label: string;
+  /** Latest leg expiry (ISO) — tau basis for path reconstruction. */
+  expiry: string;
+  /** Closed-trade fields: exit event time (trading hours after entry),
+   * actual exit premium, reason — drives the EXIT marker + MAE/MFE block. */
+  closed: boolean;
+  exitMs: number | null;
+  exitHours: number | null;
+  exitPremium: number | null;
+  exitReason: string | null;
+  realizedPnl: number | null;
 };
 
 export function buildPositionView(
@@ -44,8 +60,12 @@ export function buildPositionView(
 ): PositionView | null {
   if (!plan.legs.length) return null;
   const expiry = plan.legs.reduce((a, l) => (l.expiry > a ? l.expiry : a), plan.legs[0].expiry);
-  const anchorMs = Date.parse(plan.created_at);
+  // Anchor at the actual entry FILL when the journal has it (history rows);
+  // created_at (order staging time) is the fallback.
+  const anchorMs = Date.parse(plan.entered_at ?? plan.created_at);
   if (!Number.isFinite(anchorMs)) return null;
+  const closed = ["closed", "cancelled", "rejected"].includes(plan.status);
+  const exitMs = plan.exited_at ? Date.parse(plan.exited_at) : null;
 
   const legs: (Leg & { symbol: string })[] = plan.legs.map((l) => {
     // live: re-mark IV from the latest chain when the contract is present.
@@ -72,6 +92,11 @@ export function buildPositionView(
     ? Math.max(hoursTotal - tradingHoursToExpiry(expiry, stopMs), 0)
     : hoursTotal;
 
+  const exitHours =
+    exitMs !== null && Number.isFinite(exitMs)
+      ? Math.max(hoursTotal - tradingHoursToExpiry(expiry, exitMs), 0)
+      : null;
+
   return {
     legs,
     entryBasis,
@@ -89,5 +114,49 @@ export function buildPositionView(
     label: `${plan.underlying} ${plan.legs
       .map((l) => `${l.side > 0 ? "+" : "−"}${l.ratio || 1}${l.right}${l.strike}`)
       .join(" ")} ×${plan.filled_qty || plan.qty}`,
+    expiry,
+    closed,
+    exitMs: exitMs !== null && Number.isFinite(exitMs) ? exitMs : null,
+    exitHours: exitHours !== null ? Math.min(exitHours, hoursTotal) : null,
+    exitPremium: plan.exit_premium ?? null,
+    exitReason: plan.exit_reason ?? (closed ? plan.status : null),
+    realizedPnl: plan.realized_pnl ?? null,
   };
+}
+
+/** MAE/MFE over the holding window, reconstructed from 1m underlying bars
+ * with the ENTRY-basis legs (frozen fill IVs) — the same pricing the entry
+ * projection uses, so the excursion path is consistent with the surface.
+ * Each bar is bracketed at its high AND low (the intrabar extreme of a
+ * monotone-in-S structure lies at one of them). Dollars per contract-SET. */
+export function computeExcursions(
+  view: PositionView,
+  bars: { t: Float64Array; h: Float64Array; l: Float64Array; n: number },
+): { maePerSet: number; mfePerSet: number; maeAtMs: number; mfeAtMs: number; samples: number } | null {
+  const endMs = view.exitMs ?? Date.now();
+  if (!bars.n || endMs <= view.anchorMs) return null;
+  let mae = Infinity;
+  let mfe = -Infinity;
+  let maeAt = view.anchorMs;
+  let mfeAt = view.anchorMs;
+  let samples = 0;
+  for (let i = 0; i < bars.n; i++) {
+    const t = bars.t[i];
+    if (t < view.anchorMs || t > endMs) continue;
+    const tau = Math.max(tradingHoursToExpiry(view.expiry, t), 0) / TRADING_HOURS_PER_YEAR;
+    for (const s of [bars.h[i], bars.l[i]]) {
+      const pl = (positionValue(view.legs, s, tau) - view.entryBasis) * 100;
+      if (pl < mae) {
+        mae = pl;
+        maeAt = t;
+      }
+      if (pl > mfe) {
+        mfe = pl;
+        mfeAt = t;
+      }
+    }
+    samples++;
+  }
+  if (!samples || !Number.isFinite(mae) || !Number.isFinite(mfe)) return null;
+  return { maePerSet: mae, mfePerSet: mfe, maeAtMs: maeAt, mfeAtMs: mfeAt, samples };
 }

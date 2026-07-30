@@ -65,6 +65,88 @@ function RiskCell({ plan }: { plan: Plan }) {
   );
 }
 
+/** Inline TP editor: percent box relative to the fill basis + premium
+ * preview; nothing fires until the explicit APPLY click (two-step). TP is
+ * freely movable (either direction); the server still enforces TP > SL. */
+function TpCell({ plan, onError }: { plan: Plan; onError: (msg: string | null) => void }) {
+  const [editing, setEditing] = useState(false);
+  const [pct, setPct] = useState(0);
+  const [busy, setBusy] = useState(false);
+  const refreshPositions = useAccountStore((s) => s.refreshPositions);
+
+  const basis = plan.fill_premium ?? plan.entry_limit;
+  const currentPct = Math.abs(basis) > 0.005 ? ((plan.tp_premium - basis) / Math.abs(basis)) * 100 : 0;
+  const preview = basis + (Math.abs(basis) * pct) / 100;
+  const valid = preview > plan.sl_premium && Math.abs(preview - plan.tp_premium) > 0.004;
+
+  if (!editing) {
+    return (
+      <td
+        data-numeric
+        className="cursor-pointer px-2 py-1 text-right text-bb-profit underline decoration-dotted underline-offset-2"
+        title={`TP ${plan.tp_premium.toFixed(2)} (${currentPct >= 0 ? "+" : ""}${currentPct.toFixed(0)}% of basis) — click to edit`}
+        onClick={(e) => {
+          e.stopPropagation();
+          setPct(Math.round(currentPct));
+          setEditing(true);
+        }}
+      >
+        {plan.tp_premium.toFixed(2)}
+      </td>
+    );
+  }
+  return (
+    <td className="px-2 py-1 text-right" onClick={(e) => e.stopPropagation()}>
+      <span className="inline-flex items-center gap-1">
+        <input
+          data-numeric
+          type="number"
+          step={5}
+          autoFocus
+          className="w-14 border border-bb-border bg-black px-1 py-0.5 text-right text-[11px] text-bb-profit outline-none focus:border-bb-amber"
+          value={pct}
+          onChange={(e) => setPct(Number(e.target.value))}
+          onKeyDown={(e) => {
+            if (e.key === "Escape") setEditing(false);
+          }}
+          aria-label="Take profit percent of basis"
+        />
+        <span className="text-[10px] text-bb-muted">%</span>
+        <span data-numeric className={"w-12 text-right text-[11px] " + (valid ? "text-bb-profit" : "text-bb-muted")}>
+          {preview.toFixed(2)}
+        </span>
+        <button
+          className="border border-bb-profit px-1.5 text-[10px] text-bb-profit hover:bg-bb-profit hover:text-black disabled:opacity-30"
+          disabled={busy || !valid}
+          title={valid ? `Move TP to ${preview.toFixed(2)}` : "TP must differ and stay above SL"}
+          onClick={async () => {
+            setBusy(true);
+            onError(null);
+            try {
+              await tightenExits(plan.id, { tp_premium: Number(preview.toFixed(2)) });
+              setEditing(false);
+              await refreshPositions();
+            } catch (err) {
+              onError(apiError(err));
+            } finally {
+              setBusy(false);
+            }
+          }}
+        >
+          {busy ? "…" : "APPLY"}
+        </button>
+        <button
+          className="border border-bb-border px-1 text-[10px] text-bb-muted hover:text-bb-amber"
+          onClick={() => setEditing(false)}
+          aria-label="Cancel TP edit"
+        >
+          ×
+        </button>
+      </span>
+    </td>
+  );
+}
+
 function PositionRow({ plan }: { plan: Plan }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -131,7 +213,7 @@ function PositionRow({ plan }: { plan: Plan }) {
       >
         {fmtPnl(plan.unrealized_pnl, planBasis(plan))}
       </td>
-      <td data-numeric className="px-2 py-1 text-right text-bb-profit">{plan.tp_premium.toFixed(2)}</td>
+      <TpCell plan={plan} onError={setError} />
       <td data-numeric className="px-2 py-1 text-right text-bb-loss">{plan.sl_premium.toFixed(2)}</td>
       <RiskCell plan={plan} />
       <td data-numeric className="px-2 py-1 text-right text-bb-orange">{etTime(plan.time_stop_utc)}</td>
@@ -301,6 +383,8 @@ function PositionsTab() {
 
 function HistoryTab() {
   const [trades, setTrades] = useState<Plan[] | null>(null);
+  const viewHistorical = useUiStore((s) => s.viewHistorical);
+  const setSymbol = useTradingStore((s) => s.setSymbol);
   useEffect(() => {
     getHistory().then(setTrades).catch(() => setTrades([]));
   }, []);
@@ -331,7 +415,15 @@ function HistoryTab() {
             </thead>
             <tbody>
               {trades.map((t) => (
-                <tr key={t.id} className="border-b border-bb-border/50">
+                <tr
+                  key={t.id}
+                  className="cursor-pointer border-b border-bb-border/50 hover:bg-bb-hover"
+                  title="Replay this trade on the chart: entry-anchored P/L surface, exit marker, MAE/MFE"
+                  onClick={() => {
+                    setSymbol(t.underlying);
+                    viewHistorical(t);
+                  }}
+                >
                   <td className="px-2 py-1 text-bb-muted">{t.created_at.slice(0, 10)}</td>
                   <td className="px-2 py-1 text-white">
                     {t.underlying}

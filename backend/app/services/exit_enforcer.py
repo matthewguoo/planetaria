@@ -203,6 +203,26 @@ class ExitEnforcer:
                         notes=f"entry {status} while offline",
                     )
                     return
+        # Manual/external liquidation: a held position that VANISHED at the
+        # broker without any exit order of ours means someone closed it out
+        # from under the engine (broker UI, expiry). Detect it here directly
+        # instead of waiting for an exit submit to bounce three times, and
+        # capture the real closing fills for the trade record. The updated_at
+        # age gate avoids racing the broker's position-propagation right
+        # after an entry fill.
+        if (
+            plan.status in ("filled", "partially_filled")
+            and not plan.exit_order_id
+            and plan.updated_at is not None
+            and (datetime.now(timezone.utc) - as_utc(plan.updated_at)).total_seconds() > 90
+            and await self._position_gone(plan)
+        ):
+            log.error(
+                "plan %s: position gone at broker with no exit order - "
+                "external liquidation, capturing fills", plan.id,
+            )
+            await self._force_close_with_capture(plan, "position closed outside the engine")
+            return
         # Broker-resting TP truth-sync: a fill that the stream missed must
         # still close the plan; a dead resting order must re-rest.
         if plan.status == "filled" and plan.tp_order_id:
@@ -317,6 +337,88 @@ class ExitEnforcer:
             log.warning("position check failed for %s: %s", plan.id, exc)
             return False
         return not ({leg["symbol"] for leg in plan.legs} & positions)
+
+    async def _capture_external_exit(self, plan: TradePlan) -> tuple[float | None, str]:
+        """The position vanished outside our exit path (manual close in the
+        broker UI, expiry liquidation). Recover the ACTUAL closing fills from
+        broker order history so the trade record and chart exit markers carry
+        real numbers, not blanks: net exit premium = side-weighted closing
+        avg per leg. Falls back to the last known fair value when history is
+        unreadable (e.g. exercised/expired without a closing order)."""
+        from alpaca.trading.enums import QueryOrderStatus
+        from alpaca.trading.requests import GetOrdersRequest
+
+        leg_syms = {leg["symbol"] for leg in plan.legs}
+        ours = {plan.entry_order_id, plan.exit_order_id, plan.tp_order_id} - {None}
+        try:
+            request = GetOrdersRequest(
+                status=QueryOrderStatus.CLOSED,
+                symbols=sorted(leg_syms),
+                after=as_utc(plan.created_at),
+                limit=200,
+                nested=True,
+            )
+            orders = await self.trade.alpaca.call(
+                self.trade.alpaca.trading.get_orders, request, retries=1
+            )
+        except Exception as exc:
+            log.warning("external-exit order scan failed for %s: %s", plan.id, exc)
+            orders = []
+
+        # Flatten mleg children; keep filled closes that are NOT ours.
+        fills: dict[str, tuple[float, float]] = {}  # symbol -> (qty, avg)
+        def _absorb(order) -> None:
+            child_legs = getattr(order, "legs", None) or []
+            for child in child_legs:
+                _absorb(child)
+            symbol = getattr(order, "symbol", None)
+            if symbol not in leg_syms:
+                return
+            if str(getattr(order, "id", "")) in ours:
+                return
+            client_id = str(getattr(order, "client_order_id", "") or "")
+            if client_id.startswith(plan.id):
+                return  # one of our own (entry/exit/tp/ghost) orders
+            filled = float(getattr(order, "filled_qty", 0) or 0)
+            avg = float(getattr(order, "filled_avg_price", 0) or 0)
+            intent = str(getattr(order, "position_intent", "") or "")
+            if filled <= 0 or avg <= 0 or "close" not in intent:
+                return
+            prev_qty, prev_avg = fills.get(symbol, (0.0, 0.0))
+            total = prev_qty + filled
+            fills[symbol] = (total, (prev_avg * prev_qty + avg * filled) / total)
+
+        for order in orders:
+            _absorb(order)
+
+        if fills and all(leg["symbol"] in fills for leg in plan.legs):
+            premium = sum(
+                leg["side"] * leg.get("ratio", 1) * fills[leg["symbol"]][1]
+                for leg in plan.legs
+            )
+            return round(premium, 4), "closing fills recovered from broker history"
+
+        # Fallback: last defensible mark (stream cache) — approximate but
+        # far better than a blank exit on the trade record.
+        quotes = {s: self.market.latest_quote(s) for s in leg_syms}
+        mid = position_mid_from_quotes(plan.legs, quotes)
+        if mid is not None:
+            return round(mid, 4), "no external fills found; last mark used"
+        return None, "no fills or quotes recoverable"
+
+    async def _force_close_with_capture(self, plan: TradePlan, context: str) -> None:
+        premium, detail = await self._capture_external_exit(plan)
+        realized = None
+        if premium is not None and plan.fill_premium is not None:
+            realized = round((premium - plan.fill_premium) * 100 * plan.effective_qty, 2)
+        await self.trade.fsm.apply(
+            plan.id, PlanEvent.FORCE_CLOSED,
+            exit_premium=premium,
+            realized_pnl=realized,
+            exit_reason=plan.exit_reason or "manual",
+            notes=f"{context}; {detail}",
+        )
+        await self._sweep_ghosts_on_close(plan.id)
 
     def _resolve_ghost_key(self, plan_id: str, key: str) -> None:
         keys = self._ghost_keys.get(plan_id)
@@ -700,11 +802,9 @@ class ExitEnforcer:
                         log.error(
                             "position gone at broker for %s - FORCE_CLOSED", plan_id
                         )
-                        await self.trade.fsm.apply(
-                            plan_id, PlanEvent.FORCE_CLOSED,
-                            notes="position vanished at broker during exit",
+                        await self._force_close_with_capture(
+                            plan, "position vanished at broker during exit"
                         )
-                        await self._sweep_ghosts_on_close(plan_id)
                         return
         log.error("plan %s STILL not closed after verification window - rearming monitor", plan_id)
         self._monitors.pop(plan_id, None)
@@ -736,14 +836,18 @@ class ExitEnforcer:
 
     async def tighten_exits(self, plan_id: str, tp: float | None, sl: float | None,
                             time_stop_utc: datetime | None) -> TradePlan:
-        """Exits may only tighten: TP down, SL up, time stop earlier."""
+        """Exit-edit discipline: the LOSS side may only tighten (SL up, time
+        stop earlier) — widening the loss you'll accept mid-trade is the
+        classic tilt move and stays forbidden. TP is a PROFIT target: moving
+        it (either direction, behind an explicit UI confirm) changes ambition,
+        not risk, so it is freely editable as long as it stays above SL."""
         plan = await self.trade.get_plan(plan_id)
         if plan.status not in OPEN_STATUSES:
             raise ValueError("plan is not open")
         fields: dict = {}
         if tp is not None:
-            if tp >= plan.tp_premium:
-                raise ValueError("TP may only move down (tighten)")
+            if tp == plan.tp_premium:
+                raise ValueError("TP unchanged")
             if tp <= plan.sl_premium:
                 raise ValueError("TP must stay above SL")
             fields["tp_premium"] = tp

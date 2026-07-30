@@ -52,6 +52,20 @@ def position_mid_from_quotes(legs: list[dict], quotes: dict[str, dict]) -> float
     return total
 
 
+def staged_price_ok(entry_limit: float, live_mid: float, half_spread: float
+                    ) -> tuple[bool, float, float]:
+    """Fast-tape staleness check for a staged entry price.
+
+    (ok, drift, tolerance): the staged limit may deviate from the live
+    position value by at most max(2x half-spread, 8% of |mid|) — wide books
+    get spread-scaled slack, tight books get the percentage floor. Signed
+    premiums compare on the same axis (credit entries are negative).
+    """
+    drift = abs(entry_limit - live_mid)
+    tolerance = max(2 * half_spread, 0.08 * max(abs(live_mid), 0.05))
+    return drift <= tolerance, drift, tolerance
+
+
 def parse_occ_symbol(symbol: str) -> dict | None:
     """OCC option symbol -> {underlying, expiry, right, strike}; None if not OCC."""
     try:
@@ -295,6 +309,33 @@ class TradeService:
         )
         if violations:
             raise ValueError("; ".join(violations))
+
+        # Fast-tape guard: the staged entry limit was computed from a chain
+        # snapshot up to several seconds old plus human decision time. In a
+        # fast market that limit can be far through the CURRENT market —
+        # force-refresh the legs' quotes and refuse when the staged price has
+        # drifted beyond max(2x position half-spread, 8% of |mid|). The user
+        # re-stages off fresh numbers instead of chasing a vanished price.
+        if self.alpaca.configured:
+            from app.services.fair_value import position_quote_stats
+
+            leg_symbols = [leg["symbol"] for leg in legs]
+            try:
+                await self.market.refresh_option_quotes(leg_symbols, max_age_s=1.5)
+            except Exception as exc:
+                log.warning("entry-guard quote refresh failed: %s", exc)
+            live = position_quote_stats(
+                legs, {s: self.market.latest_quote(s) for s in leg_symbols}
+            )
+            if live is not None:
+                live_mid, half_spread = live
+                ok, drift, tolerance = staged_price_ok(entry_limit, live_mid, half_spread)
+                if not ok:
+                    raise ValueError(
+                        f"stale staged price: entry {entry_limit:.2f} is "
+                        f"{drift:.2f} from the live market ({live_mid:.2f}, "
+                        f"tolerance {tolerance:.2f}) - market moved, re-stage the order"
+                    )
 
         plan = TradePlan(
             underlying=payload["underlying"].upper(),

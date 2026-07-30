@@ -124,6 +124,12 @@ type StrategyOverlay = {
   entryBasis: number | null;
   /** Model-free expiry breakevens against the active premium basis. */
   breakevens: number[];
+  /** Closed-trade view: exit event (trading hours after entry), the actual
+   * exit premium/reason and realized P/L — drives the EXIT marker. */
+  exitHours: number | null;
+  exitPremium: number | null;
+  exitReason: string | null;
+  realizedPnl: number | null;
 };
 
 /** Bar index the surface's t=0 column maps to: entry bar for a position
@@ -247,6 +253,7 @@ export function CandlePane({
   const axisDragRef = useRef<{ startY: number; domain: [number, number] } | null>(null);
   const dragTargetRef = useRef<DragTarget | null>(null);
   const prevSymbolRef = useRef(symbol);
+  const framedPlanRef = useRef<string | null>(null);
   const surfaceRef = useRef<HeatmapResult | null>(null);
   const overlayRef = useRef<StrategyOverlay | null>(null);
   // Visible y-domain, quantized to 25% steps of its own span: pans/zooms
@@ -278,10 +285,12 @@ export function CandlePane({
   // ------------------------------------------------- strategy derivations
 
   const viewingPlanId = useUiStore((s) => s.viewingPlanId);
+  const viewedHistorical = useUiStore((s) => s.viewedHistorical);
   const pnlMode = useUiStore((s) => s.pnlMode);
   const positions = useAccountStore((s) => s.positions);
   const viewingPlan = viewingPlanId
-    ? positions.find((p) => p.id === viewingPlanId) ?? null
+    ? positions.find((p) => p.id === viewingPlanId) ??
+      (viewedHistorical?.id === viewingPlanId ? viewedHistorical : null)
     : null;
 
   const overlay: StrategyOverlay | null = useMemo(() => {
@@ -324,6 +333,10 @@ export function CandlePane({
             spot > 0
               ? breakevensForBasis(positionView.legs, entry, spot * 0.7, spot * 1.3)
               : [],
+          exitHours: positionView.exitHours,
+          exitPremium: positionView.exitPremium,
+          exitReason: positionView.exitReason,
+          realizedPnl: positionView.realizedPnl,
         };
       }
     }
@@ -372,6 +385,10 @@ export function CandlePane({
       entryBasis: null,
       breakevens:
         legs && spot > 0 ? breakevensForBasis(legs, entry, spot * 0.7, spot * 1.3) : [],
+      exitHours: null,
+      exitPremium: null,
+      exitReason: null,
+      realizedPnl: null,
     };
   }, [chain, expiry, kind, strikes, ratios, legRights, legSides, tpPct, slPct, timeStopEt, quote, volShift, skewBeta, viewingPlan, pnlMode]);
 
@@ -517,6 +534,31 @@ export function CandlePane({
           }
         : EMPTY;
       const v = viewRef.current;
+      // Historical replay: frame the holding window (entry -> exit, padded)
+      // once per viewed plan as soon as bars cover it — a 1-minute scalp from
+      // this morning must open ON SCREEN, not off the left edge.
+      const hist = useUiStore.getState().viewedHistorical;
+      if (hist && n && framedPlanRef.current !== hist.id) {
+        const bars = barsRef.current;
+        const anchorMs = Date.parse(hist.entered_at ?? hist.created_at);
+        const exitMs = hist.exited_at ? Date.parse(hist.exited_at) : anchorMs;
+        if (Number.isFinite(anchorMs) && anchorMs <= bars.t[n - 1]) {
+          let aIdx = 0;
+          let xIdx = n - 1;
+          for (let i = 0; i < n; i++) {
+            if (bars.t[i] <= anchorMs) aIdx = i;
+            if (bars.t[i] <= exitMs) xIdx = i;
+          }
+          const span = Math.max(xIdx - aIdx, 1);
+          v.barsVisible = Math.min(Math.max(span * 4, 60), 3000);
+          v.rightIndex = xIdx + v.barsVisible * 0.3;
+          v.follow = false;
+          v.yDomain = null;
+          framedPlanRef.current = hist.id;
+        }
+      } else if (!hist) {
+        framedPlanRef.current = null;
+      }
       if (v.follow) {
         v.rightIndex = Math.max(0, n - 1) + v.barsVisible * RIGHT_PAD_FRAC;
       }
@@ -1253,6 +1295,40 @@ function drawHeatmap(
     dragTarget?.kind === "timestop" ? 2.4 : 1.2,
   );
   if (overlay.readOnly) vline(x0, "#9c8cff", "ENTRY", 1.2);
+
+  // Closed-trade EXIT marker: solid line at the actual exit event with an
+  // outcome chip (reason · exit premium · realized P/L).
+  if (overlay.exitHours !== null) {
+    const xExit = indexToX(futureIndex(overlay.exitHours, anchorIdx, tfMinutes), view, layout);
+    if (xExit >= 0 && xExit <= layout.plotW) {
+      const win = (overlay.realizedPnl ?? 0) >= 0;
+      const color = win ? COLORS.tp : COLORS.sl;
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1.6;
+      ctx.beginPath();
+      ctx.moveTo(xExit, 0);
+      ctx.lineTo(xExit, layout.plotH);
+      ctx.stroke();
+      ctx.lineWidth = 1;
+      const parts = [`EXIT ${(overlay.exitReason ?? "closed").toUpperCase()}`];
+      if (overlay.exitPremium !== null) parts.push(`@${overlay.exitPremium.toFixed(2)}`);
+      if (overlay.realizedPnl !== null) {
+        parts.push(`${overlay.realizedPnl >= 0 ? "+" : "−"}$${Math.abs(overlay.realizedPnl).toFixed(0)}`);
+      }
+      const text = parts.join(" ");
+      ctx.font = "11px 'SF Mono', Consolas, monospace";
+      const w = ctx.measureText(text).width + 10;
+      const cx = Math.min(Math.max(xExit - w / 2, 2), layout.plotW - w - 2);
+      ctx.fillStyle = "rgba(0,0,0,0.88)";
+      ctx.fillRect(cx, 20, w, CHIP_H);
+      ctx.strokeStyle = color;
+      ctx.strokeRect(cx, 20, w, CHIP_H);
+      ctx.fillStyle = color;
+      ctx.textAlign = "left";
+      ctx.textBaseline = "middle";
+      ctx.fillText(text, cx + 5, 20 + CHIP_H / 2);
+    }
+  }
 
   // Terminal density strip along the expiry line (model-implied lognormal).
   if (overlay.sigma > 0 && overlay.spot > 0 && xExpiry > 0 && xExpiry <= layout.plotW) {

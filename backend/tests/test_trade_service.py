@@ -10,7 +10,25 @@ from app.services.trade_service import (
     parse_occ_symbol,
     position_mid_from_quotes,
     round_tick,
+    staged_price_ok,
 )
+
+
+def test_staged_price_ok_fast_tape_guard():
+    # Inside 2x half-spread: fine even when off-mid.
+    ok, drift, tol = staged_price_ok(2.50, 2.62, 0.08)
+    assert ok and drift == pytest.approx(0.12) and tol == pytest.approx(0.2096)
+    # Beyond both spread slack and the 8% floor: rejected.
+    ok, drift, _ = staged_price_ok(2.50, 3.10, 0.05)
+    assert not ok and drift == pytest.approx(0.60)
+    # Tight book, small drift within 8% floor: fine.
+    assert staged_price_ok(2.50, 2.55, 0.01)[0]
+    # Credit structures compare on the signed axis.
+    assert staged_price_ok(-2.96, -2.90, 0.05)[0]
+    ok, _, _ = staged_price_ok(-2.96, -2.20, 0.03)
+    assert not ok
+    # Near-zero mids use the 0.05 floor so tolerance never collapses.
+    assert staged_price_ok(0.05, 0.06, 0.005)[0]
 
 
 def test_round_tick_preserves_sign():
