@@ -6,6 +6,14 @@ Escalation ladder for exits (illiquid-friendly):
   1. marketable limit at mid -/+ 2% buffer, wait 5s
   2. reprice at mid -/+ 6%, wait 5s
   3. market order
+
+The ladder only runs while the market is OPEN. An exit triggered while the
+market is closed (time stop firing after a machine-sleep wake, manual close
+at night) PARKS instead: one resting limit order that queues for the next
+session, no cancel/replace churn, no market orders the broker would reject.
+At the next open the monitor resumes the real ladder against live quotes.
+(Incident 2026-07-30: the pre-clock ladder churned ~2 cancel/replace orders
+per minute against a closed market all night without ever closing.)
 """
 
 import asyncio
@@ -15,6 +23,7 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 from app.models.trade import OPEN_STATUSES, TradePlan, as_utc
+from app.services.market_clock import MarketClock
 from app.services.plan_fsm import MONITOR_STATES, PlanEvent
 from app.services.trade_service import TradeService, position_mid_from_quotes, round_tick
 
@@ -70,11 +79,17 @@ def model_position_value(plan: TradePlan, spot: float, now_ms: float) -> float |
 
 
 class ExitEnforcer:
-    def __init__(self, db, market, trade: TradeService):
+    def __init__(self, db, market, trade: TradeService, clock: MarketClock | None = None):
         self.db = db
         self.market = market
         self.trade = trade
         trade.enforcer = self
+        self.clock = clock or MarketClock(trade.alpaca)
+        # Plans whose exit is PARKED: a single closing limit resting against a
+        # closed market, waiting for the next open. The monitor resumes the
+        # real escalation ladder when the clock flips open. Repopulated after
+        # a restart by reconcile (exiting + live order + market closed).
+        self._parked: set[str] = set()
         self._monitors: dict[str, asyncio.Task] = {}
         self._reconcile_lock = asyncio.Lock()
         # Idempotency keys of exit submits that ERRORED (per plan): any of
@@ -328,6 +343,12 @@ class ExitEnforcer:
                     guard={"exit_order_id": observed_order},
                     exit_order_id=None,
                 )
+            elif self.trade.alpaca.configured and not await self.clock.is_open():
+                # A closing order resting against a closed market IS a parked
+                # exit, whoever placed it — marking it here makes parking
+                # survive an engine restart (the in-memory set starts empty),
+                # so the monitor still resumes the ladder at the open.
+                self._parked.add(plan.id)
         await self.arm(plan.id)
 
     async def shutdown(self) -> None:
@@ -353,6 +374,7 @@ class ExitEnforcer:
         task = self._monitors.pop(plan_id, None)
         self.monitor_health.pop(plan_id, None)
         self.monitor_beat.pop(plan_id, None)
+        self._parked.discard(plan_id)
         if task:
             task.cancel()
 
@@ -683,6 +705,7 @@ class ExitEnforcer:
     async def _sweep_ghosts_on_close(self, plan_id: str) -> None:
         """The plan is closed; cancel any unresolved ghost that is live so no
         stray closing order can fill into a fresh (reversed) position."""
+        self._parked.discard(plan_id)
         keys = self._ghost_keys.pop(plan_id, None)
         if not keys:
             return
@@ -783,6 +806,29 @@ class ExitEnforcer:
                         log.warning("plan %s exiting with no live order - resubmitting", plan.id)
                         await self._execute_exit(plan_id, plan.exit_reason or "manual")
                         return
+                    # Parked exit (limit resting against a closed market):
+                    # when the clock flips open, resume the REAL ladder so the
+                    # close reprices against live quotes and can escalate to
+                    # market — the parked limit alone could sit unfilled.
+                    if (
+                        plan.status == "exiting"
+                        and plan.exit_order_id
+                        and plan_id in self._parked
+                    ):
+                        if await self.clock.is_open():
+                            lock = self._exit_locks.get(plan_id)
+                            if lock is None or not lock.locked():
+                                log.warning(
+                                    "market open - resuming escalation ladder "
+                                    "for parked exit %s", plan_id,
+                                )
+                                self._parked.discard(plan_id)
+                                await self._execute_exit(
+                                    plan_id, plan.exit_reason or "time_stop"
+                                )
+                                return
+                        else:
+                            self.monitor_health[plan_id] = "exit parked until market open"
                     # Rest the TP at the broker once filled (retry with
                     # backoff on failure — never spam a broken broker).
                     if (
@@ -805,9 +851,14 @@ class ExitEnforcer:
                     # is the fast path, but TP/SL must keep evaluating when
                     # the stream is quiet (illiquid legs, after hours).
                     try:
+                        # The time-stop deadline only drives the wake while it
+                        # is still ahead. Once past it (status exiting — the
+                        # firing branches above returned otherwise), a clamped
+                        # negative timeout would spin this loop at 10Hz for as
+                        # long as the exit takes (all night, when parked).
                         msg = await asyncio.wait_for(
                             queue.get(),
-                            timeout=min(max(timeout, 0.1), wait_s),
+                            timeout=min(max(timeout, 0.1), wait_s) if timeout > 0 else wait_s,
                         )
                     except asyncio.TimeoutError:
                         msg = None
@@ -822,6 +873,10 @@ class ExitEnforcer:
                         except Exception as exc:
                             log.warning("quote poll failed for %s: %s", plan_id, exc)
                     if plan.status not in MONITOR_STATUSES:
+                        # Exiting: nothing to evaluate here — idle at the far
+                        # cadence (the near-threshold cadence would REST-poll
+                        # quotes every second for the whole exit).
+                        wait_s = self.quote_poll_s
                         continue
 
                     # Underlying tick: model-value proximity check. If the
@@ -987,6 +1042,14 @@ class ExitEnforcer:
                          plan_id, reason)
                 await self._sweep_ghosts_on_close(plan_id)
                 return
+        # Closed market: the ladder is useless (limits can't fill, market
+        # orders bounce) and actively harmful (all-night cancel/replace
+        # churn). Park one resting limit instead; the monitor resumes the
+        # ladder at the next open. Keyless mode skips this — simulated fills
+        # land instantly regardless of the session.
+        if self.trade.alpaca.configured and not await self.clock.is_open():
+            await self._park_exit_locked(plan_id, reason)
+            return
         token = uuid4().hex[:6]
         for rung, (buffer, wait) in enumerate(self.escalation):
             plan = await self.trade.get_plan(plan_id)
@@ -1025,6 +1088,62 @@ class ExitEnforcer:
         log.info("exit ladder exhausted for %s; verifying market order", plan_id)
         await self._verify_closed(plan_id, reason)
 
+    async def _park_exit_locked(self, plan_id: str, reason: str) -> None:
+        """Market is closed: ensure ONE closing limit order rests — it queues
+        for the next session, so it works the open even if this engine is
+        down by then — mark the plan parked, and return without escalating.
+        The monitor resumes the real ladder when the clock flips open.
+        Caller must hold the plan's exit lock."""
+        plan = await self.trade.get_plan(plan_id)
+        if plan.status in ("closed", "cancelled", "rejected"):
+            await self._sweep_ghosts_on_close(plan_id)
+            return
+        self._parked.add(plan_id)
+        self.monitor_health[plan_id] = "exit parked until market open"
+        if plan.exit_order_id:
+            # A closing order already rests (prior rung, prior park) — that
+            # IS the parked order; reconcile keeps its status honest.
+            return
+        if await self._handle_ghost(plan):
+            return  # a ghost already filled; adopted and closing
+        quotes = {leg["symbol"]: self.market.latest_quote(leg["symbol"]) for leg in plan.legs}
+        mid = position_mid_from_quotes(plan.legs, quotes)
+        if mid is None:
+            mid = plan.sl_premium
+        # Rung-1 marketability: enough give to fill at the open, not a fire
+        # sale against a gap (a gap through the limit waits for the ladder).
+        buffer = self.escalation[0][0] or 0.02
+        limit = round_tick(mid - abs(mid) * buffer)
+        key = f"{uuid4().hex[:6]}p"
+        self._ghost_keys.setdefault(plan_id, []).append(key)
+        try:
+            await self.trade.submit_exit(plan, reason, limit, attempt_key=key)
+            self._resolve_ghost_key(plan_id, key)
+        except Exception:
+            # Status is unchanged, so the reconcile backstop / monitor
+            # re-trigger the exit (and re-park) on their own cadence.
+            log.exception("parked exit submit failed for %s - will retry", plan_id)
+            return
+        next_open = await self.clock.next_open()
+        when = "the next market open"
+        if next_open is not None:
+            from zoneinfo import ZoneInfo
+
+            when = next_open.astimezone(ZoneInfo("America/New_York")).strftime(
+                "%Y-%m-%d %H:%M ET"
+            )
+        log.warning(
+            "plan %s: %s exit PARKED (market closed) - one limit @ %.2f resting until %s",
+            plan_id, reason, limit, when,
+        )
+        plan = await self.trade.get_plan(plan_id)
+        if "exit parked" not in (plan.notes or ""):
+            await self.trade.fsm.update_fields(
+                plan_id,
+                notes=((plan.notes + " | ") if plan.notes else "")
+                + f"exit parked (market closed) - resting limit works {when}",
+            )
+
     async def _verify_closed(self, plan_id: str, reason: str) -> None:
         """Poll until the plan closes; if the final order dies, resubmit a
         market close. Bounded per-iteration, unbounded overall — the ladder's
@@ -1032,6 +1151,14 @@ class ExitEnforcer:
         resubmit_failures = 0
         for attempt in range(self.verify_attempts):
             await asyncio.sleep(self.verify_poll_s)
+            # Market closed mid-verify (a late-day ladder ran into the bell):
+            # stop driving — park and let the monitor resume at the open.
+            if self.trade.alpaca.configured and not await self.clock.is_open():
+                log.warning(
+                    "market closed during exit verification for %s - parking", plan_id
+                )
+                await self._park_exit_locked(plan_id, reason)
+                return
             plan = await self.trade.get_plan(plan_id)
             if plan.status in ("closed", "cancelled", "rejected"):
                 await self._sweep_ghosts_on_close(plan_id)

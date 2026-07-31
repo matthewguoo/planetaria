@@ -99,6 +99,22 @@ async def startup(app: FastAPI, settings: Settings) -> None:
     app.state.reconcile_loop_task = asyncio.create_task(
         supervise("reconcile-loop", enforcer.reconcile_loop), name="reconcile-loop"
     )
+    # Power defenses: exits are software-enforced, so the machine sleeping on
+    # an open position is an enforcement outage. Keep Windows awake while any
+    # plan is open, and if the loop was suspended anyway (sleep/hibernate),
+    # reconcile the moment it comes back instead of on the next interval.
+    from app.services.power import KeepAwake, wake_watchdog
+
+    # (not supervised: on non-Windows run() exits immediately by design, and
+    # each pass already contains its own exception handling)
+    app.state.keep_awake = KeepAwake(risk)
+    app.state.keep_awake_task = asyncio.create_task(
+        app.state.keep_awake.run(), name="keep-awake"
+    )
+    app.state.wake_watchdog_task = asyncio.create_task(
+        supervise("wake-watchdog", lambda: wake_watchdog(enforcer)),
+        name="wake-watchdog",
+    )
 
 
 async def _reconcile_with_retry(enforcer: ExitEnforcer, attempts: int = 5) -> None:
@@ -119,6 +135,10 @@ async def shutdown(app: FastAPI) -> None:
         state.reconcile_task.cancel()
     if getattr(state, "reconcile_loop_task", None):
         state.reconcile_loop_task.cancel()
+    if getattr(state, "keep_awake_task", None):
+        state.keep_awake_task.cancel()
+    if getattr(state, "wake_watchdog_task", None):
+        state.wake_watchdog_task.cancel()
     await state.enforcer.shutdown()
     if state.trading_stream_task:
         state.trading_stream_task.cancel()

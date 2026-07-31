@@ -145,6 +145,9 @@ async def system_state(app_state) -> dict:
             "configured": alpaca.configured,
             "paper": True,
             "account_status": account_status,
+            # Broker market clock as the enforcer sees it (cached snapshot;
+            # {"known": False} until the first successful fetch).
+            "market_clock": enforcer.clock.status(),
         },
         "db": {"ok": db_ok, "latency_ms": db_ms,
                "engine": "postgres" if db.url.startswith("postgres") else "sqlite"},
@@ -163,10 +166,24 @@ async def system_state(app_state) -> dict:
                 for pid, status in enforcer.monitor_health.items()
                 if status.startswith("no-mid")
             },
+            # Exits parked against a closed market (one resting limit each;
+            # the ladder resumes at the open).
+            "parked_exits": sorted(enforcer._parked),
         },
         "tasks": {
             "trading_stream": _task_state(getattr(app_state, "trading_stream_task", None)),
             "reconcile_loop": _task_state(getattr(app_state, "reconcile_loop_task", None)),
             "startup_reconcile": _task_state(getattr(app_state, "reconcile_task", None)),
+            "keep_awake": _task_state(getattr(app_state, "keep_awake_task", None)),
+            "wake_watchdog": _task_state(getattr(app_state, "wake_watchdog_task", None)),
+        },
+        "power": {
+            "keep_awake_supported": getattr(
+                getattr(app_state, "keep_awake", None), "supported", False
+            ),
+            # True while the OS idle-sleep timer is inhibited (open plans).
+            "keep_awake_active": getattr(
+                getattr(app_state, "keep_awake", None), "active", False
+            ),
         },
     }
