@@ -269,8 +269,16 @@ The take-profit RESTS AT THE BROKER as a live limit close the moment the
 entry fills: zero software latency, and it fills even if the engine is
 down. (Idempotent per (plan, level): a crash between broker-accept and
 the DB write recovers the same order, never doubles it. Any other exit
-first pulls the resting TP down — and if the cancel loses the race to a
-fill, the position is recognized as already closed.)
+first pulls the resting TP down — and because broker cancels are
+asynchronous, the takedown polls the order to a TERMINAL verdict: a fill
+that beats the cancel is absorbed as the close, and an unconfirmable
+cancel refuses to proceed rather than risk two live closes.)
+
+Keyless mode closes triggered plans with a SIMULATED fill at the current
+mark (through the normal FSM path, so history and slippage read like a
+real exit) — and position-truth checks never force-close anything
+without keys, so an engine accidentally booted without its `.env`
+cannot torch the records of positions still live at the broker.
 
 The stop-loss cannot rest (no broker stop orders for options), so it is
 software with a layered trigger chain, fastest first:

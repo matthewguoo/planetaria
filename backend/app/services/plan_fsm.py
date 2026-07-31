@@ -233,14 +233,25 @@ class PlanStateMachine:
             )
             return [row.to_dict() for row in result.scalars().all()]
 
-    async def update_fields(self, plan_id: str, **fields) -> TradePlan:
+    async def update_fields(self, plan_id: str, *, expect: dict | None = None,
+                            **fields) -> TradePlan:
         """Field-only update (exit tightening, notes) — state unchanged, same
-        serialization and broadcast path as real transitions."""
+        serialization and broadcast path as real transitions. `expect` pins
+        the write to the row state it describes (column==value), the same
+        discipline as apply()'s guard: a stale verdict about order X must not
+        clobber a field that now points at order Y. On mismatch the write is
+        dropped and the current row returned."""
         async with self._lock(plan_id):
             async with self.db.session() as session:
                 plan = await session.get(TradePlan, plan_id)
                 if plan is None:
                     raise ValueError(f"no plan {plan_id}")
+                if expect and any(getattr(plan, k) != v for k, v in expect.items()):
+                    log.warning(
+                        "plan %s: field update %s dropped - expect %s does not match row",
+                        plan_id, list(fields), expect,
+                    )
+                    return plan
                 for key, value in fields.items():
                     setattr(plan, key, value)
                 await session.commit()

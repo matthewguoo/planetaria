@@ -151,15 +151,17 @@ async def system_state(app_state) -> dict:
         "redis": {"ok": redis.healthy},
         "enforcer": {
             "monitors": len(enforcer._monitors),
-            "monitored_plan_ids": sorted(enforcer._monitors.keys())[:20],
+            "monitored_plan_ids": sorted(enforcer._monitors.keys()),
             "ghost_keys": sum(len(v) for v in enforcer._ghost_keys.values()),
             "last_reconcile_age_s": reconcile_age,
             # Monitors that currently CANNOT evaluate TP/SL (no quote for
             # some leg even after REST polling) — must be zero in health.
+            # Only genuine no-mid states: "sl-confirming" is the dwell
+            # working as designed, not a data outage.
             "monitors_without_mid": {
                 pid: status
                 for pid, status in enforcer.monitor_health.items()
-                if status != "ok"
+                if status.startswith("no-mid")
             },
         },
         "tasks": {

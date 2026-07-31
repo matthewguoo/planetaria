@@ -43,6 +43,7 @@ class FlakyBroker:
         self.fail_submits: int = 0  # next N submits raise ConnectionError
         self.fail_after_register: int = 0  # register order, THEN raise
         self.hang_next_submit: float = 0.0  # submit sleeps this long (once)
+        self.async_cancels: bool = False  # cancel ACCEPTED but order stays live
         self.submit_count = 0
 
     # -- helpers ---------------------------------------------------------
@@ -153,6 +154,11 @@ class FlakyBroker:
                 raise KeyError(f"no order {order_id}")
             if order.status == "filled":
                 raise ValueError("order is not cancelable (filled)")
+            if self.async_cancels:
+                # Real broker semantics: the cancel is ACCEPTED (no error)
+                # but the order is only pending_cancel — it can still fill.
+                self.history.append((time.monotonic(), "cancel-req", order.client_order_id))
+                return
             order.status = "canceled"
             self.history.append((time.monotonic(), "cancel", order.client_order_id))
 
@@ -644,6 +650,91 @@ async def test_sl_trigger_cancels_resting_tp_first(stack):
         assert len(stack.broker.filled_exits_for(plan.id)) == 1
     finally:
         filler.cancel()
+
+
+@pytest.mark.asyncio
+async def test_async_cancel_race_absorbs_in_flight_tp_fill(stack):
+    """Broker cancels are asynchronous: an ACCEPTED cancel is not a dead
+    order. If the resting TP fills while its cancel is pending, the takedown
+    must absorb that fill (plan closed as TP) — never report the TP gone and
+    let a second close go up."""
+    plan = await make_plan(stack.db, broker=stack.broker)
+    order = stack.broker._register(SimpleNamespace(client_order_id=f"{plan.id}-xtp400", qty=1))
+    from app.services.plan_fsm import PlanEvent  # noqa: PLC0415
+
+    await stack.trade.fsm.update_fields(plan.id, tp_order_id=order.id)
+    plan = await stack.trade.get_plan(plan.id)
+    stack.broker.async_cancels = True
+
+    async def fill_during_pending_cancel():
+        await asyncio.sleep(0.3)  # cancel accepted, poll loop running
+        filled = stack.broker.fill(order.id, 4.0)
+        await deliver_fill(stack.trade, filled)  # stream event races the poll too
+
+    filler = asyncio.create_task(fill_during_pending_cancel())
+    try:
+        absorbed = await stack.trade.cancel_resting_tp(plan)
+        assert absorbed is True, "in-flight TP fill was not absorbed"
+        done = await stack.trade.get_plan(plan.id)
+        assert done.status == "closed"
+        assert done.exit_reason == "tp"
+        assert done.exit_premium == pytest.approx(4.0)
+    finally:
+        filler.cancel()
+
+
+@pytest.mark.asyncio
+async def test_unconfirmed_cancel_raises_instead_of_double_closing(stack):
+    """A cancel that never reaches a terminal verdict must RAISE — returning
+    False would green-light the ladder to stack a second close on top of a
+    possibly-live TP order."""
+    plan = await make_plan(stack.db, broker=stack.broker)
+    order = stack.broker._register(SimpleNamespace(client_order_id=f"{plan.id}-xtp400", qty=1))
+    await stack.trade.fsm.update_fields(plan.id, tp_order_id=order.id)
+    plan = await stack.trade.get_plan(plan.id)
+    stack.broker.async_cancels = True  # order stays "accepted" forever
+    with pytest.raises(RuntimeError):
+        await stack.trade.cancel_resting_tp(plan, confirm_s=0.6)
+    # The field must NOT have been cleared: the TP is still live.
+    assert (await stack.trade.get_plan(plan.id)).tp_order_id == order.id
+
+
+class KeylessAlpaca:
+    """The keyless surface: no keys, no trading client at all."""
+    configured = False
+    settings = None
+
+
+@pytest.mark.asyncio
+async def test_keyless_sl_simulates_fill_instead_of_force_close(stack):
+    """Keyless mode must close a triggered plan with a SIMULATED fill at the
+    mark — not fail every submit and FORCE_CLOSE it with no P&L (the cascade
+    that would fire if the engine ever boots with its .env missing)."""
+    keyless = KeylessAlpaca()
+    from app.services.exit_enforcer import ExitEnforcer  # noqa: PLC0415
+    from app.services.trade_service import TradeService  # noqa: PLC0415
+
+    trade = TradeService(stack.db, keyless, stack.market, stack.trade.risk)
+    enforcer = ExitEnforcer(stack.db, stack.market, trade)
+    enforcer.escalation = [(0.02, 0.05), (0.06, 0.05), (None, 0.0)]
+    enforcer.verify_poll_s = 0.04
+    enforcer.rearm_delay_s = 0.05
+    enforcer.quote_poll_s = 0.05
+    enforcer.quote_poll_near_s = 0.05
+    enforcer.resting_tp = False
+    plan = await make_plan(stack.db)
+    stack.market.quotes[SYM] = {"bid": 0.79, "ask": 0.81, "mid": 0.8}  # <= SL
+    try:
+        await enforcer.arm(plan.id)
+        status = await wait_status(trade, plan.id, deadline=10.0)
+        assert status == "closed", f"keyless plan stuck in {status}"
+        done = await trade.get_plan(plan.id)
+        assert done.exit_reason == "sl", f"expected simulated SL, got {done.exit_reason}"
+        assert done.exit_premium == pytest.approx(0.8, abs=0.05)
+        assert done.realized_pnl == pytest.approx((0.8 - 2.0) * 100, abs=6.0)
+        assert done.exit_order_id and done.exit_order_id.startswith("sim-")
+    finally:
+        await enforcer.shutdown()
 
 
 @pytest.mark.asyncio
