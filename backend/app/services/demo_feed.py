@@ -211,7 +211,17 @@ class DemoFeed:
             if spot <= 0:
                 continue
             tau = trading_hours_to_expiry(occ["expiry"], now_ms) / TRADING_HOURS_PER_YEAR
-            mid = bs_price(spot, occ["strike"], max(tau, 0.0), 0.20, occ["right"])
+            # SAME smile and (undiscounted) pricing as the demo chain — a
+            # different IV here would step-jump the mark the moment a
+            # monitor arms and could fire TP/SL spuriously at arm.
+            days_out = max(
+                0,
+                (datetime.fromisoformat(occ["expiry"]).date()
+                 - datetime.now(timezone.utc).date()).days,
+            )
+            moneyness = math.log(occ["strike"] / spot)
+            iv = 0.18 + 0.35 * moneyness**2 + 0.02 * min(days_out, 3)
+            mid = bs_price(spot, occ["strike"], max(tau, 0.0), iv, occ["right"], r=0.0)
             half = max(0.01, mid * 0.03)
             msg = {
                 "t": "oquote",

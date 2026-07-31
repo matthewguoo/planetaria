@@ -389,6 +389,8 @@ class MarketDataService:
                     gone.append(sym)
                 else:
                     self._option_refs[sym] = count
+        for sym in gone:
+            self._oquote_fetch_ts.pop(sym, None)
         if gone and self.alpaca.configured:
             await self.alpaca.call(self._option_stream.unsubscribe_quotes, *gone)
             for sym in gone:

@@ -281,14 +281,21 @@ class ExitEnforcer:
             await self._force_close_with_capture(plan, "position closed outside the engine")
             return
         # Broker-resting TP truth-sync: a fill that the stream missed must
-        # still close the plan; a dead resting order must re-rest.
+        # still close the plan; a dead resting order must re-rest. (Reachable
+        # only when the plan is still "filled", i.e. no exit ladder holds the
+        # lock — under-ladder callers of _reconcile_plan always see exiting.)
         if plan.status == "filled" and plan.tp_order_id:
-            status = await self.trade.order_status(plan.tp_order_id)
+            observed_tp = plan.tp_order_id
+            status = await self.trade.order_status(observed_tp)
             if status == "filled":
-                await self.trade._absorb_tp_fill(plan.id, plan.tp_order_id)
+                await self.absorb_tp_locked(plan.id, observed_tp)
                 return
             if status in ("canceled", "expired", "rejected"):
-                await self.trade.fsm.update_fields(plan.id, tp_order_id=None)
+                # Pin the clear to the order this verdict is about: a tighten
+                # may have replaced it with a live resting order meanwhile.
+                await self.trade.fsm.update_fields(
+                    plan.id, expect={"tp_order_id": observed_tp}, tp_order_id=None
+                )
         if plan.status == "exiting" and plan.exit_order_id:
             observed_order = plan.exit_order_id
             status = await self.trade.order_status(observed_order)
@@ -389,9 +396,22 @@ class ExitEnforcer:
                 pass
         return False
 
+    async def absorb_tp_locked(self, plan_id: str, order_id: str) -> None:
+        """Absorb a resting-TP fill under the plan's exit lock, so it cannot
+        interleave with a concurrently-triggered exit ladder. The ladder's own
+        takedown path (cancel_resting_tp inside _execute_exit_locked) already
+        holds the lock and absorbs directly."""
+        lock = self._exit_locks.setdefault(plan_id, asyncio.Lock())
+        async with lock:
+            await self.trade._absorb_tp_fill(plan_id, order_id)
+
     async def _position_gone(self, plan: TradePlan) -> bool:
         """True when the broker reports NO remaining position in any of the
         plan's legs. Conservative: any error keeps the plan alive."""
+        if not self.trade.alpaca.configured:
+            # Keyless there is no position truth at all: an empty list here
+            # is ignorance, not evidence — never force-close on it.
+            return False
         try:
             positions = {p["symbol"] for p in await self.trade.broker_positions(max_age_s=0.5)}
         except Exception as exc:
@@ -716,6 +736,7 @@ class ExitEnforcer:
 
             fv_filter = FairValueFilter()
             sl_breach_since: float | None = None
+            last_quote_sig: tuple | None = None
             try:
                 while True:
                     # Liveness heartbeat: reconcile's wedged-monitor watchdog
@@ -791,7 +812,13 @@ class ExitEnforcer:
                     except asyncio.TimeoutError:
                         msg = None
                         try:
-                            await self.market.refresh_option_quotes(symbols)
+                            # Staleness tolerance tracks the adaptive cadence:
+                            # tight (1s) near a threshold or while no-mid,
+                            # relaxed when far — otherwise the 30s default
+                            # throttle defeats the tight re-check loop.
+                            await self.market.refresh_option_quotes(
+                                symbols, max_age_s=min(30.0, max(wait_s, 1.0))
+                            )
                         except Exception as exc:
                             log.warning("quote poll failed for %s: %s", plan_id, exc)
                     if plan.status not in MONITOR_STATUSES:
@@ -840,11 +867,22 @@ class ExitEnforcer:
                     micro, half_spread = stats
                     span = abs(plan.tp_premium - plan.sl_premium) or 1.0
                     # Kalman update: quote trust scales with its spread —
-                    # a wide junk print CANNOT move the trigger price.
-                    fv = fv_filter.on_quote(
-                        micro, half_spread, time.monotonic(),
-                        q_rate=(KF_PROC_FRAC * span) ** 2,
+                    # a wide junk print CANNOT move the trigger price. Only
+                    # NEW quotes count as observations: re-reading the same
+                    # cached snapshot every wake would pile up phantom
+                    # confidence and pin the fair value against theo drift.
+                    quote_sig = tuple(
+                        ((quotes[s] or {}).get("ts"), (quotes[s] or {}).get("mid"))
+                        for s in symbols
                     )
+                    if quote_sig != last_quote_sig or fv_filter.value is None:
+                        last_quote_sig = quote_sig
+                        fv = fv_filter.on_quote(
+                            micro, half_spread, time.monotonic(),
+                            q_rate=(KF_PROC_FRAC * span) ** 2,
+                        )
+                    else:
+                        fv = fv_filter.value
                     quality = half_spread <= SL_QUALITY_HS_FRAC * span
                     # Adaptive cadence: tighten the poll floor near thresholds.
                     dist = min(abs(fv - plan.tp_premium), abs(fv - plan.sl_premium))
@@ -912,11 +950,13 @@ class ExitEnforcer:
             log.exception("monitor crashed for plan %s - REARMING in %.0fs", plan_id, self.rearm_delay_s)
             rearm = True
         finally:
-            # Deregister SELF first; the replacement (if any) is armed after,
-            # so it can't be clobbered by this cleanup.
-            self._monitors.pop(plan_id, None)
-            self.monitor_health.pop(plan_id, None)
-            self.monitor_beat.pop(plan_id, None)
+            # Deregister SELF — and only self: _verify_closed's rearm path
+            # may already have installed a replacement under this key, and
+            # popping blindly would orphan it as an unkillable duplicate.
+            if self._monitors.get(plan_id) is asyncio.current_task():
+                self._monitors.pop(plan_id, None)
+                self.monitor_health.pop(plan_id, None)
+                self.monitor_beat.pop(plan_id, None)
         if rearm:
             await asyncio.sleep(self.rearm_delay_s)
             await self.arm(plan_id)
@@ -1102,9 +1142,15 @@ class ExitEnforcer:
             fields["time_stop_utc"] = time_stop_utc
         if not fields:
             raise ValueError("nothing to change")
-        if "tp_premium" in fields and plan.tp_order_id:
-            # Replace the broker-resting TP: cancel here, the monitor re-rests
-            # at the new level (deterministic key per level).
-            if await self.trade.cancel_resting_tp(plan):
-                raise ValueError("take-profit just filled at the broker")
-        return await self.trade._update_plan(plan_id, **fields)
+        lock = self._exit_locks.setdefault(plan_id, asyncio.Lock())
+        if lock.locked():
+            raise ValueError("exit in progress - cannot change exits now")
+        async with lock:
+            # Commit the new levels FIRST, then take the old resting TP down:
+            # the cancel's own broadcast wakes the monitor, and it must
+            # re-rest against the NEW tp_premium, not the old one.
+            updated = await self.trade._update_plan(plan_id, **fields)
+            if "tp_premium" in fields and plan.tp_order_id:
+                if await self.trade.cancel_resting_tp(plan):
+                    raise ValueError("take-profit just filled at the broker")
+            return updated

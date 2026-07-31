@@ -209,11 +209,11 @@ function ExitQualityPanel({ closed }: { closed: Plan[] | null }) {
             {worstSl ? `${(worstSl.slipPct * 100).toFixed(1)}% (${worstSl.t.underlying})` : "—"}
           </span>
         </div>
-        <div className="flex flex-col gap-0.5 p-2" title="TP fills at-or-better than the line (resting limit)">
+        <div className="flex flex-col gap-0.5 p-2" title="TP fills vs the line (resting limits fill at-or-better; software-triggered TPs can fill through)">
           <span className="text-[9px] tracking-wider text-bb-muted">TP EXITS · AVG BETTER</span>
           <span data-numeric className="text-[12px] text-bb-profit">
             {tpRows.length
-              ? `${tpRows.length} · +${(avg(tpRows.map((r) => r.improvePct)) * 100).toFixed(1)}%`
+              ? `${tpRows.length} · ${((v) => `${v >= 0 ? "+" : ""}${(v * 100).toFixed(1)}%`)(avg(tpRows.map((r) => r.improvePct)))}`
               : "—"}
           </span>
         </div>

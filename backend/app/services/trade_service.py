@@ -9,7 +9,9 @@ Discipline invariants enforced here, not in the UI:
 
 import asyncio
 import logging
+import time
 from datetime import datetime, timezone
+from uuid import uuid4
 
 from alpaca.trading.enums import OrderClass, OrderSide, PositionIntent, TimeInForce
 from alpaca.trading.requests import (
@@ -550,9 +552,17 @@ class TradeService:
             # clears the field so the monitor re-rests it.
             if plan.tp_order_id == order_id and plan.entry_order_id != order_id:
                 if event == "fill":
-                    await self._absorb_tp_fill(plan.id, order_id)
+                    # Serialize against the exit ladder: an absorb interleaving
+                    # a concurrently-triggered ladder would lose the fill (the
+                    # ladder overwrites exit_order_id and the guard drops it).
+                    if self.enforcer:
+                        await self.enforcer.absorb_tp_locked(plan.id, order_id)
+                    else:
+                        await self._absorb_tp_fill(plan.id, order_id)
                 elif event in ("canceled", "expired", "rejected"):
-                    await self.fsm.update_fields(plan.id, tp_order_id=None)
+                    await self.fsm.update_fields(
+                        plan.id, expect={"tp_order_id": order_id}, tp_order_id=None
+                    )
                 return
             is_entry = plan.entry_order_id == order_id
             raw_avg = float(order.filled_avg_price) if order.filled_avg_price else None
@@ -681,6 +691,14 @@ class TradeService:
         (r0/r1/mkt/v3...) so each rung's submit is idempotent: an ambiguous
         failure recovers the SAME order rather than stacking a second close.
         """
+        if not self.alpaca.configured:
+            # Keyless: there is no broker to route to. Simulate the fill at
+            # the current mark so paper plans still complete their lifecycle
+            # — the alternative is every submit failing until the verify loop
+            # mistakes the (unreachable) empty position list for a vanished
+            # position and FORCE_CLOSEs the plan with no P&L recorded.
+            await self._simulate_exit_fill(plan, reason, limit_price)
+            return
         client_order_id = f"{plan.id}-x{attempt_key}"
         request = self._close_request(plan, limit_price, client_order_id)
         # Snapshot the book NOW (before the submit): each escalation rung
@@ -698,6 +716,35 @@ class TradeService:
             exit_reason=reason,
             **fields,
         )
+
+    async def _simulate_exit_fill(self, plan: TradePlan, reason: str,
+                                  limit_price: float | None) -> None:
+        """Keyless close: fill at the live position mid (fallback: the
+        ladder's limit, then the triggered level) through the normal FSM
+        path, so journal/history/slippage all read like a real exit."""
+        quotes = {leg["symbol"]: self.market.latest_quote(leg["symbol"]) for leg in plan.legs}
+        mid = position_mid_from_quotes(plan.legs, quotes)
+        if mid is None:
+            mid = limit_price
+        if mid is None:
+            mid = plan.sl_premium if reason == "sl" else plan.tp_premium
+        order_id = f"sim-{uuid4().hex[:10]}"
+        await self.fsm.apply(
+            plan.id, PlanEvent.EXIT_SUBMITTED,
+            exit_order_id=order_id, exit_reason=reason, tp_order_id=None,
+        )
+        realized = None
+        if plan.fill_premium is not None:
+            realized = round((mid - plan.fill_premium) * 100 * plan.effective_qty, 2)
+        result = await self.fsm.apply(
+            plan.id, PlanEvent.EXIT_FILLED,
+            guard={"exit_order_id": order_id},
+            exit_premium=round(mid, 4), realized_pnl=realized,
+        )
+        if result.applied:
+            log.info("keyless simulated %s exit for plan %s @ %.2f", reason, plan.id, mid)
+            if self.enforcer:
+                self.enforcer.disarm(plan.id)
 
     # ------------------------------------------------- broker-resting TP
 
@@ -724,27 +771,46 @@ class TradeService:
                     raise
         raise last_exc  # every suffix burned (should not happen in practice)
 
-    async def cancel_resting_tp(self, plan: TradePlan) -> bool:
-        """Cancel the broker-resting TP before any other close. Returns True
-        when the TP turned out to be FILLED (position already closed — the
-        caller must NOT submit another close on top)."""
+    async def cancel_resting_tp(self, plan: TradePlan, confirm_s: float = 5.0) -> bool:
+        """Take down the broker-resting TP before any other close goes up.
+        Returns True when the TP turned out to be FILLED (position already
+        closed — the caller must NOT submit another close on top).
+
+        Broker cancels are ASYNCHRONOUS: a clean cancel call means
+        pending_cancel, not dead — the order can still fill in flight. So a
+        returned False is only ever based on an observed TERMINAL status;
+        anything less raises, because proceeding blind is the double-close.
+        """
         if not plan.tp_order_id:
             return False
         order_id = plan.tp_order_id
         try:
             await self.cancel_order(order_id)
-        except Exception:
-            # Cancel can lose the race to a fill — check before assuming.
+        except Exception as exc:
+            # Cancel can lose the race to a fill (or just fail) — the status
+            # poll below is the arbiter either way.
+            log.warning("resting TP cancel errored for %s: %s", plan.id, exc)
+        deadline = time.monotonic() + confirm_s
+        while True:
             try:
                 status = await self.order_status(order_id)
             except Exception as exc:
-                log.warning("resting TP cancel+status failed for %s: %s", plan.id, exc)
-                return False
+                log.warning("resting TP status poll failed for %s: %s", plan.id, exc)
+                status = ""
             if status == "filled":
                 await self._absorb_tp_fill(plan.id, order_id)
                 return True
-        await self.fsm.update_fields(plan.id, tp_order_id=None)
-        return False
+            if status in ("canceled", "expired", "rejected"):
+                await self.fsm.update_fields(
+                    plan.id, expect={"tp_order_id": order_id}, tp_order_id=None
+                )
+                return False
+            if time.monotonic() >= deadline:
+                raise RuntimeError(
+                    f"resting TP cancel unconfirmed for plan {plan.id} "
+                    f"(order {order_id} status {status or 'unknown'})"
+                )
+            await asyncio.sleep(0.25)
 
     async def _absorb_tp_fill(self, plan_id: str, order_id: str) -> None:
         """A resting TP filled at the broker: close the plan from REST truth
