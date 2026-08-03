@@ -320,11 +320,7 @@ class ExitEnforcer:
                 )
                 raw = float(order.filled_avg_price or 0) or None
                 avg = self.trade._fill_value(plan, raw, is_entry=False)
-                realized = None
-                if avg is not None and plan.fill_premium is not None:
-                    realized = round(
-                        (avg - plan.fill_premium) * 100 * plan.effective_qty, 2
-                    )
+                realized = plan.pnl_at(avg)
                 eq = self.trade._quality_on_fill(plan, "exit", avg)
                 await self.trade.fsm.apply(
                     plan.id, PlanEvent.EXIT_FILLED,
@@ -609,15 +605,12 @@ class ExitEnforcer:
         premium, sets_closed, exited_at, events, detail = (
             await self._capture_external_exit(plan)
         )
-        realized = None
-        if premium is not None and plan.fill_premium is not None:
-            qty = sets_closed if sets_closed else plan.effective_qty
-            realized = round((premium - plan.fill_premium) * 100 * qty, 2)
-            if sets_closed and sets_closed < plan.effective_qty:
-                detail += (
-                    f"; only {sets_closed}/{plan.effective_qty} sets found in history"
-                    " - P/L covers the captured sets only"
-                )
+        realized = plan.pnl_at(premium, sets_closed or None)
+        if realized is not None and sets_closed and sets_closed < plan.effective_qty:
+            detail += (
+                f"; only {sets_closed}/{plan.effective_qty} sets found in history"
+                " - P/L covers the captured sets only"
+            )
         await self.trade.fsm.apply(
             plan.id, PlanEvent.FORCE_CLOSED,
             exit_premium=premium,
@@ -636,9 +629,7 @@ class ExitEnforcer:
         backfilled from broker order history. Runs once per startup."""
         from datetime import timedelta
 
-        from sqlalchemy import select
-
-        from sqlalchemy import and_, or_
+        from sqlalchemy import and_, or_, select
 
         cutoff = datetime.now(timezone.utc) - timedelta(days=max_age_days)
         async with self.db.session() as session:
@@ -669,12 +660,7 @@ class ExitEnforcer:
                 if premium is None:
                     log.warning("blank-exit repair: nothing recoverable for %s", plan.id)
                     continue
-                qty = sets_closed if sets_closed else plan.effective_qty
-                realized = (
-                    round((premium - plan.fill_premium) * 100 * qty, 2)
-                    if plan.fill_premium is not None
-                    else None
-                )
+                realized = plan.pnl_at(premium, sets_closed or None)
                 already_noted = "exit backfilled from broker history" in (plan.notes or "")
                 await self.trade.fsm.update_fields(
                     plan.id,

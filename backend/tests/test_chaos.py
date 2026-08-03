@@ -660,8 +660,6 @@ async def test_async_cancel_race_absorbs_in_flight_tp_fill(stack):
     let a second close go up."""
     plan = await make_plan(stack.db, broker=stack.broker)
     order = stack.broker._register(SimpleNamespace(client_order_id=f"{plan.id}-xtp400", qty=1))
-    from app.services.plan_fsm import PlanEvent  # noqa: PLC0415
-
     await stack.trade.fsm.update_fields(plan.id, tp_order_id=order.id)
     plan = await stack.trade.get_plan(plan.id)
     stack.broker.async_cancels = True

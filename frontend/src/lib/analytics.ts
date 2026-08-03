@@ -1,7 +1,7 @@
 /**
  * Client-side analytics assembled from the math mirror — instant feedback for
- * panels while dragging. Server (/api/analytics/*, order validation) stays
- * authoritative at order time. Mirrors backend/app/services/analytics.py.
+ * panels while dragging. These numbers are display-only; the server's risk
+ * validation (app/services/risk.py) stays authoritative at order time.
  */
 
 import {
@@ -15,21 +15,16 @@ import {
   probAboveAtExpiry,
   probTouch,
   structuralMaxLoss,
-  terminalEv,
   TRADING_HOURS_PER_YEAR,
   type Leg,
 } from "./optionsMath";
 
 export type ClientProbabilities = {
   pProfitExpiry: number;
-  breakevens: number[];
   pTouchTp: number | null;
   pTouchSl: number | null;
   tpBarrier: number | null;
   slBarrier: number | null;
-  evPerContract: number;
-  rewardPerContract: number | null;
-  riskPerContract: number | null;
   rr: number | null;
   sigmaUsed: number;
 };
@@ -73,20 +68,15 @@ export function computeProbabilitiesClient(
     if (slBarrier !== null) pSl = probTouch(spot, slBarrier, tau, sigma);
   }
 
-  const ev = terminalEv(legs, spot, tau, sigma, tpPremium, slPremium) * 100;
   const reward = tpPremium !== null ? (tpPremium - entry) * 100 : null;
   const risk = slPremium !== null ? (entry - slPremium) * 100 : null;
 
   return {
     pProfitExpiry: pProfit,
-    breakevens: bes.map((b) => Math.round(b * 100) / 100),
     pTouchTp: pTp,
     pTouchSl: pSl,
     tpBarrier,
     slBarrier,
-    evPerContract: ev,
-    rewardPerContract: reward,
-    riskPerContract: risk,
     rr: reward !== null && risk !== null && risk > 0 ? reward / risk : null,
     sigmaUsed: sigma,
   };
@@ -97,7 +87,6 @@ export type ClientSizing = {
   entryCost: number;
   maxLossAtStop: number;
   maxLossStructural: number;
-  buyingPowerPct: number;
   perContractRisk: number;
   /** What the stop-risk budget ALONE would allow — when BP binds below this,
    * the gap is the price of undefined risk (naked short margin). */
@@ -116,7 +105,7 @@ export function computeSizingClient(
   const reasons: string[] = [];
   const entry = positionEntryCost(legs); // +debit / -credit, per share
   const empty = { contracts: 0, entryCost: 0, maxLossAtStop: 0, maxLossStructural: 0,
-                  buyingPowerPct: 0, perContractRisk: 0, riskBudgetContracts: 0 };
+                  perContractRisk: 0, riskBudgetContracts: 0 };
   if (Math.abs(entry) < 0.01) {
     return { ...empty, reasons: ["net premium is zero - nothing to size"] };
   }
@@ -164,7 +153,6 @@ export function computeSizingClient(
     entryCost: contracts * perSetCost,
     maxLossAtStop: contracts * perSetRisk,
     maxLossStructural: contracts * perSetStructural,
-    buyingPowerPct: accountEquity ? (contracts * perSetCost) / accountEquity : 0,
     perContractRisk: perSetRisk,
     riskBudgetContracts,
     reasons,

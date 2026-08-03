@@ -19,6 +19,7 @@ import type { Designer } from "../../lib/useDesigner";
 import {
   availableStrikes,
   findContract,
+  nearestStrike,
   useStrategyStore,
 } from "../../store/strategyStore";
 import { useUiStore } from "../../store/uiStore";
@@ -119,10 +120,7 @@ export function LegRail({ designer }: { designer: Designer }) {
       const price = railYToPrice(Math.max(0, Math.min(y, s.volTopPx)), s);
       const snaps = availableStrikes(chain, expiry);
       if (!snaps.length) return;
-      const snapped = snaps.reduce(
-        (best, k) => (Math.abs(k - price) < Math.abs(best - price) ? k : best),
-        snaps[0],
-      );
+      const snapped = nearestStrike(snaps, price);
       if (snapped !== strikes[i]) setStrike(i, snapped);
     },
     [dragging, chain, expiry, strikes, setStrike],

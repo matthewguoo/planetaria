@@ -92,10 +92,7 @@ async def positions(request: Request) -> dict:
         row = plan.to_dict()
         row["mark"] = round(mid, 4) if mid is not None else None
         row["quote_stale"] = mid is None
-        if mid is not None and plan.fill_premium:
-            row["unrealized_pnl"] = round((mid - plan.fill_premium) * 100 * plan.effective_qty, 2)
-        else:
-            row["unrealized_pnl"] = None
+        row["unrealized_pnl"] = plan.pnl_at(mid)
         out.append(row)
 
     # Live broker positions with no managing plan — surfaced so nothing in

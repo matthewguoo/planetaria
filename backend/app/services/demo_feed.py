@@ -28,6 +28,15 @@ YAHOO_HEADERS = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) planetaria/1.0"}
 POLL_INTERVAL_S = 5.0
 
 
+def demo_smile_iv(strike: float, spot: float, days_out: int) -> float:
+    """Synthetic IV smile — the ONE definition shared by the demo chain and
+    the demo option-quote feed. They must price identically: a different IV
+    in either place step-jumps the mark the moment a monitor arms and could
+    fire TP/SL spuriously."""
+    moneyness = math.log(strike / spot)
+    return 0.18 + 0.35 * moneyness**2 + 0.02 * min(max(days_out, 0), 3)
+
+
 def parse_yahoo_chart(payload: dict) -> tuple[list[dict], float | None]:
     """Pure parser for Yahoo v8 chart JSON -> (1m bars, last price).
 
@@ -126,9 +135,6 @@ class DemoFeed:
         # lock prevents double history fetch / duplicate poll tasks.
         self._ensure_lock = asyncio.Lock()
 
-    def active_for(self, symbol: str) -> bool:
-        return symbol in self._tasks
-
     @property
     def sources(self) -> dict[str, str]:
         return dict(self._sources)
@@ -214,13 +220,9 @@ class DemoFeed:
             # SAME smile and (undiscounted) pricing as the demo chain — a
             # different IV here would step-jump the mark the moment a
             # monitor arms and could fire TP/SL spuriously at arm.
-            days_out = max(
-                0,
-                (datetime.fromisoformat(occ["expiry"]).date()
-                 - datetime.now(timezone.utc).date()).days,
-            )
-            moneyness = math.log(occ["strike"] / spot)
-            iv = 0.18 + 0.35 * moneyness**2 + 0.02 * min(days_out, 3)
+            days_out = (datetime.fromisoformat(occ["expiry"]).date()
+                        - datetime.now(timezone.utc).date()).days
+            iv = demo_smile_iv(occ["strike"], spot, days_out)
             mid = bs_price(spot, occ["strike"], max(tau, 0.0), iv, occ["right"], r=0.0)
             half = max(0.01, mid * 0.03)
             msg = {

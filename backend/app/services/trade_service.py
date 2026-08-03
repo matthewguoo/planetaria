@@ -20,7 +20,7 @@ from alpaca.trading.requests import (
     OptionLegRequest,
 )
 
-from app.models.trade import OPEN_STATUSES, TradePlan, as_utc, utcnow
+from app.models.trade import TradePlan, as_utc, utcnow
 from app.services.alpaca import AlpacaService
 from app.services.plan_fsm import (
     TERMINAL_STATES,
@@ -118,9 +118,7 @@ class TradeService:
     # ------------------------------------------------------------- account
 
     async def get_account(self) -> dict:
-        import time as _time
-
-        if self._account_cache and _time.monotonic() - self._account_cache[0] < 10:
+        if self._account_cache and time.monotonic() - self._account_cache[0] < 10:
             return self._account_cache[1]
         if not self.alpaca.configured:
             return {"equity": 0.0, "cash": 0.0, "buying_power": 0.0,
@@ -134,7 +132,7 @@ class TradeService:
             "status": str(acct.status.value if hasattr(acct.status, "value") else acct.status),
             "paper": True,
         }
-        self._account_cache = (_time.monotonic(), out)
+        self._account_cache = (time.monotonic(), out)
         return out
 
     # ---------------------------------------------------- broker positions
@@ -143,9 +141,7 @@ class TradeService:
         """Live positions straight from the Alpaca account, normalized.
         These are the ground truth; TradePlans are our management layer on
         top. Cached briefly to keep the positions poll off the rate budget."""
-        import time as _time
-
-        if self._positions_cache and _time.monotonic() - self._positions_cache[0] < max_age_s:
+        if self._positions_cache and time.monotonic() - self._positions_cache[0] < max_age_s:
             return self._positions_cache[1]
         if not self.alpaca.configured:
             return []
@@ -585,9 +581,7 @@ class TradeService:
                 if (eq := self._quality_on_fill(plan, "entry", avg)) is not None:
                     fields["exec_quality"] = eq
             elif event == "fill":
-                realized = None
-                if avg is not None and plan.fill_premium is not None:
-                    realized = round((avg - plan.fill_premium) * 100 * plan.effective_qty, 2)
+                realized = plan.pnl_at(avg)
                 fsm_event = PlanEvent.EXIT_FILLED
                 fields = {
                     "exit_premium": avg,
@@ -733,9 +727,7 @@ class TradeService:
             plan.id, PlanEvent.EXIT_SUBMITTED,
             exit_order_id=order_id, exit_reason=reason, tp_order_id=None,
         )
-        realized = None
-        if plan.fill_premium is not None:
-            realized = round((mid - plan.fill_premium) * 100 * plan.effective_qty, 2)
+        realized = plan.pnl_at(mid)
         result = await self.fsm.apply(
             plan.id, PlanEvent.EXIT_FILLED,
             guard={"exit_order_id": order_id},
@@ -826,9 +818,7 @@ class TradeService:
             plan_id, PlanEvent.EXIT_SUBMITTED,
             exit_order_id=order_id, exit_reason="tp", tp_order_id=None,
         )
-        realized = None
-        if avg is not None and plan.fill_premium is not None:
-            realized = round((avg - plan.fill_premium) * 100 * plan.effective_qty, 2)
+        realized = plan.pnl_at(avg)
         result = await self.fsm.apply(
             plan_id, PlanEvent.EXIT_FILLED,
             guard={"exit_order_id": order_id},

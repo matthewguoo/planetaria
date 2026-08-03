@@ -9,7 +9,6 @@ import {
 
 type AccountState = {
   account: Account | null;
-  accountError: string | null;
   positions: Plan[];
   untracked: UntrackedPosition[];
   refreshAccount: () => Promise<void>;
@@ -19,15 +18,14 @@ type AccountState = {
 
 export const useAccountStore = create<AccountState>((set) => ({
   account: null,
-  accountError: null,
   positions: [],
   untracked: [],
 
   refreshAccount: async () => {
     try {
-      set({ account: await getAccount(), accountError: null });
-    } catch (err) {
-      set({ accountError: String((err as Error).message ?? err) });
+      set({ account: await getAccount() });
+    } catch {
+      // transient; keep last known
     }
   },
 

@@ -6,7 +6,7 @@ instant drag feedback, this module gives the authoritative numbers.
 from __future__ import annotations
 
 import math
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 
 from app.services.options_math import (
     RISK_FREE,
@@ -16,7 +16,6 @@ from app.services.options_math import (
     payoff_at_expiry,
     position_entry_cost,
     position_pl,
-    position_value,
     premium_barrier_underlying,
     prob_above_at_expiry,
     prob_touch,

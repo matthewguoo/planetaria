@@ -65,9 +65,6 @@ class BarStore:
     def _series(self, symbol: str, tf: str) -> dict[int, Bar]:
         return self._bars.setdefault(symbol, {}).setdefault(tf, {})
 
-    def symbols(self) -> list[str]:
-        return list(self._bars.keys())
-
     def get_bars(self, symbol: str, tf: str, limit: int = 1000) -> list[Bar]:
         series = self._series(symbol, tf)
         keys = sorted(series.keys())[-limit:]
@@ -106,6 +103,10 @@ class BarStore:
         await self._redis.save_bars(
             symbol, "1m", {str(b["t"]): json.dumps(b) for b in ordered}
         )
+        # Retention for the persisted copy: the in-memory trim above drops
+        # bars past max_1m, but Redis hash fields would otherwise accumulate
+        # forever. Backfill cadence keeps the hkeys scan off the hot path.
+        await self._redis.trim_bars(symbol, "1m", [str(b["t"]) for b in ordered])
 
     # ------------------------------------------------------------------- hot
 

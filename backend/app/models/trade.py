@@ -94,6 +94,17 @@ class TradePlan(Base):
         """Contract sets actually held (partial fills); falls back to plan qty."""
         return self.filled_qty if self.filled_qty else self.qty
 
+    def pnl_at(self, premium: float | None, qty: int | None = None) -> float | None:
+        """Signed P/L dollars marking `qty` sets (default: all held) at
+        `premium` against the actual entry fill; None when either side of
+        the round trip is unknown. THE realized/unrealized P/L formula —
+        every P/L number in the system comes from here."""
+        if premium is None or self.fill_premium is None:
+            return None
+        if qty is None:
+            qty = self.effective_qty
+        return round((premium - self.fill_premium) * 100 * qty, 2)
+
     def to_dict(self) -> dict:
         return {
             "id": self.id,

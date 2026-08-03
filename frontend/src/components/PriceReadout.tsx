@@ -9,15 +9,7 @@
 import { useEffect, useState } from "react";
 import { freshSpot, quoteIsStale, useTradingStore } from "../store/tradingStore";
 import { useStrategyStore } from "../store/strategyStore";
-
-function fmtEt(ms: number): string {
-  return new Intl.DateTimeFormat("en-US", {
-    timeZone: "America/New_York",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  }).format(new Date(ms));
-}
+import { fmtTimeET as fmtEt } from "./Chart/scales";
 
 /** US equity session phase in ET. Extended hours are 04:00–09:30 (PRE) and
  * 16:00–20:00 (AH). 20:00–04:00 is the OVERNIGHT session (Blue Ocean ATS,

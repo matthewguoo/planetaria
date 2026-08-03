@@ -79,10 +79,3 @@ class RedisFacade:
         if stale:
             await self._guard(lambda: self._client.hdel(key, *stale))
 
-    # --- generic short-TTL JSON cache (quotes, chains) ----------------------
-
-    async def set_json(self, key: str, value: str, ttl_seconds: int) -> None:
-        await self._guard(lambda: self._client.set(key, value, ex=ttl_seconds))
-
-    async def get_json(self, key: str) -> str | None:
-        return await self._guard(lambda: self._client.get(key))

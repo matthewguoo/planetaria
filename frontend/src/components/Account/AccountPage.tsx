@@ -21,17 +21,10 @@ import {
   type Plan,
   type PortfolioHistory,
 } from "../../lib/api";
+import { fmtUsd, pnlCls } from "../../lib/format";
 import { useAccountStore } from "../../store/accountStore";
 import { useTradingStore } from "../../store/tradingStore";
 import { useUiStore } from "../../store/uiStore";
-
-const fmtUsd = (v: number | null | undefined, sign = false) =>
-  v === null || v === undefined
-    ? "—"
-    : `${sign && v > 0 ? "+" : ""}${v < 0 ? "-" : ""}$${Math.abs(v).toLocaleString("en-US", { maximumFractionDigits: 0 })}`;
-
-const pnlCls = (v: number | null | undefined) =>
-  v === null || v === undefined ? "text-bb-muted" : v >= 0 ? "text-bb-profit" : "text-bb-loss";
 
 function StatCard({ label, value, cls }: { label: string; value: string; cls?: string }) {
   return (

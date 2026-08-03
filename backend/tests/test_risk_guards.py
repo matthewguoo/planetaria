@@ -1,7 +1,6 @@
 """MFT risk guards: stale data, illiquid spreads, PDT, overtrading breaker,
 and the duplicate-order guard."""
 
-import json
 import uuid
 from datetime import datetime, timedelta, timezone
 

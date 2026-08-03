@@ -55,9 +55,7 @@ export type McResult = {
   pExpiry: number;
   avgMinutesInTrade: number;
   p5: number;
-  p25: number;
   p50: number;
-  p75: number;
   p95: number;
 };
 
@@ -179,9 +177,7 @@ export function simulateExits(p: McParams): McResult {
     pExpiry: nExpiry / p.paths,
     avgMinutesInTrade: sumMinutes / p.paths,
     p5: q(0.05),
-    p25: q(0.25),
     p50: q(0.5),
-    p75: q(0.75),
     p95: q(0.95),
   };
 }

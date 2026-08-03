@@ -263,14 +263,6 @@ export const STRATEGIES = {
 
 export type StrategyKind = keyof typeof STRATEGIES;
 
-export const STRATEGY_LABELS: Record<StrategyKind, string> = Object.fromEntries(
-  Object.entries(STRATEGIES).map(([k, def]) => [k, def.label]),
-) as Record<StrategyKind, string>;
-
-export function strategyDef(kind: StrategyKind): StrategyDef {
-  return STRATEGIES[kind];
-}
-
 /** Broker placability class of a preset (from its template, spot-independent):
  *  "blocked" — leaves uncovered short CALLS; unplaceable at Alpaca L3
  *              (verified: "account not eligible to trade uncovered options").
@@ -352,7 +344,7 @@ type StrategyState = {
   applyThetaTemplate: (id: ThetaTemplateId) => boolean;
 };
 
-function nearestStrike(strikes: number[], target: number): number {
+export function nearestStrike(strikes: number[], target: number): number {
   return strikes.reduce((best, s) => (Math.abs(s - target) < Math.abs(best - target) ? s : best), strikes[0]);
 }
 

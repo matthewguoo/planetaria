@@ -24,6 +24,7 @@ import time
 import httpx
 
 from app.models.trade import TradePlan
+from app.services.demo_feed import YAHOO_CHART_URL, YAHOO_HEADERS
 from app.services.options_math import (
     TRADING_HOURS_PER_YEAR,
     bs_greeks,
@@ -32,8 +33,6 @@ from app.services.options_math import (
 
 log = logging.getLogger("app.prisk")
 
-YAHOO_CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
-YAHOO_HEADERS = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) planetaria/1.0"}
 HIST_TTL_S = 900.0
 SNAPSHOT_TTL_S = 20.0
 RATE_SYMBOL = "^TNX"  # CBOE 10y treasury yield index

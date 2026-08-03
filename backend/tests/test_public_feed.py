@@ -1,7 +1,5 @@
 """Keyless fallback feed: Yahoo chart parsing + public/synthetic selection."""
 
-import asyncio
-
 import pytest
 
 from app.services.demo_feed import DemoFeed, parse_yahoo_chart, synth_history

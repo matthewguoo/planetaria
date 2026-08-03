@@ -396,12 +396,7 @@ export function breakevensForBasis(
 }
 
 export function payoffAtExpiry(legs: Leg[], S: number): number {
-  let total = 0;
-  for (const leg of legs) {
-    const intrinsic = Math.max(leg.right === "C" ? S - leg.strike : leg.strike - S, 0);
-    total += leg.side * leg.qty * intrinsic;
-  }
-  return total - positionEntryCost(legs);
+  return intrinsicValue(legs, S) - positionEntryCost(legs);
 }
 
 /**
@@ -483,33 +478,9 @@ export function bpPerSetEstimate(legs: Leg[], spot: number): number {
 }
 
 export function breakevens(legs: Leg[], lo: number, hi: number, steps = 2000): number[] {
-  const out: number[] = [];
-  let prevS = lo;
-  let prevV = payoffAtExpiry(legs, lo);
-  for (let i = 1; i <= steps; i++) {
-    const s = lo + ((hi - lo) * i) / steps;
-    const v = payoffAtExpiry(legs, s);
-    if (prevV === 0) out.push(prevS);
-    else if (prevV < 0 !== v < 0) {
-      let a = prevS;
-      let b = s;
-      for (let j = 0; j < 60; j++) {
-        const m = 0.5 * (a + b);
-        if (payoffAtExpiry(legs, m) < 0 === prevV < 0) a = m;
-        else b = m;
-      }
-      out.push(0.5 * (a + b));
-    }
-    prevS = s;
-    prevV = v;
-  }
-  const dedup: number[] = [];
-  for (const be of out) {
-    if (!dedup.length || Math.abs(be - dedup[dedup.length - 1]) > 0.01) {
-      dedup.push(Math.round(be * 10000) / 10000);
-    }
-  }
-  return dedup;
+  // payoffAtExpiry(legs, s) === intrinsicValue(legs, s) − entry cost, so the
+  // quoted-mid breakevens are the basis breakevens at the legs' own cost.
+  return breakevensForBasis(legs, positionEntryCost(legs), lo, hi, steps);
 }
 
 export function probItm(

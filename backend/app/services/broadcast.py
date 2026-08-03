@@ -26,9 +26,6 @@ class Broadcaster:
         if not self._topics[topic]:
             del self._topics[topic]
 
-    def subscriber_count(self, topic: str) -> int:
-        return len(self._topics.get(topic, ()))
-
     def publish(self, topic: str, message: dict) -> None:
         for queue in self._topics.get(topic, ()):
             try:

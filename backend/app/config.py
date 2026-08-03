@@ -35,12 +35,6 @@ class Settings(BaseSettings):
     # point any UI at it — or at a separate UI-serving instance.
     headless: bool = False
 
-    # Risk defaults; live values persisted in app_settings table.
-    default_max_loss_pct: float = 0.02
-    default_daily_loss_pct: float = 0.06
-    default_stop_loss_pct: float = 0.50
-    default_take_profit_pct: float = 1.00
-
     # Bar cache retention: 10 trading days of 1-minute bars per symbol.
     bar_cache_days: int = 10
 

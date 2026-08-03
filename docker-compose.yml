@@ -1,4 +1,5 @@
-# Full containerized stack (parity with prod). For day-to-day dev use dev.ps1 (hybrid).
+# Containerized backend + infra. For day-to-day dev use dev.ps1 (hybrid);
+# serve the UI with `npm run dev`/`npm run phone` against this backend.
 services:
   backend:
     build: ./backend
@@ -18,16 +19,6 @@ services:
       redis:
         condition: service_healthy
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000
-
-  frontend:
-    build: ./frontend
-    ports:
-      - "5173:5173"
-    environment:
-      VITE_API_URL: http://localhost:8000
-      VITE_WS_URL: ws://localhost:8000
-    depends_on:
-      - backend
 
   db:
     image: postgres:16-alpine

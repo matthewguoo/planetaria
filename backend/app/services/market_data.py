@@ -10,9 +10,7 @@ Topics published:
 """
 
 import asyncio
-import json
 import logging
-import random
 import time
 from datetime import datetime, timedelta, timezone
 
@@ -579,7 +577,6 @@ class MarketDataService:
                               getattr(quote, "ask_size", None))
         self._latest_quotes[quote.symbol] = msg
         self.broadcast.publish(f"quote:{quote.symbol}", msg)
-        await self.redis.set_json(f"quote:{quote.symbol}", json.dumps(msg), ttl_seconds=60)
 
     async def _on_option_quote(self, quote) -> None:
         self._last_stream_msg = time.monotonic()

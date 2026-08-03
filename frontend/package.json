@@ -13,20 +13,16 @@
   },
   "dependencies": {
     "@perspective-dev/client": "5.0.0",
-    "@perspective-dev/react": "5.0.0",
+    "@perspective-dev/server": "5.0.0",
     "@perspective-dev/viewer": "5.0.0",
     "@perspective-dev/viewer-charts": "5.0.0",
     "@perspective-dev/viewer-datagrid": "5.0.0",
     "axios": "^1.7.0",
-    "d3-array": "^3.2.4",
-    "d3-scale": "^4.0.2",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "zustand": "^5.0.0"
   },
   "devDependencies": {
-    "@types/d3-array": "^3.2.1",
-    "@types/d3-scale": "^4.0.8",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^4.5.0",

@@ -14,6 +14,7 @@ import {
   type PlanEvent,
   type SystemState,
 } from "../../lib/api";
+import { pct, usd } from "../../lib/format";
 import { computeAtr, realizedVolAnnualized } from "../../lib/indicators";
 import { buildPositionView, computeExcursions } from "../../lib/positionView";
 import type { McResult } from "../../lib/mcSim";
@@ -34,9 +35,6 @@ const TOGGLES = [
   { key: "ema", label: "EMA", title: "EMA 9 / 21" },
   { key: "bb", label: "BB", title: "Bollinger 20 × 2σ" },
 ] as const;
-
-const pct = (v: number | null) => (v === null ? "—" : `${(v * 100).toFixed(0)}%`);
-const usd = (v: number) => `${v >= 0 ? "+" : "-"}$${Math.abs(v).toFixed(0)}`;
 
 function StatRow({ label, value, cls }: { label: string; value: string; cls?: string }) {
   return (

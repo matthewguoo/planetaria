@@ -34,7 +34,9 @@ import {
   availableStrikes,
   buildLegs,
   hoursToExpiry as calcHoursToExpiry,
+  nearestStrike,
   smileFromChain,
+  timeStopHoursFromEt,
   useStrategyStore,
 } from "../../store/strategyStore";
 import {
@@ -352,16 +354,7 @@ export function CandlePane({
     const hte = calcHoursToExpiry(expiry);
     const entry = legs ? positionEntryCost(legs) : 0;
     // Time stop: today at HH:MM ET, in trading hours from now.
-    const nowEt = new Intl.DateTimeFormat("en-US", {
-      timeZone: "America/New_York",
-      hour: "2-digit",
-      minute: "2-digit",
-      hour12: false,
-    }).formatToParts(new Date());
-    const parts = Object.fromEntries(nowEt.map((p) => [p.type, p.value]));
-    const nowMin = Number(parts.hour === "24" ? 0 : parts.hour) * 60 + Number(parts.minute);
-    const [tsH, tsM] = timeStopEt.split(":").map(Number);
-    const timeStopHours = Math.max(0, Math.min((tsH * 60 + tsM - nowMin) / 60, 6.5));
+    const timeStopHours = timeStopHoursFromEt(timeStopEt);
     const priced = legs !== null && Math.abs(entry) >= 0.01;
     return {
       legs,
@@ -455,15 +448,12 @@ export function CandlePane({
   // inside the same quantized window still remap without recompute.
   const surfaceInputs = useMemo(() => {
     if (!overlay || !overlay.legs) return null;
-    const risk =
-      overlay.slPremium !== null ? (overlay.entry - overlay.slPremium) * 100 : 100;
     return {
       legs: overlay.legs,
       hoursToExpiry: overlay.hoursToExpiry,
       spot: overlay.spot,
       tpPremium: overlay.tpPremium,
       slPremium: overlay.slPremium,
-      riskDollars: Math.max(risk, 1),
       smiles: overlay.smiles,
       volShift: overlay.volShift,
       skewBeta: overlay.skewBeta,
@@ -797,10 +787,7 @@ export function CandlePane({
             const price = yToPrice(y, domain, layout);
             const snaps = overlayNow.snapStrikes;
             if (snaps.length) {
-              const snapped = snaps.reduce(
-                (best, s) => (Math.abs(s - price) < Math.abs(best - price) ? s : best),
-                snaps[0],
-              );
+              const snapped = nearestStrike(snaps, price);
               if (snapped !== overlayNow.strikes[target.i]) {
                 setStrike(target.i, snapped);
               }

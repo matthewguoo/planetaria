@@ -12,19 +12,13 @@ import {
   type RiskSettings,
   type UntrackedPosition,
 } from "../../lib/api";
+import { fmtUsd, pnlCls } from "../../lib/format";
 import { useAccountStore } from "../../store/accountStore";
 import { useTradingStore } from "../../store/tradingStore";
 import { useUiStore } from "../../store/uiStore";
+import { fmtTimeET } from "../Chart/scales";
 
 type Tab = "POSITIONS" | "HISTORY" | "ACCOUNT";
-
-const fmtUsd = (v: number | null | undefined, sign = false) =>
-  v === null || v === undefined
-    ? "—"
-    : `${sign && v > 0 ? "+" : ""}${v < 0 ? "-" : ""}$${Math.abs(v).toLocaleString("en-US", { maximumFractionDigits: 0 })}`;
-
-const pnlCls = (v: number | null | undefined) =>
-  v === null || v === undefined ? "text-bb-muted" : v >= 0 ? "text-bb-profit" : "text-bb-loss";
 
 /** Premium cost basis in dollars for percent-return display. */
 function planBasis(plan: Plan): number {
@@ -41,14 +35,7 @@ function fmtPnl(v: number | null | undefined, basis: number): string {
   return `${dollars} (${v >= 0 ? "+" : ""}${((v / basis) * 100).toFixed(1)}%)`;
 }
 
-function etTime(iso: string): string {
-  return new Intl.DateTimeFormat("en-US", {
-    timeZone: "America/New_York",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  }).format(new Date(iso));
-}
+const etTime = (iso: string) => fmtTimeET(Date.parse(iso));
 
 /** Account % lost if this plan exits at its stop (client-side calc). */
 function RiskCell({ plan }: { plan: Plan }) {

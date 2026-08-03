@@ -7,7 +7,7 @@
  */
 
 import { useEffect, useRef } from "react";
-import { useStrategyStore } from "../../store/strategyStore";
+import { nearestStrike, useStrategyStore } from "../../store/strategyStore";
 import { useTradingStore } from "../../store/tradingStore";
 
 export function ChainPanel() {
@@ -36,9 +36,7 @@ export function ChainPanel() {
     return [...byStrike.entries()].sort((a, b) => a[0] - b[0]);
   })();
 
-  const atmStrike = rows.length
-    ? rows.reduce((best, [k]) => (Math.abs(k - spot) < Math.abs(best - spot) ? k : best), rows[0][0])
-    : null;
+  const atmStrike = rows.length ? nearestStrike(rows.map(([k]) => k), spot) : null;
 
   // Scroll to ATM once per (symbol, expiry).
   useEffect(() => {

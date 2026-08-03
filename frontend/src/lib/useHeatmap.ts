@@ -18,7 +18,6 @@ export type SurfaceInputs = {
   spot: number;
   tpPremium: number | null;
   slPremium: number | null;
-  riskDollars: number;
   smiles: Smiles | null;
   volShift: number;
   skewBeta: boolean;
@@ -56,7 +55,7 @@ export function useHeatmap(inputs: SurfaceInputs | null, onResult: (r: HeatmapRe
 
   useEffect(() => {
     if (!inputs || !inputs.legs || !inputs.legs.length || inputs.spot <= 0) return;
-    const { legs, hoursToExpiry, spot, tpPremium, slPremium, riskDollars, smiles, volShift, skewBeta } = inputs;
+    const { legs, hoursToExpiry, spot, tpPremium, slPremium, smiles, volShift, skewBeta } = inputs;
 
     // Quantize spot to 0.1% so quote jitter doesn't thrash the worker; round
     // smile vols to 3dp so 10s chain refreshes only recompute on real moves.
@@ -114,7 +113,6 @@ export function useHeatmap(inputs: SurfaceInputs | null, onResult: (r: HeatmapRe
       timeSteps: 64,
       tpPremium,
       slPremium,
-      riskDollars,
       spot0: qSpot,
       smiles,
       volShift,

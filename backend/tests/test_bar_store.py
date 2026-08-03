@@ -14,6 +14,9 @@ class FakeRedis:
     async def load_bars(self, *a, **k):
         return {}
 
+    async def trim_bars(self, *a, **k):
+        pass
+
 
 def mk(t_min: int, o=100.0, h=101.0, l=99.0, c=100.5, v=10):
     return {"t": t_min * 60_000, "o": o, "h": h, "l": l, "c": c, "v": v}

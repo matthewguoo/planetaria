@@ -6,6 +6,7 @@
  */
 
 import { useMemo, useState } from "react";
+import { pct, usd } from "../../lib/format";
 import type { McResult } from "../../lib/mcSim";
 import { useMonteCarlo, type McInputs } from "../../lib/useMonteCarlo";
 import type { Designer } from "../../lib/useDesigner";
@@ -16,9 +17,6 @@ import { ThetaBlock } from "../Chart/ChartHud";
 import { PositionsDrawer } from "../Positions/PositionsDrawer";
 
 type DataTab = "stats" | "theta" | "chain" | "pos";
-
-const pct = (v: number | null) => (v === null ? "—" : `${(v * 100).toFixed(0)}%`);
-const usd = (v: number) => `${v >= 0 ? "+" : "-"}$${Math.abs(v).toFixed(0)}`;
 
 function Cell({ label, value, cls }: { label: string; value: string; cls?: string }) {
   return (

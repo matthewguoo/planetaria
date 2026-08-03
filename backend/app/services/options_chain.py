@@ -4,16 +4,16 @@ clients never hammer the 200 req/min REST budget.
 """
 
 import asyncio
-import json
 import logging
-import math
 import time
 from datetime import date, datetime, timedelta, timezone
 
 from alpaca.data.requests import OptionChainRequest
 
 from app.services.alpaca import AlpacaService
+from app.services.demo_feed import demo_smile_iv
 from app.services.redis_client import RedisFacade
+from app.services.trade_service import parse_occ_symbol
 
 log = logging.getLogger("app.chain")
 
@@ -22,14 +22,8 @@ CHAIN_TTL_S = 5.0
 
 def _contract_row(occ_symbol: str, snap) -> dict | None:
     """Flatten an alpaca OptionsSnapshot into our wire format."""
-    try:
-        # OCC: ROOT + YYMMDD + C/P + strike*1000 (8 digits)
-        body = occ_symbol
-        strike = int(body[-8:]) / 1000.0
-        right = body[-9].upper()
-        expiry = "20" + body[-15:-9]  # YYMMDD -> YYYYMMDD
-        expiry_iso = f"{expiry[0:4]}-{expiry[4:6]}-{expiry[6:8]}"
-    except Exception:
+    occ = parse_occ_symbol(occ_symbol)
+    if occ is None:
         return None
 
     quote = getattr(snap, "latest_quote", None)
@@ -40,9 +34,9 @@ def _contract_row(occ_symbol: str, snap) -> dict | None:
     iv = float(getattr(snap, "implied_volatility", 0) or 0)
     return {
         "symbol": occ_symbol,
-        "right": "C" if right == "C" else "P",
-        "strike": strike,
-        "expiry": expiry_iso,
+        "right": occ["right"],
+        "strike": occ["strike"],
+        "expiry": occ["expiry"],
         "bid": bid,
         "ask": ask,
         "mid": mid,
@@ -212,11 +206,13 @@ class ChainService:
         contracts = []
         from app.services.options_math import (
             TRADING_HOURS_PER_YEAR,
+            bs_delta,
+            bs_price,
             trading_hours_to_expiry,
         )
 
         now_ms = time.time() * 1000
-        for exp_i, expiry in enumerate(expirations):
+        for expiry in expirations:
             # Use the SAME trading-hours clock as the frontend designer.
             # A fake tau here makes demo premiums carry time value the P/L
             # surface says doesn't exist — producing impossible states like
@@ -224,21 +220,14 @@ class ChainService:
             tau = max(
                 trading_hours_to_expiry(expiry, now_ms) / TRADING_HOURS_PER_YEAR, 2e-5
             )
+            days_out = (date.fromisoformat(expiry) - today).days
             for strike in strikes:
-                moneyness = math.log(strike / spot)
-                iv = 0.18 + 0.35 * moneyness**2 + 0.02 * exp_i  # smile
+                iv = demo_smile_iv(strike, spot, days_out)
                 for right in ("C", "P"):
-                    # Rough BS for demo premiums.
-                    d1 = (math.log(spot / strike) + 0.5 * iv * iv * tau) / (iv * math.sqrt(tau))
-                    d2 = d1 - iv * math.sqrt(tau)
-                    ncdf = lambda x: 0.5 * (1 + math.erf(x / math.sqrt(2)))
-                    if right == "C":
-                        mid = spot * ncdf(d1) - strike * ncdf(d2)
-                        delta = ncdf(d1)
-                    else:
-                        mid = strike * ncdf(-d2) - spot * ncdf(-d1)
-                        delta = ncdf(d1) - 1
-                    mid = max(round(mid, 2), 0.01)
+                    # Undiscounted BS for demo premiums — same pricer as the
+                    # demo option-quote feed (see demo_smile_iv).
+                    delta = bs_delta(spot, strike, tau, iv, right, r=0.0)
+                    mid = max(round(bs_price(spot, strike, tau, iv, right, r=0.0), 2), 0.01)
                     spread = max(0.02, mid * 0.04)
                     exp_compact = expiry.replace("-", "")[2:]
                     occ = f"{underlying}{exp_compact}{right}{int(round(strike * 1000)):08d}"

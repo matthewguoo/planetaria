@@ -21,6 +21,7 @@ want to compare against.
 
 import asyncio
 import logging
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
@@ -97,9 +98,7 @@ class MarketClock:
         return snap.next_open
 
     async def _refresh(self) -> ClockSnapshot | None:
-        import time as _time
-
-        if _time.monotonic() < self._fail_until:
+        if time.monotonic() < self._fail_until:
             return None  # recent failure — fail open without a broker hit
         async with self._lock:
             # A concurrent caller may have refreshed while we waited.
@@ -107,16 +106,16 @@ class MarketClock:
             now = datetime.now(timezone.utc)
             if snap is not None and snap.current_state(now) is not None:
                 return snap
-            if _time.monotonic() < self._fail_until:
+            if time.monotonic() < self._fail_until:
                 return None
             try:
                 clock = await self.alpaca.call(
                     self.alpaca.trading.get_clock, retries=1
                 )
             except Exception as exc:
-                self._fail_until = _time.monotonic() + self.FAIL_CACHE_S
-                if _time.monotonic() - self._last_fail_log > 60:
-                    self._last_fail_log = _time.monotonic()
+                self._fail_until = time.monotonic() + self.FAIL_CACHE_S
+                if time.monotonic() - self._last_fail_log > 60:
+                    self._last_fail_log = time.monotonic()
                     log.warning("market clock fetch failed (failing OPEN): %s", exc)
                 return None
             self._fail_until = 0.0

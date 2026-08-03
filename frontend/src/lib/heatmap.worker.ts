@@ -30,7 +30,6 @@ export type HeatmapRequest = {
   timeSteps: number;
   tpPremium: number | null;
   slPremium: number | null;
-  riskDollars: number; // per contract-set, for R normalization
   /** current spot (smile anchor) and live smile; null => frozen-IV BSM */
   spot0: number;
   smiles: Smiles | null;
@@ -58,8 +57,6 @@ export type HeatmapResult = {
   hoursToExpiry: number;
   /** row-major [timeSteps][priceSteps], dollars per contract-set */
   grid: Float64Array;
-  minPl: number;
-  maxPl: number;
   /** per time column: underlying price of each contour (NaN = none) */
   breakevenLine: Float64Array;
   tpLine: Float64Array;
@@ -95,18 +92,13 @@ self.onmessage = (event: MessageEvent<HeatmapRequest>) => {
   const model = makeScenarioModel(smiles, spot0, req.volShift, req.skewBeta);
   const value = (s: number, tau: number) => positionValueModel(legs, s, tau, model);
 
-  let minPl = Infinity;
-  let maxPl = -Infinity;
   for (let ti = 0; ti < timeSteps; ti++) {
     // ti=0 is "now", last row is expiry.
     const hours = hoursToExpiry * (1 - ti / (timeSteps - 1));
     const tau = Math.max(hours, 0) / TRADING_HOURS_PER_YEAR;
     for (let pi = 0; pi < priceSteps; pi++) {
       const s = priceLo + ((priceHi - priceLo) * pi) / (priceSteps - 1);
-      const pl = (value(s, tau) - entry) * 100;
-      grid[ti * priceSteps + pi] = pl;
-      if (pl < minPl) minPl = pl;
-      if (pl > maxPl) maxPl = pl;
+      grid[ti * priceSteps + pi] = (value(s, tau) - entry) * 100;
     }
     // Contours: underlying level where SMILE-AWARE position value crosses
     // each premium threshold at this tau.
@@ -127,8 +119,6 @@ self.onmessage = (event: MessageEvent<HeatmapRequest>) => {
     timeSteps,
     hoursToExpiry,
     grid,
-    minPl,
-    maxPl,
     breakevenLine,
     tpLine,
     slLine,

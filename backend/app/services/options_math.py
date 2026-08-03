@@ -1,6 +1,6 @@
 """Options math core: Black-Scholes, multi-leg position valuation, first-passage
 probabilities, EV. Mirrored in frontend/src/lib/optionsMath.ts — the two MUST
-agree (tests/test_parity.py exports fixtures the frontend test suite replays).
+agree (tests/gen_parity_fixtures.py exports fixtures the frontend replays).
 
 Conventions (identical in TS mirror):
 - tau is in TRADING years: hours_to_expiry / (252 * 6.5).
