@@ -98,7 +98,7 @@ export function Header() {
       <span className="text-white">{symbol}</span>
       <PriceReadout />
       <div className="ml-auto flex items-center gap-4">
-        {(["terminal", "account", "strategies"] as const).map((v) => (
+        {(["terminal", "account", "strategies", "monitor"] as const).map((v) => (
           <button
             key={v}
             onClick={() => setView(v)}

@@ -78,6 +78,14 @@ class EventBus:
         if topic is None:
             return
         topic.published += 1
+        if event.type != "timer":  # ticks would drown the monitor ring
+            from app.services.call_log import CALL_LOG
+
+            CALL_LOG.record(
+                "engine", f"bus:{event.type}",
+                detail=f"{event.source} -> {len(topic.subs)} sub(s) "
+                       f"{' '.join(event.symbols[:4])}".strip(),
+            )
         for sub in topic.subs:
             try:
                 sub.queue.put_nowait(event)

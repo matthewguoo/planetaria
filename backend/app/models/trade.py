@@ -53,6 +53,9 @@ class TradePlan(Base):
     # Strategy-runtime provenance: which instance placed this plan (label in
     # `strategy` stays for humans and pre-runtime rows).
     strategy_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    # Which named paper account held this plan (AccountService); legacy rows
+    # predate multi-account and stay NULL.
+    account: Mapped[str | None] = mapped_column(String(32), nullable=True)
     # option: legs are contracts, premiums are per-share x100. equity: one
     # leg of shares, "premium" IS the share price, multiplier 1.
     asset_class: Mapped[str] = mapped_column(String(8), default="option")
@@ -130,6 +133,7 @@ class TradePlan(Base):
             "underlying": self.underlying,
             "strategy": self.strategy,
             "strategy_id": self.strategy_id,
+            "account": self.account,
             "asset_class": self.asset_class,
             "extended_hours": self.extended_hours,
             "legs": self.legs,

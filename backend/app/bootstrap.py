@@ -34,7 +34,7 @@ async def startup(app: FastAPI, settings: Settings) -> None:
 
     # Persisted feed settings override env defaults for the feed tiers —
     # applied here because the stream clients are constructed once.
-    from app.services.system_state import FeedSettingsService
+    from app.services.system_state import AccountService, FeedSettingsService
 
     feed_settings = FeedSettingsService(db)
     try:
@@ -43,6 +43,16 @@ async def startup(app: FastAPI, settings: Settings) -> None:
         settings.alpaca_option_feed = feed_cfg["option_feed"]
     except Exception:
         log.exception("feed settings load failed - using env defaults")
+
+    # Persisted ACCOUNT selection: point settings at the chosen paper
+    # account's keys before any client exists (see AccountService for the
+    # paper-only and no-open-plans locks).
+    accounts = AccountService(db, settings)
+    try:
+        await accounts.apply()
+    except Exception:
+        log.exception("account selection failed - using default keys")
+    app.state.accounts = accounts
 
     alpaca = AlpacaService(settings)
     broadcaster = Broadcaster()

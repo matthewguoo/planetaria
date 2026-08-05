@@ -8,9 +8,12 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   apiError,
+  getAccounts,
   getFeedSettings,
   getSystemState,
   putFeedSettings,
+  selectAccount,
+  type AccountList,
   type FeedSettings,
   type SystemState,
 } from "../../lib/api";
@@ -67,6 +70,7 @@ export function SystemMenu({ onClose }: { onClose: () => void }) {
   const [state, setState] = useState<SystemState | null>(null);
   const [cfg, setCfg] = useState<FeedSettings | null>(null);
   const [draft, setDraft] = useState<Partial<FeedSettings>>({});
+  const [accounts, setAccounts] = useState<AccountList | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -81,9 +85,21 @@ export function SystemMenu({ onClose }: { onClose: () => void }) {
   useEffect(() => {
     void refresh();
     getFeedSettings().then(setCfg).catch((err) => setError(apiError(err)));
+    getAccounts().then(setAccounts).catch(() => setAccounts(null));
     const id = window.setInterval(() => void refresh(), 5000);
     return () => window.clearInterval(id);
   }, [refresh]);
+
+  const pickAccount = async (name: string) => {
+    setMsg(null);
+    setError(null);
+    try {
+      setAccounts(await selectAccount(name));
+      setMsg("account saved — applies after a backend restart");
+    } catch (err) {
+      setError(apiError(err));
+    }
+  };
 
   const merged: FeedSettings | null = cfg ? { ...cfg, ...draft } : null;
   const dirty = Object.keys(draft).length > 0;
@@ -200,6 +216,48 @@ export function SystemMenu({ onClose }: { onClose: () => void }) {
           )}
 
           <div className="px-2 pb-1 pt-4 text-[9px] tracking-widest text-bb-muted">
+            PAPER ACCOUNT (restart applies)
+          </div>
+          {accounts ? (
+            <div className="flex flex-col">
+              {accounts.accounts.map((a) => (
+                <label
+                  key={a.name}
+                  className="flex cursor-pointer items-center gap-2 border-b border-bb-border/40 px-2 py-1.5 hover:bg-bb-hover"
+                >
+                  <input
+                    type="radio"
+                    name="paper-account"
+                    checked={a.selected}
+                    onChange={() => void pickAccount(a.name)}
+                    aria-label={`Use account ${a.name}`}
+                  />
+                  <span className="flex-1 text-[11px] text-bb-amber">{a.name}</span>
+                  <span className="text-[10px] text-bb-muted" data-numeric>
+                    {a.key_masked}
+                  </span>
+                  {a.active && (
+                    <span className="border border-bb-profit px-1 text-[9px] text-bb-profit">
+                      ACTIVE
+                    </span>
+                  )}
+                </label>
+              ))}
+              {accounts.restart_required && (
+                <div className="px-2 py-1 text-[10px] text-bb-orange">
+                  restart the backend to switch to “{accounts.selected}”
+                </div>
+              )}
+              <div className="px-2 py-1 text-[9px] leading-tight text-bb-muted">
+                paper keys only (PK…) from .env: ALPACA_ACCOUNT_&lt;NAME&gt;_API_KEY +
+                _SECRET_KEY. Switching is refused while plans are open.
+              </div>
+            </div>
+          ) : (
+            <div className="px-2 py-1 text-[10px] text-bb-muted">unavailable</div>
+          )}
+
+          <div className="px-2 pb-1 pt-4 text-[9px] tracking-widest text-bb-muted">
             FEED / API SETTINGS
           </div>
           {merged ? (
@@ -221,12 +279,6 @@ export function SystemMenu({ onClose }: { onClose: () => void }) {
                 value={merged.account_poll_s}
                 min={5} max={300}
                 onChange={(v) => setDraft((d) => ({ ...d, account_poll_s: v }))}
-              />
-              <NumField
-                label="PUBLIC FEED POLL"
-                value={merged.public_poll_s}
-                min={2} max={60}
-                onChange={(v) => setDraft((d) => ({ ...d, public_poll_s: v }))}
               />
               <label className="flex items-center justify-between gap-2 px-2 py-1">
                 <span className="text-[10px] tracking-wider text-bb-muted">

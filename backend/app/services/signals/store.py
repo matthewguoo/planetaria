@@ -30,8 +30,12 @@ class SignalStore:
         """Journal the event. Returns (event-with-signal_id, created).
         created=False means the (source, key) pair was already journaled —
         a feed-reconnect replay the caller must NOT re-publish."""
+        from app.services.call_log import CALL_LOG
+
         if event.type not in JOURNALED_TYPES:
             return event, True
+        CALL_LOG.record("engine", f"journal:{event.type}",
+                        detail=f"{event.source} {event.key or ''}".strip())
         row = SignalRow(
             ts=event.ts,
             source=event.source,

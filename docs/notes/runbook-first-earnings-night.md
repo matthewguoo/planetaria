@@ -79,3 +79,17 @@ shares (~$195k paper) from those calls being exercised at expiry. Neither
 interferes with `earn-night` (different strategy label; note-mode places
 nothing), but the plan row should eventually be retired and the shares
 consciously kept or flattened.
+
+## Multi-account
+
+To trade from the fresh `planetaria-1` account instead of the default:
+add its keys (Alpaca dashboard -> select planetaria-1 -> generate keys):
+
+```
+ALPACA_ACCOUNT_PLANETARIA1_API_KEY=PK...
+ALPACA_ACCOUNT_PLANETARIA1_SECRET_KEY=...
+```
+
+then SYSTEM menu -> PAPER ACCOUNT -> pick it -> restart the backend.
+Live keys (AK...) are refused from the pool; switching is refused while
+any plan is open.

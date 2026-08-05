@@ -398,6 +398,8 @@ class TradeService:
             underlying=payload["underlying"].upper(),
             strategy=payload["strategy"],
             strategy_id=payload.get("strategy_id"),
+            account=getattr(getattr(self.alpaca, "settings", None),
+                            "alpaca_account_name", None),
             asset_class=asset_class,
             extended_hours=extended_hours,
             legs=legs,

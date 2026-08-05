@@ -83,6 +83,137 @@ class FeedSettingsService:
         return await self.get()
 
 
+ACCOUNT_KEY = "account"
+ACCOUNT_ENV_RE = r"^ALPACA_ACCOUNT_(.+)_API_KEY$"
+
+
+class AccountService:
+    """Named Alpaca PAPER accounts: .env-held keys, DB-held selection.
+
+    Keys never touch the DB (standing rule: secrets live only in the
+    gitignored .env). Extra accounts register by naming convention:
+
+        ALPACA_ACCOUNT_<NAME>_API_KEY=PK...
+        ALPACA_ACCOUNT_<NAME>_SECRET_KEY=...
+
+    plus the legacy unnamed pair as 'default'. TWO structural locks:
+    only PK-prefixed (paper) keys may enter the pool — a live key is
+    refused at registration, so account switching can never defeat the
+    paper lock — and selection is refused while ANY plan is open (a
+    switch would strand the old account's plans outside enforcement).
+    Selection persists in app_settings and applies at BOOT (streams and
+    clients are constructed once); the UI shows restart_required until
+    the restart happens."""
+
+    def __init__(self, db, settings):
+        self.db = db
+        self.settings = settings
+        self.applied_name: str | None = None
+
+    def registry(self) -> dict[str, dict]:
+        """name -> {api_key, secret_key} from process env + the same .env
+        files config.py reads. First source wins per name."""
+        import os
+        import re
+
+        from dotenv import dotenv_values
+
+        from app.config import _ENV_FILES
+
+        merged: dict[str, str] = {}
+        for env_file in reversed(_ENV_FILES):
+            try:
+                merged.update({k: v for k, v in dotenv_values(env_file).items()
+                               if v is not None})
+            except Exception:
+                pass
+        merged.update(os.environ)
+
+        out: dict[str, dict] = {}
+        default_key = getattr(self.settings, "alpaca_api_key", "")
+        if default_key:
+            out["default"] = {
+                "api_key": default_key,
+                "secret_key": getattr(self.settings, "alpaca_secret_key", ""),
+            }
+        for var, value in merged.items():
+            m = re.match(ACCOUNT_ENV_RE, var)
+            if not m or not value:
+                continue
+            name = m.group(1).lower()
+            secret = merged.get(f"ALPACA_ACCOUNT_{m.group(1)}_SECRET_KEY", "")
+            if not secret:
+                log.error("account %r has an API key but no secret - skipped", name)
+                continue
+            out[name] = {"api_key": value, "secret_key": secret}
+        # The paper gate: PK-prefixed keys only, no exceptions.
+        for name in list(out):
+            if not out[name]["api_key"].startswith("PK"):
+                log.error("account %r key does not look like a PAPER key "
+                          "(PK...) - refused from the pool", name)
+                del out[name]
+        return out
+
+    async def selected_name(self) -> str:
+        async with self.db.session() as session:
+            row = await session.get(AppSetting, ACCOUNT_KEY)
+        return (row.value or {}).get("selected", "default") if row else "default"
+
+    async def apply(self) -> str:
+        """Boot-time: point settings at the selected account's keys BEFORE
+        any client is constructed. Falls back loudly to 'default'."""
+        name = await self.selected_name()
+        reg = self.registry()
+        if name not in reg:
+            if name != "default":
+                log.error("selected account %r has no keys in .env - "
+                          "falling back to default", name)
+            name = "default"
+        if name in reg:
+            self.settings.alpaca_api_key = reg[name]["api_key"]
+            self.settings.alpaca_secret_key = reg[name]["secret_key"]
+            log.info("alpaca account %r selected (key ...%s)",
+                     name, reg[name]["api_key"][-4:])
+        self.applied_name = name
+        # Rides on settings so TradeService can stamp plans without a new
+        # dependency edge.
+        self.settings.alpaca_account_name = name
+        return name
+
+    async def list_accounts(self) -> dict:
+        selected = await self.selected_name()
+        return {
+            "accounts": [
+                {"name": name, "key_masked": f"...{cfg['api_key'][-4:]}",
+                 "active": name == self.applied_name,
+                 "selected": name == selected}
+                for name, cfg in sorted(self.registry().items())
+            ],
+            "selected": selected,
+            "applied": self.applied_name,
+            "restart_required": selected != self.applied_name,
+            "paper_only": True,
+        }
+
+    async def select(self, name: str, open_plans: int) -> dict:
+        if name not in self.registry():
+            raise ValueError(f"no keys for account {name!r} in .env "
+                             f"(add ALPACA_ACCOUNT_{name.upper()}_API_KEY/"
+                             f"_SECRET_KEY)")
+        if open_plans > 0 and name != self.applied_name:
+            raise ValueError(
+                f"{open_plans} open plan(s) - close/flatten everything before "
+                "switching accounts (a switch would strand their enforcement)")
+        async with self.db.session() as session:
+            row = await session.get(AppSetting, ACCOUNT_KEY)
+            if row is None:
+                session.add(AppSetting(key=ACCOUNT_KEY, value={"selected": name}))
+            else:
+                row.value = {**(row.value or {}), "selected": name}
+            await session.commit()
+        return await self.list_accounts()
+
+
 def _task_state(task) -> str:
     if task is None:
         return "not started"

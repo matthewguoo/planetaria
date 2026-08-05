@@ -379,6 +379,15 @@ class StrategyRunner:
     async def _journal(self, row_id: str, action: str, *, detail: dict | None = None,
                        dedupe_key: str | None = None, plan_id: str | None = None,
                        signal_ids: list[int] | None = None) -> None:
+        from app.services.call_log import CALL_LOG
+
+        running = self._running.get(row_id)
+        CALL_LOG.record(
+            "engine", f"decision:{action}",
+            detail=f"{running.name if running else row_id}"
+                   f"{' plan ' + plan_id if plan_id else ''}",
+            ok=action not in ("error", "rejected"),
+        )
         try:
             async with self.db.session() as session:
                 session.add(StrategyDecisionRow(

@@ -392,3 +392,50 @@ export const getStrategySource = (kind: string) =>
     .then((r) => r.data);
 export const getStrategyPerformance = (id: string) =>
   api.get<StrategyPerformance>(`/api/strategies/${id}/performance`).then((r) => r.data);
+
+// Live call-flow monitor (backend/app/services/call_log.py).
+
+export type MonitorCall = {
+  ts: number;
+  category: "data" | "broker" | "engine";
+  name: string;
+  detail: string;
+  ms: number | null;
+  ok: boolean;
+};
+
+export type MonitorSnapshot = {
+  status: {
+    counts: Record<string, number>;
+    errors: Record<string, number>;
+    buffered: number;
+  };
+  calls: MonitorCall[];
+};
+
+export const getMonitorCalls = (category?: string, limit = 80) =>
+  api
+    .get<MonitorSnapshot>("/api/monitor/calls", { params: { category, limit } })
+    .then((r) => r.data);
+
+// Named paper-account selection (backend AccountService; restart applies).
+
+export type AccountEntry = {
+  name: string;
+  key_masked: string;
+  active: boolean;
+  selected: boolean;
+};
+
+export type AccountList = {
+  accounts: AccountEntry[];
+  selected: string;
+  applied: string | null;
+  restart_required: boolean;
+  paper_only: boolean;
+};
+
+export const getAccounts = () =>
+  api.get<AccountList>("/api/system/accounts").then((r) => r.data);
+export const selectAccount = (name: string) =>
+  api.post<AccountList>("/api/system/accounts/select", { name }).then((r) => r.data);

@@ -11,6 +11,7 @@ client construction is centralized here so that invariant is easy to keep.
 
 import asyncio
 import logging
+import time
 from functools import partial
 
 from alpaca.data.enums import DataFeed, OptionsFeed
@@ -117,13 +118,22 @@ class AlpacaService:
         instead go through client_order_id recovery (see TradeService) since
         a timed-out submit may still have reached the broker.
         """
+        from app.services.call_log import CALL_LOG
+
         attempt = 0
         while True:
+            started = time.monotonic()
             try:
-                return await asyncio.wait_for(
+                result = await asyncio.wait_for(
                     to_thread.run_sync(partial(fn, *args, **kwargs)), timeout
                 )
+                CALL_LOG.record("broker", getattr(fn, "__name__", str(fn)),
+                                ms=(time.monotonic() - started) * 1000)
+                return result
             except Exception as exc:
+                CALL_LOG.record("broker", getattr(fn, "__name__", str(fn)),
+                                detail=str(exc)[:120],
+                                ms=(time.monotonic() - started) * 1000, ok=False)
                 attempt += 1
                 if attempt > retries or not is_transient(exc):
                     raise

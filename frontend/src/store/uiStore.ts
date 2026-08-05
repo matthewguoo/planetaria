@@ -8,7 +8,7 @@ import type { Plan } from "../lib/api";
 
 export type PnlMode = "entry" | "live";
 
-export type View = "terminal" | "account" | "strategies";
+export type View = "terminal" | "account" | "strategies" | "monitor";
 
 type UiState = {
   view: View;

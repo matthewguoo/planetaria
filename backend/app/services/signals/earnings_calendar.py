@@ -69,10 +69,13 @@ class EarningsCalendarFeed:
     last_fetch_mono: float | None = field(default=None, init=False)
 
     def _client(self) -> httpx.AsyncClient:
+        from app.services.call_log import http_hooks
+
         return httpx.AsyncClient(
             headers={"X-Finnhub-Token":
                      getattr(self.settings, "finnhub_api_key", "")},
             timeout=20.0,
+            event_hooks=http_hooks("data"),
         )
 
     async def run(self) -> None:  # long-lived; raising -> supervise() backoff

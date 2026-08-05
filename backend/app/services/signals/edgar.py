@@ -141,11 +141,14 @@ class EdgarFeed:
     # -------------------------------------------------------------- lifecycle
 
     def _client(self) -> httpx.AsyncClient:
+        from app.services.call_log import http_hooks
+
         return httpx.AsyncClient(
             headers={"User-Agent": getattr(self.settings, "edgar_user_agent", "")
                      or "planetaria/0.1"},
             timeout=15.0,
             follow_redirects=True,
+            event_hooks=http_hooks("data"),
         )
 
     async def run(self) -> None:  # long-lived; raising -> supervise() backoff
