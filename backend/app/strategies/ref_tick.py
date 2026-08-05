@@ -39,9 +39,11 @@ class RefTick(Strategy):
     subscriptions = ("manual", "timer")
     default_params = {
         "symbol": "SPY",
+        "side": 1,              # 1 long | -1 short (short also needs the risk
+                                # gate flipped: equity_long_only=false)
         "qty": 1,
-        "tp_pct": 0.003,        # +0.3%
-        "sl_pct": 0.005,        # -0.5%
+        "tp_pct": 0.003,        # +0.3% favorable move
+        "sl_pct": 0.005,        # -0.5% adverse move
         "hold_min": 30,
         "extended_hours": True,
         "schedule_et": None,    # "HH:MM" to also fire on the timer feed
@@ -54,6 +56,8 @@ class RefTick(Strategy):
             from datetime import time as _time
 
             _time.fromisoformat(str(clean["schedule_et"]))
+        if int(clean["side"]) not in (1, -1):
+            raise ValueError("side must be 1 (long) or -1 (short)")
         if not (1 <= int(clean["qty"]) <= 100):
             raise ValueError("qty must be 1-100 shares (this is a proof, not a position)")
         for key in ("tp_pct", "sl_pct"):
@@ -89,27 +93,37 @@ class RefTick(Strategy):
                                     " - refusing to price an entry off it"},
                            signal_ids=_ids(event))
             return
-        # Marketable: cross to the ask — the exec-quality ledger then measures
-        # exactly what that immediacy cost against the submit-time fair value.
-        entry = round(float(quote["ask"]), 2)
+        # Marketable: cross the spread on the entry side — longs lift the ask,
+        # shorts hit the bid — and the exec-quality ledger measures exactly
+        # what that immediacy cost against the submit-time fair value.
+        side = int(ctx.params["side"])
+        touch = float(quote["ask"] if side > 0 else (quote.get("bid") or quote["ask"]))
+        price = round(touch, 2)
+        # Signed position-value convention: shorts are credits, so the whole
+        # ladder is negated and the favorable direction flips. sl < entry < tp
+        # holds on the value axis either way.
+        entry = side * price
+        tp = round(side * price * (1 + side * float(ctx.params["tp_pct"])), 2)
+        sl = round(side * price * (1 - side * float(ctx.params["sl_pct"])), 2)
         intent = TradeIntent(
             asset_class="equity",
             underlying=symbol,
-            legs=[{"symbol": symbol, "side": 1, "ratio": 1, "entry": entry}],
+            legs=[{"symbol": symbol, "side": side, "ratio": 1, "entry": entry}],
             qty=int(ctx.params["qty"]),
             entry_limit=entry,
-            tp=round(entry * (1 + float(ctx.params["tp_pct"])), 2),
-            sl=round(entry * (1 - float(ctx.params["sl_pct"])), 2),
+            tp=tp,
+            sl=sl,
             time_stop_utc=datetime.now(timezone.utc)
             + timedelta(minutes=float(ctx.params["hold_min"])),
             extended_hours=bool(ctx.params["extended_hours"]),
-            reason=f"ref_tick {event.type} trigger",
+            reason=f"ref_tick {event.type} trigger ({'long' if side > 0 else 'short'})",
             signal_ids=tuple(_ids(event)),
-            dedupe_key=f"ref:{symbol}:{datetime.now(ET).date().isoformat()}",
+            dedupe_key=f"ref:{symbol}:{'L' if side > 0 else 'S'}:"
+                       f"{datetime.now(ET).date().isoformat()}",
         )
         result = await ctx.submit(intent)
-        ctx.log.info("ref_tick placed plan %s (%s @ %.2f)",
-                     result.get("id"), symbol, entry)
+        ctx.log.info("ref_tick placed plan %s (%s %s @ %.2f)",
+                     result.get("id"), "long" if side > 0 else "short", symbol, price)
 
     @staticmethod
     def _schedule_hit(event: Event, params: dict) -> bool:

@@ -34,7 +34,14 @@ DEFAULT_RISK = {
     # Equity (shares) guards — notional-based, no margin formulas:
     "equity_max_notional_per_name_pct": 0.05,  # per trade, % of equity
     "equity_gross_exposure_pct": 0.50,         # all open equity plans
-    "equity_long_only": True,                  # shorting is out of scope (v1)
+    # Shorting is CAPABLE but gated: flip equity_long_only to false to allow
+    # short entries (still subject to the broker's shortable/ETB flags,
+    # checked per-symbol at entry). equity_short_overnight stays false until
+    # real-time overnight data exists — on the current tier the overnight
+    # tape is ~15min delayed, which means delayed stops under UNBOUNDED gap
+    # risk on the short side. Exits (covers) are never gated.
+    "equity_long_only": True,
+    "equity_short_overnight": False,
 }
 
 RISK_KEY = "risk"
@@ -60,7 +67,7 @@ class RiskService:
             if key in ("time_stop_et", "expiry_time_stop_et"):
                 time.fromisoformat(str(value))  # validate HH:MM
                 clean[key] = str(value)
-            elif key == "equity_long_only":
+            elif key in ("equity_long_only", "equity_short_overnight"):
                 clean[key] = bool(value)
             elif key in ("max_positions", "entry_ttl_min", "max_trades_per_day"):
                 iv = int(value)
@@ -247,6 +254,10 @@ class RiskService:
         stream_age_s: float | None = None,
         daytrade_count: int = 0,
         asset_class: str = "option",
+        # Equity-short context, supplied by the caller (which owns broker
+        # metadata and session state): None = not checked / not applicable.
+        shortable: bool | None = None,
+        overnight_session: bool = False,
     ) -> list[str]:
         """Returns a list of violations; empty list = trade allowed."""
         cfg = await self.get_settings()
@@ -292,10 +303,29 @@ class RiskService:
             # Shares: structure + notional guards. No margin formulas, no
             # expiry coupling; leg dicts have no "right" key, so the option
             # structure checks below must not run.
-            if cfg.get("equity_long_only", True) and any(
-                leg["side"] < 0 for leg in (legs or [])
-            ):
-                violations.append("equity shorting is disabled (equity_long_only)")
+            is_short = any(leg["side"] < 0 for leg in (legs or []))
+            if is_short and cfg.get("equity_long_only", True):
+                violations.append(
+                    "equity shorting is disabled (flip equity_long_only in risk settings)"
+                )
+            elif is_short:
+                # Borrow gate: the broker only shorts easy-to-borrow names.
+                # None means the caller could not verify — treat as refusal;
+                # trading on an unverified borrow is how shorts bounce at the
+                # broker mid-strategy. (SSR needs no code here: a name down
+                # >10% takes short LIMIT entries but fills only on upticks —
+                # the entry TTL cancels the ones that never do.)
+                if shortable is not True:
+                    violations.append(
+                        "short refused: symbol not confirmed shortable/easy-to-borrow "
+                        "at the broker"
+                    )
+                if overnight_session and not cfg.get("equity_short_overnight", False):
+                    violations.append(
+                        "short entries disabled in the overnight session: stops run on "
+                        "~15min-delayed tape against unbounded gap risk "
+                        "(equity_short_overnight)"
+                    )
             per_name_cap = account_equity * cfg["equity_max_notional_per_name_pct"]
             if entry_cost_dollars > per_name_cap + 0.01:
                 violations.append(

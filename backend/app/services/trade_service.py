@@ -115,6 +115,7 @@ class TradeService:
         self.enforcer = None  # set by ExitEnforcer at startup (circular)
         self._account_cache: tuple[float, dict] | None = None
         self._positions_cache: tuple[float, list[dict]] | None = None
+        self._shortable_cache: dict[str, tuple[float, bool]] = {}
 
     # ------------------------------------------------------------- account
 
@@ -307,11 +308,17 @@ class TradeService:
             )
 
         account = await self.get_account()
+        is_short_equity = asset_class == "equity" and legs[0]["side"] < 0
         if asset_class == "equity":
             # Shares: notional is the whole story — no margin formula, no
-            # expiry. max_loss is the SL distance in dollars (x1).
+            # expiry. max_loss is the SL distance in dollars (x1); the signed
+            # convention makes it positive for shorts too (SL sits below the
+            # negative entry credit on the position-value axis).
             max_loss = (entry_limit - sl) * qty
-            entry_cost = abs(entry_limit) * qty
+            # Capital consumed: longs claim their notional. Shorts claim
+            # Reg-T initial — 150% of market value (100% proceeds held +50%)
+            # — so the per-name and gross caps count the true BP bite.
+            entry_cost = abs(entry_limit) * qty * (1.5 if is_short_equity else 1.0)
             expiry = ""
         else:
             # Capital consumed: broker-margin estimate. Naked shorts charge the
@@ -336,6 +343,9 @@ class TradeService:
         stream_age: float | None = None
         if self.alpaca.configured:
             stream_age = self._entry_staleness_s(asset_class, legs)
+        shortable: bool | None = None
+        if is_short_equity and self.alpaca.configured:
+            shortable = await self._asset_shortable(legs[0]["symbol"])
         violations = await self.risk.validate_new_trade(
             account_equity=account["equity"],
             entry_cost_dollars=entry_cost,
@@ -347,6 +357,9 @@ class TradeService:
             stream_age_s=stream_age,
             daytrade_count=account["daytrade_count"],
             asset_class=asset_class,
+            shortable=shortable,
+            overnight_session=(asset_class == "equity"
+                               and equity_session() == "overnight"),
         )
         if violations:
             raise ValueError("; ".join(violations))
@@ -431,6 +444,31 @@ class TradeService:
         else:
             age = self.market.stream_age_s
         return float("inf") if age is None else age
+
+    async def _asset_shortable(self, symbol: str) -> bool | None:
+        """Broker borrow check for a short entry: True only when the asset is
+        BOTH shortable and easy-to-borrow (Alpaca rejects HTB shorts anyway;
+        treating the flags as one gate keeps the refusal on our side, where
+        it journals). None = lookup failed — the risk gate refuses on None
+        rather than shorting on unverified borrow. Cached briefly: the flags
+        change on a daily cadence, not per-order."""
+        symbol = symbol.upper()
+        now = time.monotonic()
+        cached = self._shortable_cache.get(symbol)
+        if cached and now - cached[0] < 600:
+            return cached[1]
+        try:
+            asset = await self.alpaca.call(
+                self.alpaca.trading.get_asset, symbol, timeout=5.0
+            )
+            value = bool(getattr(asset, "shortable", False)) and bool(
+                getattr(asset, "easy_to_borrow", False)
+            )
+        except Exception as exc:
+            log.warning("shortable lookup failed for %s: %s", symbol, exc)
+            return None
+        self._shortable_cache[symbol] = (now, value)
+        return value
 
     def _quality_snapshot(self, legs: list, kind: str) -> dict | None:
         """{kind: {fair, half_spread, ts}} from the live quote cache at
