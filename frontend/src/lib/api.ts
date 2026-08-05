@@ -275,3 +275,83 @@ export function apiError(err: unknown): string {
   const anyErr = err as { response?: { data?: { detail?: string } }; message?: string };
   return anyErr.response?.data?.detail ?? anyErr.message ?? String(err);
 }
+
+// ---------------------------------------------------------- strategy runtime
+// Control plane for the backend StrategyRunner (NOT the options designer's
+// strategyStore, which is leg templates). See backend/app/api/routes/strategies.py.
+
+export type StrategyRuntime = {
+  task: string;
+  queue_size?: number;
+  events_seen?: number;
+  errors?: number;
+  last_event_age_s?: number | null;
+};
+
+export type StrategyInstance = {
+  id: string;
+  kind: string;
+  name: string;
+  params: Record<string, unknown>;
+  state: "enabled" | "paused" | "disabled";
+  created_at: string;
+  updated_at: string;
+  open_plans: number;
+  runtime: StrategyRuntime;
+};
+
+export type StrategyKind = {
+  kind: string;
+  subscriptions: string[];
+  default_params: Record<string, unknown>;
+  doc: string;
+};
+
+export type StrategyDecision = {
+  id: number;
+  ts: string;
+  strategy_id: string;
+  signal_ids: number[] | null;
+  action: string; // note | intent | placed | rejected | skip | error
+  dedupe_key: string | null;
+  plan_id: string | null;
+  detail: Record<string, unknown> | null;
+};
+
+export type SignalRecord = {
+  id: number;
+  ts: string;
+  source: string;
+  type: string;
+  key: string | null;
+  symbols: string[] | null;
+  payload: Record<string, unknown> | null;
+  parent_id: number | null;
+};
+
+export const getStrategies = () =>
+  api.get<{ instances: StrategyInstance[] }>("/api/strategies").then((r) => r.data.instances);
+export const getStrategyCatalog = () =>
+  api.get<{ kinds: StrategyKind[] }>("/api/strategies/catalog").then((r) => r.data.kinds);
+export const createStrategy = (kind: string, name: string, params: Record<string, unknown>) =>
+  api.post<StrategyInstance>("/api/strategies", { kind, name, params }).then((r) => r.data);
+export const patchStrategyParams = (id: string, params: Record<string, unknown>) =>
+  api.patch<StrategyInstance>(`/api/strategies/${id}`, { params }).then((r) => r.data);
+export const enableStrategy = (id: string) =>
+  api.post<StrategyInstance>(`/api/strategies/${id}/enable`).then((r) => r.data);
+export const pauseStrategy = (id: string) =>
+  api.post<StrategyInstance>(`/api/strategies/${id}/pause`).then((r) => r.data);
+export const flattenStrategy = (id: string) =>
+  api.post(`/api/strategies/${id}/flatten`).then((r) => r.data);
+export const triggerStrategy = (id: string, payload: Record<string, unknown> = {}) =>
+  api.post(`/api/strategies/${id}/trigger`, { payload }).then((r) => r.data);
+export const killAllStrategies = (flatten: boolean) =>
+  api.post("/api/strategies/kill-all", { flatten }).then((r) => r.data);
+export const getStrategyDecisions = (id: string, limit = 100) =>
+  api
+    .get<{ decisions: StrategyDecision[] }>(`/api/strategies/${id}/decisions`, {
+      params: { limit },
+    })
+    .then((r) => r.data.decisions);
+export const getSignals = (params: { limit?: number; type?: string; symbol?: string } = {}) =>
+  api.get<{ signals: SignalRecord[] }>("/api/signals", { params }).then((r) => r.data.signals);

@@ -13,6 +13,7 @@ import { OrderPanel } from "./components/Panels/OrderPanel";
 import { SizingPanel } from "./components/Panels/SizingPanel";
 import { StrategyPanel } from "./components/Panels/StrategyPanel";
 import { PositionsDrawer } from "./components/Positions/PositionsDrawer";
+import StrategiesPage from "./components/Strategies/StrategiesPage";
 import { useDesigner } from "./lib/useDesigner";
 import { useAccountStore } from "./store/accountStore";
 import { useStrategyStore } from "./store/strategyStore";
@@ -93,6 +94,8 @@ export default function App() {
 
       {view === "account" ? (
         <AccountPage />
+      ) : view === "strategies" ? (
+        <StrategiesPage />
       ) : (
         <>
           <main className="panel flex min-h-0 flex-1 flex-col">

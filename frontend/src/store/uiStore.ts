@@ -8,8 +8,10 @@ import type { Plan } from "../lib/api";
 
 export type PnlMode = "entry" | "live";
 
+export type View = "terminal" | "account" | "strategies";
+
 type UiState = {
-  view: "terminal" | "account";
+  view: View;
   /** Plan id the chart is viewing; null = designer mode. */
   viewingPlanId: string | null;
   /** Snapshot of a CLOSED plan being viewed (history rows aren't in the
@@ -19,7 +21,7 @@ type UiState = {
   pnlMode: PnlMode;
   /** Options chain side panel visibility. */
   chainOpen: boolean;
-  setView: (view: "terminal" | "account") => void;
+  setView: (view: View) => void;
   viewPosition: (planId: string) => void;
   viewHistorical: (plan: Plan) => void;
   closePositionView: () => void;
