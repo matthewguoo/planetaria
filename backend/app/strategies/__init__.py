@@ -18,4 +18,4 @@ def register(cls: type[Strategy]) -> type[Strategy]:
 
 # Built-in strategies self-register on import. Bottom of the module so the
 # decorator above exists; add new strategy modules here.
-from app.strategies import llm_probe, ref_tick  # noqa: E402,F401
+from app.strategies import earnings_reaction, llm_probe, ref_tick  # noqa: E402,F401
