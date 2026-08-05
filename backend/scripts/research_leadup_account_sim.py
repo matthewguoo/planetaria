@@ -192,19 +192,25 @@ def simulate(events: pd.DataFrame, panel: Panel, entry_mode: str,
         # 2) entries
         cands = sorted(per_day.get(session, []), key=lambda x: -x[2])[:max_new]
         if rng is not None and cands:
+            # Null: SAME day, SAME slot count, random liquid symbols with the
+            # same holding horizon — entries must be session-aligned or the
+            # walk is bookkeeping fiction.
             picks = []
             for _ in cands:
-                sym = liquid[rng.integers(len(liquid))]
-                gi = panel.by_sym[sym]
-                j = rng.integers(8, len(gi["dates"]) - lead - 1)
-                picks.append((sym, j + lead, 0.0))
+                for _try in range(20):
+                    sym = liquid[rng.integers(len(liquid))]
+                    i = panel.idx(sym, session)
+                    gi = panel.by_sym[sym]
+                    if i is not None and 7 <= i < len(gi["dates"]) - lead - 1:
+                        picks.append((sym, i + lead, 0.0))
+                        break
             cands = picks
         gross = sum(p["qty"] * p["entry_px"] for p in open_pos.values())
         for sym, exit_idx, _ in cands:
             if sym in open_pos:
                 continue
             g = panel.by_sym[sym]
-            i = panel.idx(sym, session) if rng is None else exit_idx - lead
+            i = panel.idx(sym, session)
             if i is None or i >= len(g["c"]):
                 continue
             entry_px = g["o"][i] if at_open else g["c"][i]
