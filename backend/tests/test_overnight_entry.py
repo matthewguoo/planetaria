@@ -175,7 +175,26 @@ class TestOvernightPrice:
         quote = await svc.overnight_price("spy")
         assert quote["ask"] == pytest.approx(772.93)
         assert quote["src"] == "overnight"
-        assert svc._stock_refs.get("SPY") == 1  # poller now owns freshness
+        # The subscription is a BORROW, released before returning: the poll
+        # loop iterates _stock_refs, so a lingering entry-pricing ref would
+        # pin the symbol into the 10s poller forever on skipped entries. A
+        # filled plan's freshness comes from the exit monitor's own ref.
+        assert svc._stock_refs.get("SPY", 0) == 0
+
+    async def test_ref_released_even_when_no_evidence(self, monkeypatch):
+        """The skip path (no tape at all -> None) must release the borrowed
+        ref too — skips are exactly the calls that never reach a monitor,
+        so a leak here would accumulate one pinned symbol per scan."""
+        svc = make_market()
+        monkeypatch.setattr(md, "is_overnight_et", lambda now: True)
+
+        async def quiet_poll(symbol):
+            pass
+
+        monkeypatch.setattr(svc, "_poll_overnight_once", quiet_poll)
+        for _ in range(3):
+            assert await svc.overnight_price("SPY") is None
+        assert svc._stock_refs.get("SPY", 0) == 0
 
     async def test_bar_beats_dead_quote(self, monkeypatch):
         """Restart case: bars rehydrate from Redis, the quote cache doesn't.

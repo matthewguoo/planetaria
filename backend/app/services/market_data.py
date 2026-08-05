@@ -565,35 +565,42 @@ class MarketDataService:
         quote (fetch_latest_stock_quote). Inside it, that REST book is a
         trap: IEX closed at 17:00 and latest-quote answers with the dead
         17:00 book — observed 18 points off the live Blue Ocean tape
-        (2026-08-04 e2e). So instead: subscribe the symbol (the 10s
-        overnight poller then keeps quote/bars fresh for the plan's whole
-        life, which the exit enforcer's TP/SL synthesis also needs) and
-        poll the latest overnight trade ONCE so the caller isn't waiting on
-        the next poll tick. Returns the freshest of the cached quote vs the
-        latest 1m bar as a quote-shaped dict (tape prints carry
-        bid == ask == last); None when there is no live evidence."""
+        (2026-08-04 e2e). So instead: BORROW a subscription (side effects
+        we want: bar backfill + stream registration), poll the latest
+        overnight trade ONCE so the caller isn't waiting on the next poll
+        tick, then RELEASE the ref. Refs must balance here — the poll loop
+        iterates _stock_refs, so an unreleased entry-pricing ref pins the
+        symbol into the 10s poller forever on every skipped or risk-blocked
+        entry. A plan that actually fills gets its freshness from the exit
+        monitor's OWN ref (subscribe on arm, release on close); the caches
+        this reads outlive the borrow. Returns the freshest of the cached
+        quote vs the latest 1m bar as a quote-shaped dict (tape prints
+        carry bid == ask == last); None when there is no live evidence."""
         symbol = symbol.upper()
         if not is_overnight_et(datetime.now(timezone.utc)):
             return await self.fetch_latest_stock_quote(symbol)
         await self.subscribe_stock(symbol)
-        if self.alpaca.configured:
-            try:
-                await self._poll_overnight_once(symbol)
-            except Exception as exc:
-                log.warning("one-shot overnight poll %s failed: %s", symbol, exc)
-        quote = self._latest_quotes.get(symbol)
-        bars = self.bars.get_bars(symbol, "1m", limit=1)
-        last_bar = bars[-1] if bars else None
-        now_ms = time.time() * 1000
-        q_ts = float(quote["ts"]) if quote and quote.get("mid") and quote.get("ts") else 0.0
-        bar_close = min(float(last_bar["t"]) + 60_000, now_ms) if last_bar else 0.0
-        if last_bar and bar_close > q_ts and float(last_bar["c"]) > 0:
-            # Bars outlive the quote cache (a restart hydrates them from
-            # Redis) — synthesize the tape print the bar recorded.
-            price = float(last_bar["c"])
-            return {"t": "quote", "symbol": symbol, "bid": price, "ask": price,
-                    "mid": price, "ts": int(bar_close), "src": "overnight-bar"}
-        return quote
+        try:
+            if self.alpaca.configured:
+                try:
+                    await self._poll_overnight_once(symbol)
+                except Exception as exc:
+                    log.warning("one-shot overnight poll %s failed: %s", symbol, exc)
+            quote = self._latest_quotes.get(symbol)
+            bars = self.bars.get_bars(symbol, "1m", limit=1)
+            last_bar = bars[-1] if bars else None
+            now_ms = time.time() * 1000
+            q_ts = float(quote["ts"]) if quote and quote.get("mid") and quote.get("ts") else 0.0
+            bar_close = min(float(last_bar["t"]) + 60_000, now_ms) if last_bar else 0.0
+            if last_bar and bar_close > q_ts and float(last_bar["c"]) > 0:
+                # Bars outlive the quote cache (a restart hydrates them from
+                # Redis) — synthesize the tape print the bar recorded.
+                price = float(last_bar["c"])
+                return {"t": "quote", "symbol": symbol, "bid": price, "ask": price,
+                        "mid": price, "ts": int(bar_close), "src": "overnight-bar"}
+            return quote
+        finally:
+            await self.unsubscribe_stock(symbol)
 
     async def _poll_overnight_once(self, symbol: str) -> None:
         """One-shot Blue Ocean latest-trade poll (same parse/dedupe/guards as
