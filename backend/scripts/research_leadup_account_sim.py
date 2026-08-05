@@ -58,6 +58,99 @@ START_EQUITY = 100_000.0
 N_ACCOUNT_BOOTS = 50
 
 
+SEC_UA = {"User-Agent": "planetaria/0.1 (contact: matthewguo.x86@gmail.com)"}
+UNIVERSE_N = 1000
+
+
+def build_universe_window(win_start: date, refresh: bool) -> dict[str, int]:
+    """ticker -> CIK, top UNIVERSE_N by dollar volume in the window's FIRST
+    sessions — no ranking on future liquidity. Residual survivorship: names
+    fully delisted since then are absent from today's ticker map; bear-
+    regime results stay slightly flattered and the doc says so."""
+    import httpx
+
+    CACHE.mkdir(exist_ok=True)
+    cache = CACHE / f"universe_{win_start}.parquet"
+    if cache.exists() and not refresh:
+        df = pd.read_parquet(cache)
+        return dict(zip(df["ticker"], df["cik"]))
+    with httpx.Client(headers=SEC_UA, timeout=30) as http:
+        rows = http.get("https://www.sec.gov/files/company_tickers.json").json()
+    tick2cik: dict[str, int] = {}
+    for row in rows.values():
+        t = str(row["ticker"]).upper()
+        if t and t.isalpha() and len(t) <= 5:
+            tick2cik.setdefault(t, int(row["cik_str"]))
+    symbols = sorted(tick2cik)
+    settings = get_settings()
+    client = StockHistoricalDataClient(settings.alpaca_api_key,
+                                       settings.alpaca_secret_key)
+    dv: dict[str, float] = {}
+    chunks = [symbols[i:i + 75] for i in range(0, len(symbols), 75)]
+    for n, chunk in enumerate(chunks):
+        try:
+            out = client.get_stock_bars(StockBarsRequest(
+                symbol_or_symbols=chunk, timeframe=TimeFrame.Day,
+                start=datetime.combine(win_start, datetime.min.time(), ET),
+                end=datetime.combine(win_start + timedelta(days=10),
+                                     datetime.min.time(), ET),
+                feed="sip"))
+        except Exception:
+            continue
+        for sym, bars in out.data.items():
+            if bars:
+                dv[sym] = float(bars[-1].close) * float(bars[-1].volume)
+        if n % 25 == 0:
+            print(f"  universe@{win_start}: chunk {n}/{len(chunks)}")
+        _time.sleep(0.3)
+    top = sorted(dv, key=dv.get, reverse=True)[:UNIVERSE_N]
+    df = pd.DataFrame({"ticker": top, "cik": [tick2cik[t] for t in top]})
+    df.to_parquet(cache)
+    return dict(zip(df["ticker"], df["cik"]))
+
+
+def fetch_calendar_window(win_start: date, win_end: date,
+                          refresh: bool) -> pd.DataFrame:
+    """EDGAR 2.02 events inside [win_start, win_end] for the start-ranked
+    universe. acceptanceDateTime is ET-mislabeled-Z (verified 2026-08-04)."""
+    import httpx
+
+    cache = CACHE / f"edgar_cal_{win_start}_{win_end}.parquet"
+    if cache.exists() and not refresh:
+        return pd.read_parquet(cache)
+    universe = build_universe_window(win_start, refresh)
+    lo, hi = win_start.isoformat(), win_end.isoformat()
+    rows: list[dict] = []
+    with httpx.Client(headers=SEC_UA, timeout=30) as http:
+        for n, (ticker, cik) in enumerate(sorted(universe.items())):
+            try:
+                recent = http.get(
+                    f"https://data.sec.gov/submissions/CIK{cik:010d}.json"
+                ).json()["filings"]["recent"]
+            except Exception:
+                continue
+            for i in range(len(recent["form"])):
+                if recent["form"][i] != "8-K":
+                    continue
+                if not (lo <= recent["filingDate"][i] <= hi):
+                    continue
+                if "2.02" not in (recent.get("items") or [""] * 99999)[i]:
+                    continue
+                acc = recent["acceptanceDateTime"][i][:19]
+                hhmm = int(acc[11:13]) * 60 + int(acc[14:16])
+                hour = "amc" if hhmm >= 16 * 60 else (
+                    "bmo" if hhmm < 9 * 60 + 30 else "dmh")
+                rows.append({"symbol": ticker, "date": acc[:10], "hour": hour})
+            if n % 200 == 0:
+                print(f"  edgar cal {win_start}: {n}/{len(universe)}")
+            _time.sleep(0.12)
+    df = pd.DataFrame(rows).drop_duplicates(subset=["symbol", "date"])
+    df = df[df["hour"] != "dmh"]
+    df.to_parquet(cache)
+    print(f"  calendar {win_start}..{win_end}: {len(df)} events")
+    return df
+
+
 def fetch_ohlc(symbols: list[str], start: date, end: date,
                refresh: bool) -> pd.DataFrame:
     cache = CACHE / f"bars_ohlc_{start}_{end}_{len(symbols)}.parquet"
@@ -132,7 +225,8 @@ def bracket_for(g: dict, entry_idx: int) -> tuple[float, float]:
 
 
 def simulate(events: pd.DataFrame, panel: Panel, entry_mode: str,
-             max_new: int, rng=None) -> dict:
+             max_new: int, start_equity: float = START_EQUITY,
+             rng=None) -> dict:
     """entry_mode: T3_close | T2_close | T1_open. rng -> random-null account
     (same slot counts, random symbol/date entries)."""
     lead = {"T3_close": 3, "T2_close": 2, "T1_open": 1}[entry_mode]
@@ -156,11 +250,11 @@ def simulate(events: pd.DataFrame, panel: Panel, entry_mode: str,
             (ev["symbol"], exit_idx, float(g["dv"][entry_idx - 1])))
 
     liquid = list(panel.by_sym)
-    equity = START_EQUITY
+    equity = start_equity
     curve = []
     open_pos: dict[str, dict] = {}
     stats = {"trades": 0, "tp": 0, "sl": 0, "deadline": 0, "wins": 0,
-             "skipped_full": 0}
+             "skipped_full": 0, "skipped_price": 0}
 
     for session in panel.sessions:
         # 1) exits first (bracket walk on today's H/L, else deadline close)
@@ -221,7 +315,10 @@ def simulate(events: pd.DataFrame, panel: Panel, entry_mode: str,
             if gross + notional > equity * GROSS_CAP:
                 stats["skipped_full"] += 1
                 continue
-            qty = notional / entry_px
+            qty = float(int(notional // entry_px))  # whole shares: limit-order reality
+            if qty < 1:
+                stats["skipped_price"] += 1  # can't afford one share at this size
+                continue
             open_pos[sym] = {
                 "qty": qty, "entry_px": entry_px, "exit_idx": exit_idx,
                 "sl_px": entry_px * (1 - sl), "tp_px": entry_px * (1 + tp),
@@ -234,22 +331,26 @@ def simulate(events: pd.DataFrame, panel: Panel, entry_mode: str,
     curve_arr = np.array(curve)
     peak = np.maximum.accumulate(curve_arr)
     max_dd = float(((curve_arr - peak) / peak).min() * 100)
-    total = (curve_arr[-1] / START_EQUITY - 1) * 100
+    total = (curve_arr[-1] / start_equity - 1) * 100
     return {"entry": entry_mode, "final": round(float(curve_arr[-1]), 0),
             "ret_pct": round(float(total), 1), "max_dd_pct": round(max_dd, 1),
             **{k: stats[k] for k in ("trades", "tp", "sl", "deadline",
-                                     "skipped_full")},
+                                     "skipped_full", "skipped_price")},
             "win_pct": round(100 * stats["wins"] / max(stats["trades"], 1), 1)}
 
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--max-new", type=int, default=10)
-    ap.add_argument("--months", type=int, default=18)
+    ap.add_argument("--equity", type=float, default=START_EQUITY)
+    ap.add_argument("--start", default="2025-02-01")
+    ap.add_argument("--end", default="2026-08-01")
     ap.add_argument("--refresh", action="store_true")
     args = ap.parse_args()
 
-    cal = pd.read_parquet(CACHE / f"edgar_calendar_{args.months}m.parquet")
+    win_start = date.fromisoformat(args.start)
+    win_end = date.fromisoformat(args.end)
+    cal = fetch_calendar_window(win_start, win_end, args.refresh)
     cal["date"] = pd.to_datetime(cal["date"]).dt.date
     start = min(cal["date"]) - timedelta(days=21)
     end = min(max(cal["date"]) + timedelta(days=5), date.today())
@@ -261,17 +362,18 @@ def main() -> None:
     spy = panel.by_sym.get("SPY")
     spy_ret = (spy["c"][-1] / spy["c"][0] - 1) * 100 if spy is not None else None
 
-    rows = [simulate(cal, panel, mode, args.max_new)
+    rows = [simulate(cal, panel, mode, args.max_new, args.equity)
             for mode in ("T3_close", "T2_close", "T1_open")]
     null_finals = []
     for b in range(N_ACCOUNT_BOOTS):
-        r = simulate(cal, panel, "T3_close", args.max_new,
+        r = simulate(cal, panel, "T3_close", args.max_new, args.equity,
                      rng=np.random.default_rng(1000 + b))
         null_finals.append(r["ret_pct"])
     nf = np.array(null_finals)
 
     out = pd.DataFrame(rows)
-    print("\n=== ACCOUNT SIM ($100k, engine sizing/caps, vol brackets, "
+    print(f"\n=== ACCOUNT SIM (${args.equity:,.0f}, {win_start}..{win_end}, "
+          f"whole shares, engine sizing/caps, vol brackets, "
           f"max {args.max_new} entries/day) ===")
     print(out.to_string(index=False))
     print(f"\nrandom-entry account null (T3 slots, {N_ACCOUNT_BOOTS} boots): "
@@ -282,9 +384,12 @@ def main() -> None:
 
     stamp = datetime.now(ET).strftime("%Y%m%d")
     doc = (Path(__file__).resolve().parent.parent.parent / "docs" / "notes"
-           / f"leadup_account_sim_{stamp}.md")
+           / f"leadup_account_sim_{stamp}_{win_start}_{int(args.equity/1000)}k.md")
     doc.write_text(
-        f"# Lead-up ACCOUNT simulation — {datetime.now(ET):%Y-%m-%d}\n\n"
+        f"# Lead-up ACCOUNT sim — ${args.equity:,.0f}, {win_start}..{win_end}"
+        f" — {datetime.now(ET):%Y-%m-%d}\n\n"
+        "Universe ranked at WINDOW START (residual survivorship: fully "
+        "delisted names absent from today's ticker map). Whole shares.\n\n"
         f"Engine rules: risk {RISK_PCT}%/name at vol-scaled stop "
         f"(x{SL_MULT}, {SL_FLOOR:.0%}..{SL_CAP:.0%}, TP=2xSL), caps "
         f"{PER_NAME_CAP:.0%}/name {GROSS_CAP:.0%} gross, max "
