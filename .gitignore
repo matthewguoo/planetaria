@@ -29,3 +29,4 @@ Thumbs.db
 backend/trader.db
 *.db
 backend/scripts/_ict_cache/
+backend/scripts/_leadup_cache/
