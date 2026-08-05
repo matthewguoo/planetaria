@@ -46,44 +46,102 @@ from app.config import get_settings  # noqa: E402
 
 ET = ZoneInfo("America/New_York")
 CACHE = Path(__file__).resolve().parent / "_leadup_cache"
-FINNHUB_URL = "https://finnhub.io/api/v1/calendar/earnings"
 
 ENTRY_DAYS = (5, 3, 2)     # sessions before announce-day to enter (at close)
 N_BOOT = 200
 COST_BP_SIDE = 3.0         # 2bp fees-ish + spread proxy, per side
+UNIVERSE_N = 1000          # top-N by dollar volume
+
+SEC_UA = {"User-Agent": "planetaria/0.1 (contact: matthewguo.x86@gmail.com)"}
 
 
 # ------------------------------------------------------------- calendar
+# Finnhub's FREE tier serves only ~1 month of calendar history (verified
+# 2026-08-05: an 18-month day-paged pull returned ~1.3k events, all within
+# ~1 month) — useless for an event study. EDGAR is the primary source
+# instead: every historical announcement is an 8-K with Item 2.02 in the
+# per-company submissions JSON, with acceptanceDateTime (ET mislabeled Z,
+# verified 2026-08-04) giving empirical BMO/AMC classification.
+
+def build_universe(refresh: bool) -> dict[str, int]:
+    """ticker -> CIK for the top UNIVERSE_N by yesterday's dollar volume."""
+    CACHE.mkdir(exist_ok=True)
+    cache = CACHE / "universe.parquet"
+    if cache.exists() and not refresh:
+        df = pd.read_parquet(cache)
+        return dict(zip(df["ticker"], df["cik"]))
+    with httpx.Client(headers=SEC_UA, timeout=30) as http:
+        rows = http.get("https://www.sec.gov/files/company_tickers.json").json()
+    tick2cik: dict[str, int] = {}
+    for row in rows.values():
+        t = str(row["ticker"]).upper()
+        if t and t.isalpha() and len(t) <= 5:
+            tick2cik.setdefault(t, int(row["cik_str"]))
+    symbols = sorted(tick2cik)
+    settings = get_settings()
+    client = StockHistoricalDataClient(settings.alpaca_api_key,
+                                       settings.alpaca_secret_key)
+    end = datetime.now(ET).replace(hour=0, minute=0, second=0, microsecond=0)
+    dv: dict[str, float] = {}
+    chunks = [symbols[i:i + 75] for i in range(0, len(symbols), 75)]
+    for n, chunk in enumerate(chunks):
+        try:
+            out = client.get_stock_bars(StockBarsRequest(
+                symbol_or_symbols=chunk, timeframe=TimeFrame.Day,
+                start=end - timedelta(days=6), end=end, feed="sip"))
+        except Exception:
+            continue
+        for sym, bars in out.data.items():
+            if bars:
+                dv[sym] = float(bars[-1].close) * float(bars[-1].volume)
+        if n % 25 == 0:
+            print(f"  universe: chunk {n}/{len(chunks)}")
+        _time.sleep(0.3)
+    top = sorted(dv, key=dv.get, reverse=True)[:UNIVERSE_N]
+    df = pd.DataFrame({"ticker": top, "cik": [tick2cik[t] for t in top]})
+    df.to_parquet(cache)
+    print(f"  universe: {len(df)} tickers")
+    return dict(zip(df["ticker"], df["cik"]))
+
 
 def fetch_calendar(months: int, refresh: bool) -> pd.DataFrame:
+    """symbol/date/hour rows from each company's EDGAR 8-K history."""
     CACHE.mkdir(exist_ok=True)
-    end = date.today() - timedelta(days=7)   # complete events only
-    start = end - timedelta(days=months * 30)
-    cache = CACHE / f"calendar_{start}_{end}.parquet"
+    cache = CACHE / f"edgar_calendar_{months}m.parquet"
     if cache.exists() and not refresh:
         return pd.read_parquet(cache)
-    settings = get_settings()
-    if not settings.finnhub_api_key:
-        raise SystemExit("FINNHUB_API_KEY required")
+    universe = build_universe(refresh)
+    cutoff = (date.today() - timedelta(days=months * 30)).isoformat()
     rows: list[dict] = []
-    day = start
-    with httpx.Client(headers={"X-Finnhub-Token": settings.finnhub_api_key},
-                      timeout=20) as http:
-        while day <= end:
-            for attempt in range(3):
-                r = http.get(FINNHUB_URL, params={"from": day.isoformat(),
-                                                  "to": day.isoformat()})
-                if r.status_code == 429:
-                    _time.sleep(15)
+    with httpx.Client(headers=SEC_UA, timeout=30) as http:
+        for n, (ticker, cik) in enumerate(sorted(universe.items())):
+            try:
+                sub = http.get(
+                    f"https://data.sec.gov/submissions/CIK{cik:010d}.json"
+                ).json()
+                recent = sub["filings"]["recent"]
+            except Exception:
+                continue
+            for i in range(len(recent["form"])):
+                if recent["form"][i] != "8-K":
                     continue
-                r.raise_for_status()
-                rows.extend((r.json() or {}).get("earningsCalendar") or [])
-                break
-            day += timedelta(days=1)
-            _time.sleep(1.05)  # 60/min free-tier budget
-    df = pd.DataFrame(rows)
+                if "2.02" not in (recent.get("items") or [""] * 9999)[i]:
+                    continue
+                if recent["filingDate"][i] < cutoff:
+                    continue
+                # acceptanceDateTime: value is EASTERN, suffix lies (Z).
+                acc = recent["acceptanceDateTime"][i][:19]
+                hhmm = int(acc[11:13]) * 60 + int(acc[14:16])
+                hour = "amc" if hhmm >= 16 * 60 else (
+                    "bmo" if hhmm < 9 * 60 + 30 else "dmh")
+                rows.append({"symbol": ticker, "date": acc[:10], "hour": hour})
+            if n % 100 == 0:
+                print(f"  edgar calendar: {n}/{len(universe)} companies")
+            _time.sleep(0.12)  # ~8 req/s, under the SEC's 10/s ceiling
+    df = pd.DataFrame(rows).drop_duplicates(subset=["symbol", "date"])
+    df = df[df["hour"] != "dmh"]  # mid-session releases: different animal
     df.to_parquet(cache)
-    print(f"  calendar: {len(df)} reporter-events {start}..{end}")
+    print(f"  calendar: {len(df)} EDGAR 2.02 events for {len(universe)} tickers")
     return df
 
 
@@ -193,11 +251,16 @@ def run(months: int, min_dollar_vol: float, refresh: bool) -> None:
     # Null: random matched-horizon holds on the same (liquid) symbol panel.
     liquid_pool = [(s, g["open"].to_numpy(), g["close"].to_numpy())
                    for s, g in by_sym.items()
-                   if len(g) > 40 and g["dv"].median() >= min_dollar_vol]
+                   if len(g) > 60 and g["dv"].median() >= min_dollar_vol]
+    if not liquid_pool:
+        raise SystemExit("empty liquid pool - bars window too thin for a null")
 
     def null_draw(horizon_sessions: int, intraday: bool) -> float:
         _, opens, closes = liquid_pool[rng.integers(len(liquid_pool))]
-        i = rng.integers(1, len(closes) - max(horizon_sessions, 1) - 1)
+        hi = len(closes) - max(horizon_sessions, 1) - 1
+        if hi <= 1:
+            return 0.0
+        i = rng.integers(1, hi)
         if intraday:
             entry = opens[i]
             exit_ = closes[i]
