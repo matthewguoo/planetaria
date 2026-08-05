@@ -409,8 +409,19 @@ class EarningsReaction(Strategy):
     async def _manual(self, event: Event, ctx: StrategyContext) -> None:
         """Dry-run hook: {"symbol": X, "text": Y[, "px0": P]} runs the
         decision path for X as if its release just crossed. Unwatched
-        symbols need px0 (no snapshot exists)."""
+        symbols need px0 (no snapshot exists).
+
+        {"cmd": "build_watchlist"} freezes the watchlist NOW — the
+        late-boot salvage (born 2026-08-05: the engine was down through
+        the 15:30 tick and the night had no watchlist). px0 = current
+        price, a correct pre-release anchor only for names that have NOT
+        reported yet; already-reported names hold a stale anchor but
+        cannot re-fire their filing event (journal dedupe), so at worst a
+        follow-up headline produces a no_trade note against a flat move."""
         p = event.payload or {}
+        if p.get("cmd") == "build_watchlist":
+            await self._build_watchlist(ctx)
+            return
         sym = str(p.get("symbol") or "").upper()
         text = str(p.get("text") or "")
         if not sym or not text:

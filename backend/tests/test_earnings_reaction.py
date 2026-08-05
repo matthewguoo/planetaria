@@ -353,6 +353,30 @@ class TestEligibility:
 
 @pytest.mark.asyncio
 class TestManualDryRun:
+    async def test_manual_build_watchlist_salvages_late_boot(self, rig):
+        """Engine booted after 15:30: the command freezes the watchlist
+        without a timer tick, and the normal decision path works after."""
+        row = await rig.runner.create("earnings_reaction", "earn", {})
+        await rig.runner.set_state(row["id"], "enabled")
+        rig.market.prices["AMD"] = (500.0, 500.5)
+        rig.market.daily["AMD"] = [{"date": "2026-08-04", "close": 490.0,
+                                    "volume": 1e6}]
+        await publish_estimate(rig, "AMD")
+
+        event = Event(type="manual", ts=datetime.now(timezone.utc),
+                      source="api", key=None, symbols=(),
+                      payload={"strategy_id": row["id"],
+                               "cmd": "build_watchlist"})
+        journaled, _ = await rig.store.record(event)
+        rig.bus.publish(journaled)
+
+        note = await wait_note(rig, row["id"], "watchlist")
+        assert note["detail"]["watchlist"]["AMD"]["px0"] == 500.25
+
+        rig.market.prices["AMD"] = (510.0, 510.5)
+        await publish_release(rig, "AMD")
+        assert await wait_note(rig, row["id"], "would_trade")
+
     async def test_unwatched_needs_px0(self, rig):
         row = await rig.runner.create("earnings_reaction", "earn", {})
         await rig.runner.set_state(row["id"], "enabled")
