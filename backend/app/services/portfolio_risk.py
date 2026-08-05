@@ -110,7 +110,7 @@ def plan_stop_risk(plan: TradePlan) -> float:
     """Dollars lost if this plan exits exactly at its stop (per current or
     would-be quantity). Gap-through can exceed this — it is the PLANNED risk."""
     basis = plan.fill_premium if plan.fill_premium is not None else plan.entry_limit
-    per_set = max(basis - plan.sl_premium, 0.0) * 100.0
+    per_set = max(basis - plan.sl_premium, 0.0) * plan.contract_multiplier
     qty = plan.effective_qty if plan.filled_qty is not None else plan.qty
     return per_set * max(qty, 0)
 
@@ -170,6 +170,11 @@ class PortfolioRisk:
         """Aggregate $-greeks for one plan (per its full quantity)."""
         qty = plan.effective_qty if plan.filled_qty is not None else plan.qty
         agg = {"delta_dollars": 0.0, "vega_per_pt": 0.0, "theta_per_day": 0.0, "rho_per_pct": 0.0}
+        if plan.asset_class == "equity":
+            # Shares are pure delta-1: no vega/theta/rho, no BSM inputs.
+            for leg in plan.legs:
+                agg["delta_dollars"] += qty * leg.get("ratio", 1) * leg["side"] * spot
+            return agg
         for leg in plan.legs:
             tau = trading_hours_to_expiry(leg["expiry"], now_ms) / TRADING_HOURS_PER_YEAR
             sigma = float(leg.get("iv") or 0) or FALLBACK_IV

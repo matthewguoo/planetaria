@@ -24,8 +24,39 @@ import logging
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 log = logging.getLogger("app.clock")
+
+_ET = ZoneInfo("America/New_York")
+
+
+def equity_session(now: datetime | None = None) -> str | None:
+    """Tradable EQUITY session at `now`, or None during the weekend gap.
+
+    The broker clock above only knows RTH; equities are tradable 24/5
+    (verified 2026-08-04: extended_hours DAY limits fill premarket, post-
+    market AND overnight). The overnight (Blue Ocean) week runs Sunday
+    20:00 ET through Friday 20:00 ET. LIMIT ORDERS ONLY outside RTH —
+    market orders are silently queued for the next open, not rejected
+    (verified same date), so the exit ladder must never submit one."""
+    now = (now or datetime.now(_ET)).astimezone(_ET)
+    weekday, hhmm = now.weekday(), now.hour * 60 + now.minute
+    if weekday == 5:  # Saturday
+        return None
+    if weekday == 6:  # Sunday: overnight session opens 20:00
+        return "overnight" if hhmm >= 20 * 60 else None
+    if weekday == 4 and hhmm >= 20 * 60:  # Friday close of the 24/5 week
+        return None
+    if hhmm < 4 * 60:
+        return "overnight"
+    if hhmm < 9 * 60 + 30:
+        return "premarket"
+    if hhmm < 16 * 60:
+        return "rth"
+    if hhmm < 20 * 60:
+        return "postmarket"
+    return "overnight"
 
 
 def _as_utc(value) -> datetime | None:

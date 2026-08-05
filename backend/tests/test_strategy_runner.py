@@ -215,16 +215,18 @@ class TestIntentGate:
         assert actions == ["intent", "placed"]
 
     @pytest.mark.asyncio
-    async def test_equity_intents_gated_until_phase4(self, rig):
+    async def test_equity_intent_flows_with_flags(self, rig):
         row = await rig.runner.create("dummy", "eq", {})
         await rig.runner.set_state(row["id"], "enabled")
-        with pytest.raises(ValueError, match="equity"):
-            await rig.runner.execute_intent(row["id"], option_intent(
-                asset_class="equity",
-                legs=[{"symbol": "SPY", "side": 1, "ratio": 1, "entry": 700.0}],
-            ))
-        assert (await actions_for(rig.db, row["id"]))[-1] == "rejected"
-        assert rig.trade.placed == []
+        await rig.runner.execute_intent(row["id"], option_intent(
+            asset_class="equity", extended_hours=True,
+            legs=[{"symbol": "SPY", "side": 1, "ratio": 1, "entry": 700.0}],
+            entry_limit=700.0, tp=703.0, sl=696.0,
+        ))
+        payload = rig.trade.placed[-1]
+        assert payload["asset_class"] == "equity"
+        assert payload["extended_hours"] is True
+        assert payload["strategy_id"] == row["id"]
 
     @pytest.mark.asyncio
     async def test_dedupe_key_places_once_ever(self, rig):

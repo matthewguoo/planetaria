@@ -271,11 +271,6 @@ class StrategyRunner:
             }, dedupe_key=intent.dedupe_key, signal_ids=signal_ids)
             return ValueError(why)
 
-        # Phase 3 restriction: the equity order path lands in Phase 4.
-        if intent.asset_class != "option":
-            raise await refuse("rejected", "equity intents not supported yet "
-                                           "(engine phase 4 pending)")
-
         # Stale-event guard: never trade on old news after a restart or a
         # backed-up queue. Uses journal timestamps, not wall-clock trust.
         if signal_ids:
@@ -305,10 +300,11 @@ class StrategyRunner:
 
         # Per-strategy budget (layered UNDER the global guards, both must pass).
         params = running.ctx.params if running else {}
+        multiplier = 1 if intent.asset_class == "equity" else 100
         violations = await self.risk.validate_strategy_budget(
             strategy_name=name,
             budget=(params or {}).get("budget"),
-            intent_notional=abs(intent.entry_limit) * 100 * intent.qty,
+            intent_notional=abs(intent.entry_limit) * multiplier * intent.qty,
             symbol=intent.underlying,
         )
         if violations:
@@ -317,6 +313,9 @@ class StrategyRunner:
         payload = {
             "underlying": intent.underlying,
             "strategy": name[:24],
+            "strategy_id": row_id,
+            "asset_class": intent.asset_class,
+            "extended_hours": intent.extended_hours,
             "legs": intent.legs,
             "qty": intent.qty,
             "entry_limit": intent.entry_limit,

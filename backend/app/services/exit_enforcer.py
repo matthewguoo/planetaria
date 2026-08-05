@@ -23,7 +23,7 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 from app.models.trade import OPEN_STATUSES, TradePlan, as_utc
-from app.services.market_clock import MarketClock
+from app.services.market_clock import MarketClock, equity_session
 from app.services.plan_fsm import MONITOR_STATES, PlanEvent
 from app.services.trade_service import TradeService, position_mid_from_quotes, round_tick
 
@@ -32,6 +32,10 @@ MONITOR_STATUSES = {s.value for s in MONITOR_STATES}
 log = logging.getLogger("app.enforcer")
 
 ESCALATION = [(0.02, 5.0), (0.06, 5.0), (None, 0.0)]  # (buffer, wait_after)
+# Equity ladder outside RTH: the market rung is FORBIDDEN (verified
+# 2026-08-04: after-hours market orders are silently queued for the next
+# open, not rejected) — substitute this very aggressive marketable limit.
+EQUITY_AFTER_HOURS_MARKET_BUFFER = 0.10
 
 # SL trigger stack (see fair_value.py for the estimator): TP/SL act on a
 # Kalman fair value (microprice observations weighted by quote quality,
@@ -715,17 +719,24 @@ class ExitEnforcer:
             entry_ttl_min = float(risk_cfg["entry_ttl_min"])
             sl_confirm_s = float(risk_cfg.get("sl_confirm_s", 3.0))
             symbols = [leg["symbol"] for leg in plan.legs]
-            await self.market.subscribe_options(symbols)
-
+            is_equity = plan.asset_class == "equity"
             underlying = plan.underlying
-            await self.market.subscribe_stock(underlying)
 
             queue: asyncio.Queue = asyncio.Queue(maxsize=200)
-            for sym in symbols:
-                self.market.broadcast.subscribe(f"oquote:{sym}", queue)
-            # Underlying ticks stream far more often than option quotes — they
-            # are the fast SL trigger (model-value proximity check below).
-            self.market.broadcast.subscribe(f"quote:{underlying}", queue)
+            if is_equity:
+                # Shares: the stock quote IS the position quote — one
+                # subscription, no option legs, no BSM model path.
+                for sym in symbols:
+                    await self.market.subscribe_stock(sym)
+                    self.market.broadcast.subscribe(f"quote:{sym}", queue)
+            else:
+                await self.market.subscribe_options(symbols)
+                await self.market.subscribe_stock(underlying)
+                for sym in symbols:
+                    self.market.broadcast.subscribe(f"oquote:{sym}", queue)
+                # Underlying ticks stream far more often than option quotes — they
+                # are the fast SL trigger (model-value proximity check below).
+                self.market.broadcast.subscribe(f"quote:{underlying}", queue)
             self.market.broadcast.subscribe("plans", queue)
 
             log.info("monitor armed: plan %s TP=%.2f SL=%.2f stop=%s",
@@ -733,9 +744,9 @@ class ExitEnforcer:
             # Seed the quote cache NOW (REST / demo-synth): a leg that never
             # ticks on the stream must not leave TP/SL unevaluable.
             try:
-                await self.market.refresh_option_quotes(symbols, max_age_s=0)
+                await self._refresh_plan_quotes(plan, symbols, max_age_s=0)
             except Exception as exc:
-                log.warning("initial option quote seed failed for %s: %s", plan_id, exc)
+                log.warning("initial quote seed failed for %s: %s", plan_id, exc)
             last_no_mid_warn = 0.0
             last_plan_fetch = 0.0
             next_tp_rest_try = 0.0
@@ -801,7 +812,7 @@ class ExitEnforcer:
                         and plan.exit_order_id
                         and plan_id in self._parked
                     ):
-                        if await self.clock.is_open():
+                        if await self._session_open(plan):
                             lock = self._exit_locks.get(plan_id)
                             if lock is None or not lock.locked():
                                 log.warning(
@@ -853,8 +864,8 @@ class ExitEnforcer:
                             # tight (1s) near a threshold or while no-mid,
                             # relaxed when far — otherwise the 30s default
                             # throttle defeats the tight re-check loop.
-                            await self.market.refresh_option_quotes(
-                                symbols, max_age_s=min(30.0, max(wait_s, 1.0))
+                            await self._refresh_plan_quotes(
+                                plan, symbols, max_age_s=min(30.0, max(wait_s, 1.0))
                             )
                         except Exception as exc:
                             log.warning("quote poll failed for %s: %s", plan_id, exc)
@@ -868,7 +879,9 @@ class ExitEnforcer:
                     # Underlying tick: model-value proximity check. If the
                     # modeled premium is at/near a threshold, force-refresh
                     # the option quotes NOW instead of waiting for a tick.
-                    if msg is not None and msg.get("t") == "quote":
+                    # (Options only: for shares the stock quote IS the
+                    # position observation — no model between them.)
+                    if not is_equity and msg is not None and msg.get("t") == "quote":
                         spot = float(msg.get("mid") or 0)
                         mv = model_position_value(plan, spot, time.time() * 1000)
                         if mv is not None:
@@ -886,7 +899,7 @@ class ExitEnforcer:
                                     log.warning("model-trigger refresh failed for %s: %s",
                                                 plan_id, exc)
 
-                    quotes = {s: self.market.latest_quote(s) for s in symbols}
+                    quotes = self._plan_quotes(plan, symbols)
                     stats = position_quote_stats(plan.legs, quotes)
                     if stats is None:
                         # Keep trying at the tight cadence until quotes appear.
@@ -969,7 +982,7 @@ class ExitEnforcer:
                         # the clock runs on the breach.
                         wait_s = min(wait_s, 0.5)
                         try:
-                            await self.market.refresh_option_quotes(symbols, max_age_s=0.5)
+                            await self._refresh_plan_quotes(plan, symbols, max_age_s=0.5)
                         except Exception:
                             pass
                     elif sl_breach_since is not None and (
@@ -979,12 +992,17 @@ class ExitEnforcer:
                                  plan.id, fv)
                         sl_breach_since = None
             finally:
-                for sym in symbols:
-                    self.market.broadcast.unsubscribe(f"oquote:{sym}", queue)
-                self.market.broadcast.unsubscribe(f"quote:{underlying}", queue)
+                if is_equity:
+                    for sym in symbols:
+                        self.market.broadcast.unsubscribe(f"quote:{sym}", queue)
+                        await self.market.unsubscribe_stock(sym)
+                else:
+                    for sym in symbols:
+                        self.market.broadcast.unsubscribe(f"oquote:{sym}", queue)
+                    self.market.broadcast.unsubscribe(f"quote:{underlying}", queue)
+                    await self.market.unsubscribe_options(symbols)
+                    await self.market.unsubscribe_stock(underlying)
                 self.market.broadcast.unsubscribe("plans", queue)
-                await self.market.unsubscribe_options(symbols)
-                await self.market.unsubscribe_stock(underlying)
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -1003,6 +1021,71 @@ class ExitEnforcer:
             await self.arm(plan_id)
 
     # ------------------------------------------------------------ exits
+
+    async def _refresh_plan_quotes(self, plan: TradePlan, symbols: list[str],
+                                   max_age_s: float) -> None:
+        """Force-refresh the quotes a plan's TP/SL evaluates on. Options go
+        through the option REST path; equities through the staleness-aware
+        stock quote fetch (internally throttled)."""
+        if plan.asset_class == "equity":
+            for sym in symbols:
+                await self.market.fetch_latest_stock_quote(sym)
+        else:
+            await self.market.refresh_option_quotes(symbols, max_age_s=max_age_s)
+
+    def _plan_quotes(self, plan: TradePlan, symbols: list[str]) -> dict:
+        """Quotes keyed by symbol for TP/SL evaluation. Equity extra: in the
+        overnight session the quote book is silent but Blue Ocean TRADES
+        print (the overnight poller rolls them into 1m bars) — when the
+        freshest bar is newer than the cached quote, observe the trade tape
+        instead, as a synthetic two-sided quote with ~10bps half-spread. The
+        Kalman layer treats that uncertainty honestly, and it beats freezing
+        the bracket on an 8pm quote all night."""
+        quotes = {s: self.market.latest_quote(s) for s in symbols}
+        if plan.asset_class != "equity":
+            return quotes
+        for sym in symbols:
+            try:
+                bars = self.market.bars.get_bars(sym, "1m", limit=1)
+            except Exception:
+                continue
+            if not bars:
+                continue
+            bar = bars[-1]
+            bar_ts = float(bar.get("t") or 0)
+            quote_ts = float((quotes.get(sym) or {}).get("ts") or 0)
+            price = float(bar.get("c") or 0)
+            if bar_ts > quote_ts and price > 0:
+                half_spread = max(price * 0.001, 0.01)
+                quotes[sym] = {
+                    "bid": round(price - half_spread, 4),
+                    "ask": round(price + half_spread, 4),
+                    "mid": price,
+                    "ts": bar_ts,
+                    "synthetic": "overnight-trade",
+                }
+        return quotes
+
+    async def _session_open(self, plan: TradePlan) -> bool:
+        """Can exit orders WORK right now for this plan? Options: the broker
+        RTH clock (fail-open). Equity plans flagged extended_hours: the
+        verified 24/5 session map — limit orders fill premarket, postmarket
+        and overnight, so only the weekend gap parks them."""
+        if plan.asset_class == "equity" and plan.extended_hours:
+            return equity_session() is not None
+        return await self.clock.is_open()
+
+    async def _rung_limit(self, plan: TradePlan, mid: float,
+                          buffer: float | None) -> float | None:
+        """Ladder rung price. None means market order — FORBIDDEN for
+        equities outside RTH (after-hours market orders queue silently for
+        the next open, verified 2026-08-04): substitute a very aggressive
+        marketable limit instead."""
+        if buffer is None:
+            if plan.asset_class == "equity" and not await self.clock.is_open():
+                return round_tick(mid - abs(mid) * EQUITY_AFTER_HOURS_MARKET_BUFFER)
+            return None
+        return round_tick(mid - abs(mid) * buffer)
 
     async def _execute_exit(self, plan_id: str, reason: str) -> None:
         """Escalation ladder, then a verification loop: this must not return
@@ -1033,7 +1116,7 @@ class ExitEnforcer:
         # churn). Park one resting limit instead; the monitor resumes the
         # ladder at the next open. Keyless mode skips this — simulated fills
         # land instantly regardless of the session.
-        if self.trade.alpaca.configured and not await self.clock.is_open():
+        if self.trade.alpaca.configured and not await self._session_open(plan):
             await self._park_exit_locked(plan_id, reason)
             return
         token = uuid4().hex[:6]
@@ -1055,7 +1138,7 @@ class ExitEnforcer:
                 mid = plan.sl_premium
             # Marketable = accept a WORSE position value: sign-agnostic shift
             # downward by |mid|*buffer (long: sell lower; short: buy back higher).
-            limit = None if buffer is None else round_tick(mid - abs(mid) * buffer)
+            limit = await self._rung_limit(plan, mid, buffer)
             key = f"{token}r{rung}"
             self._ghost_keys.setdefault(plan_id, []).append(key)
             try:
@@ -1137,15 +1220,15 @@ class ExitEnforcer:
         resubmit_failures = 0
         for attempt in range(self.verify_attempts):
             await asyncio.sleep(self.verify_poll_s)
+            plan = await self.trade.get_plan(plan_id)
             # Market closed mid-verify (a late-day ladder ran into the bell):
             # stop driving — park and let the monitor resume at the open.
-            if self.trade.alpaca.configured and not await self.clock.is_open():
+            if self.trade.alpaca.configured and not await self._session_open(plan):
                 log.warning(
                     "market closed during exit verification for %s - parking", plan_id
                 )
                 await self._park_exit_locked(plan_id, reason)
                 return
-            plan = await self.trade.get_plan(plan_id)
             if plan.status in ("closed", "cancelled", "rejected"):
                 await self._sweep_ghosts_on_close(plan_id)
                 return
@@ -1174,10 +1257,18 @@ class ExitEnforcer:
                 if await self._handle_ghost(await self.trade.get_plan(plan_id)):
                     continue
                 log.warning("exit order dead for %s - resubmitting market close", plan_id)
+                # Market close — except equities outside RTH, where "market"
+                # means an aggressive limit (see _rung_limit).
+                quotes = {leg["symbol"]: self.market.latest_quote(leg["symbol"])
+                          for leg in plan.legs}
+                mid = position_mid_from_quotes(plan.legs, quotes)
+                resubmit_limit = await self._rung_limit(
+                    plan, mid if mid is not None else plan.sl_premium, None
+                )
                 key = f"{uuid4().hex[:6]}v"
                 self._ghost_keys.setdefault(plan_id, []).append(key)
                 try:
-                    await self.trade.submit_exit(plan, reason, None, attempt_key=key)
+                    await self.trade.submit_exit(plan, reason, resubmit_limit, attempt_key=key)
                     self._resolve_ghost_key(plan_id, key)
                     resubmit_failures = 0
                 except Exception as exc:

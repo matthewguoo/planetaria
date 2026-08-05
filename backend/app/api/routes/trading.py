@@ -12,21 +12,26 @@ router = APIRouter(prefix="/api", tags=["trading"])
 
 class LegOrder(BaseModel):
     symbol: str
-    right: str
-    strike: float
-    expiry: str
+    # Option-contract fields; optional so an equity leg (shares) can omit
+    # them — place_trade enforces the structure per asset_class.
+    right: str | None = None
+    strike: float | None = None
+    expiry: str | None = None
     side: int = Field(ge=-1, le=1)
     ratio: int = 1
     entry: float
-    iv: float
+    iv: float | None = None
     half_spread: float | None = Field(default=None, ge=0)  # liquidity guard input
 
 
 class OrderIn(BaseModel):
     underlying: str
     strategy: str
+    asset_class: str = "option"
+    extended_hours: bool = False
+    strategy_id: str | None = None
     legs: list[LegOrder] = Field(min_length=1, max_length=4)
-    qty: int = Field(ge=1, le=100)
+    qty: int = Field(ge=1, le=10_000)  # contract sets / shares
     entry_limit: float
     tp_premium: float
     sl_premium: float

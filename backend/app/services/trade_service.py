@@ -189,7 +189,11 @@ class TradeService:
     ) -> list[dict]:
         """Fold untracked broker option positions into managed TradePlans —
         one multi-leg plan per underlying (chunked at 4 legs, the MLEG close
-        limit) — so the enforcer runs TP/SL/time exits on them."""
+        limit) — so the enforcer runs TP/SL/time exits on them.
+
+        OPTIONS ONLY by design (the occ filter below): equity positions are
+        created through plans from the start; adopting stray shares is a
+        non-goal until something actually produces stray shares."""
         from math import gcd
 
         untracked = {p["symbol"]: p for p in await self.untracked_positions()}
@@ -260,7 +264,12 @@ class TradeService:
 
     async def place_trade(self, payload: dict) -> dict:
         """payload: {underlying, strategy, legs:[{symbol,right,strike,expiry,side,ratio,entry,iv}],
-        qty, entry_limit, tp_premium, sl_premium, time_stop_utc}"""
+        qty, entry_limit, tp_premium, sl_premium, time_stop_utc,
+        asset_class?: option|equity, extended_hours?: bool, strategy_id?}.
+
+        Equity plans are single-leg shares: "premium" is the share price,
+        multiplier 1, and extended_hours puts the DAY limit in the 24/5
+        book (verified 2026-08-04: fills premarket/postmarket/overnight)."""
         if not self.alpaca.configured:
             raise ValueError("Alpaca keys not configured - trading unavailable")
 
@@ -269,14 +278,26 @@ class TradeService:
         entry_limit = float(payload["entry_limit"])
         tp = float(payload["tp_premium"])
         sl = float(payload["sl_premium"])
+        asset_class = payload.get("asset_class") or "option"
+        extended_hours = bool(payload.get("extended_hours", False))
         time_stop = datetime.fromisoformat(payload["time_stop_utc"])
         if time_stop.tzinfo is None:
             time_stop = time_stop.replace(tzinfo=timezone.utc)
 
+        if asset_class not in ("option", "equity"):
+            raise ValueError("asset_class must be option or equity")
         if qty < 1:
             raise ValueError("qty must be >= 1")
         if not legs or len(legs) > 4:
             raise ValueError("1-4 legs required")
+        if asset_class == "equity" and len(legs) != 1:
+            raise ValueError("equity plans are single-leg (one symbol of shares)")
+        if asset_class == "option":
+            if extended_hours:
+                raise ValueError("extended_hours is an equity-only flag")
+            for leg in legs:
+                if any(leg.get(k) is None for k in ("right", "strike", "expiry")):
+                    raise ValueError("option legs require right/strike/expiry")
         if abs(entry_limit) < TICK:
             raise ValueError("net premium must be at least one tick")
         if not (sl < entry_limit < tp):
@@ -285,25 +306,32 @@ class TradeService:
             )
 
         account = await self.get_account()
-        # Capital consumed: broker-margin estimate. Naked shorts charge the
-        # standard 20%-of-spot formula rather than full cash-secured value —
-        # a jade lizard's short put must not consume $70k/set of "BP" that
-        # Alpaca itself would never require in a margin account.
-        max_loss = (entry_limit - sl) * 100 * qty
-        from app.services.options_math import Leg, bp_per_set_estimate
-
-        spot = self.market.spot(payload["underlying"].upper())
-        leg_objs = [Leg.from_dict(leg) for leg in legs]
-        if spot > 0:
-            entry_cost = bp_per_set_estimate(leg_objs, spot) * qty
-        elif entry_limit > 0:
-            entry_cost = entry_limit * 100 * qty
+        if asset_class == "equity":
+            # Shares: notional is the whole story — no margin formula, no
+            # expiry. max_loss is the SL distance in dollars (x1).
+            max_loss = (entry_limit - sl) * qty
+            entry_cost = abs(entry_limit) * qty
+            expiry = ""
         else:
-            from app.services.options_math import structural_max_loss
+            # Capital consumed: broker-margin estimate. Naked shorts charge the
+            # standard 20%-of-spot formula rather than full cash-secured value —
+            # a jade lizard's short put must not consume $70k/set of "BP" that
+            # Alpaca itself would never require in a margin account.
+            max_loss = (entry_limit - sl) * 100 * qty
+            from app.services.options_math import Leg, bp_per_set_estimate
 
-            structural = structural_max_loss(leg_objs)
-            entry_cost = (structural * 100 * qty) if structural is not None else max_loss * 3
-        expiry = max(leg["expiry"] for leg in legs)
+            spot = self.market.spot(payload["underlying"].upper())
+            leg_objs = [Leg.from_dict(leg) for leg in legs]
+            if spot > 0:
+                entry_cost = bp_per_set_estimate(leg_objs, spot) * qty
+            elif entry_limit > 0:
+                entry_cost = entry_limit * 100 * qty
+            else:
+                from app.services.options_math import structural_max_loss
+
+                structural = structural_max_loss(leg_objs)
+                entry_cost = (structural * 100 * qty) if structural is not None else max_loss * 3
+            expiry = max(leg["expiry"] for leg in legs)
         # Stream age: None while a tick has never arrived reads as "no data",
         # which must block trading, not silently pass.
         stream_age: float | None = None
@@ -321,6 +349,7 @@ class TradeService:
             underlying=payload["underlying"],
             stream_age_s=stream_age,
             daytrade_count=account["daytrade_count"],
+            asset_class=asset_class,
         )
         if violations:
             raise ValueError("; ".join(violations))
@@ -336,7 +365,10 @@ class TradeService:
 
             leg_symbols = [leg["symbol"] for leg in legs]
             try:
-                await self.market.refresh_option_quotes(leg_symbols, max_age_s=1.5)
+                if asset_class == "equity":
+                    await self.market.fetch_latest_stock_quote(leg_symbols[0])
+                else:
+                    await self.market.refresh_option_quotes(leg_symbols, max_age_s=1.5)
             except Exception as exc:
                 log.warning("entry-guard quote refresh failed: %s", exc)
             live = position_quote_stats(
@@ -355,6 +387,9 @@ class TradeService:
         plan = TradePlan(
             underlying=payload["underlying"].upper(),
             strategy=payload["strategy"],
+            strategy_id=payload.get("strategy_id"),
+            asset_class=asset_class,
+            extended_hours=extended_hours,
             legs=legs,
             qty=qty,
             entry_limit=entry_limit,
@@ -411,6 +446,21 @@ class TradeService:
     async def _submit_entry(self, plan: TradePlan):
         legs = plan.legs
         client_order_id = f"{plan.id}-e"
+        if plan.asset_class == "equity":
+            # Shares: plain DAY limit; extended_hours puts it in the 24/5
+            # book. NO position_intent — an options concept; equity orders
+            # are accepted without it (verified 2026-08-04).
+            leg = legs[0]
+            request = LimitOrderRequest(
+                symbol=leg["symbol"],
+                qty=plan.qty * leg.get("ratio", 1),
+                side=OrderSide.BUY if leg["side"] > 0 else OrderSide.SELL,
+                limit_price=abs(round_tick(plan.entry_limit)),
+                time_in_force=TimeInForce.DAY,
+                extended_hours=plan.extended_hours,
+                client_order_id=client_order_id,
+            )
+            return await self._submit_idempotent(request, client_order_id)
         if len(legs) == 1:
             # Single-leg limit prices are unsigned premiums; side carries
             # direction (a short entry's net credit arrives as negative
@@ -636,6 +686,27 @@ class TradeService:
         leg reversed, so MLEG submits the NEGATION of the position-terms
         limit; single-leg orders take the unsigned premium."""
         legs = plan.legs
+        if plan.asset_class == "equity":
+            # Reverse the single share leg. extended_hours propagates so a
+            # closing limit works the 24/5 book too (a resting equity TP
+            # also fills after hours — verified). Market orders here are
+            # RTH-only BY POLICY: outside RTH the broker silently queues
+            # them for the next open (verified 2026-08-04) — the enforcer's
+            # session policy substitutes an aggressive limit instead.
+            leg = legs[0]
+            common = dict(
+                symbol=leg["symbol"],
+                qty=plan.effective_qty * leg.get("ratio", 1),
+                side=OrderSide.SELL if leg["side"] > 0 else OrderSide.BUY,
+                time_in_force=TimeInForce.DAY,
+                client_order_id=client_order_id,
+            )
+            return (
+                MarketOrderRequest(**common)
+                if limit_price is None
+                else LimitOrderRequest(**common, extended_hours=plan.extended_hours,
+                                       limit_price=abs(round_tick(limit_price)))
+            )
         if len(legs) == 1:
             leg = legs[0]
             common = dict(

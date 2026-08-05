@@ -31,6 +31,10 @@ DEFAULT_RISK = {
     # filtered mids; deep breaches >=25% of the TP-SL span fire instantly).
     # 0 disables the dwell — every breach fires immediately.
     "sl_confirm_s": 3.0,
+    # Equity (shares) guards — notional-based, no margin formulas:
+    "equity_max_notional_per_name_pct": 0.05,  # per trade, % of equity
+    "equity_gross_exposure_pct": 0.50,         # all open equity plans
+    "equity_long_only": True,                  # shorting is out of scope (v1)
 }
 
 RISK_KEY = "risk"
@@ -56,6 +60,8 @@ class RiskService:
             if key in ("time_stop_et", "expiry_time_stop_et"):
                 time.fromisoformat(str(value))  # validate HH:MM
                 clean[key] = str(value)
+            elif key == "equity_long_only":
+                clean[key] = bool(value)
             elif key in ("max_positions", "entry_ttl_min", "max_trades_per_day"):
                 iv = int(value)
                 bounds = {
@@ -76,6 +82,8 @@ class RiskService:
                     "default_sl_pct": (0.05, 0.95),
                     "max_spread_pct": (0.01, 0.50),
                     "sl_confirm_s": (0.0, 30.0),
+                    "equity_max_notional_per_name_pct": (0.005, 0.50),
+                    "equity_gross_exposure_pct": (0.01, 1.0),
                 }[key]
                 if not limits[0] <= fv <= limits[1]:
                     raise ValueError(f"{key} out of bounds {limits}")
@@ -192,10 +200,9 @@ class RiskService:
 
         max_gross = budget.get("max_gross_notional_usd")
         if max_gross is not None:
-            # Options-shaped for now (x100); Phase 4 swaps in the plan's
-            # contract multiplier so equity plans count at x1.
             gross = sum(
-                abs(p.entry_limit) * 100 * p.effective_qty for p in open_plans
+                abs(p.entry_limit) * p.contract_multiplier * p.effective_qty
+                for p in open_plans
             )
             if gross + intent_notional > float(max_gross) + 0.01:
                 violations.append(
@@ -239,10 +246,12 @@ class RiskService:
         underlying: str | None = None,
         stream_age_s: float | None = None,
         daytrade_count: int = 0,
+        asset_class: str = "option",
     ) -> list[str]:
         """Returns a list of violations; empty list = trade allowed."""
         cfg = await self.get_settings()
         violations: list[str] = []
+        is_equity = asset_class == "equity"
 
         # ---- MFT leak-pluggers -------------------------------------------
         # Stale market data: quotes drive the exits; trading blind on stale
@@ -279,17 +288,45 @@ class RiskService:
             if await self.recent_duplicate(underlying, [l["symbol"] for l in legs]):
                 violations.append("duplicate guard: identical order submitted seconds ago")
 
-        # Uncovered short calls are unplaceable at Alpaca L3 (verified against
-        # the paper API: "account not eligible to trade uncovered option
-        # contracts") — fail here with a fix hint instead of at the broker.
-        naked_calls = max(
-            -sum(l["side"] * l.get("ratio", 1) for l in legs if l["right"] == "C"), 0
-        )
-        if naked_calls > 0:
-            violations.append(
-                "uncovered short calls not permitted at this account level - "
-                "add a long call wing to cover"
+        if is_equity:
+            # Shares: structure + notional guards. No margin formulas, no
+            # expiry coupling; leg dicts have no "right" key, so the option
+            # structure checks below must not run.
+            if cfg.get("equity_long_only", True) and any(
+                leg["side"] < 0 for leg in (legs or [])
+            ):
+                violations.append("equity shorting is disabled (equity_long_only)")
+            per_name_cap = account_equity * cfg["equity_max_notional_per_name_pct"]
+            if entry_cost_dollars > per_name_cap + 0.01:
+                violations.append(
+                    f"equity notional ${entry_cost_dollars:.0f} exceeds per-name cap "
+                    f"{cfg['equity_max_notional_per_name_pct']:.1%} of equity "
+                    f"(${per_name_cap:.0f})"
+                )
+            open_equity_gross = sum(
+                abs(p.entry_limit) * p.effective_qty
+                for p in await self.open_plans()
+                if p.asset_class == "equity"
             )
+            gross_cap = account_equity * cfg["equity_gross_exposure_pct"]
+            if open_equity_gross + entry_cost_dollars > gross_cap + 0.01:
+                violations.append(
+                    f"equity gross exposure ${open_equity_gross + entry_cost_dollars:.0f} "
+                    f"would exceed {cfg['equity_gross_exposure_pct']:.0%} of equity "
+                    f"(${gross_cap:.0f})"
+                )
+        else:
+            # Uncovered short calls are unplaceable at Alpaca L3 (verified against
+            # the paper API: "account not eligible to trade uncovered option
+            # contracts") — fail here with a fix hint instead of at the broker.
+            naked_calls = max(
+                -sum(l["side"] * l.get("ratio", 1) for l in legs if l["right"] == "C"), 0
+            )
+            if naked_calls > 0:
+                violations.append(
+                    "uncovered short calls not permitted at this account level - "
+                    "add a long call wing to cover"
+                )
 
         if max_loss_dollars > account_equity * cfg["max_loss_pct"] + 0.01:
             violations.append(
@@ -311,17 +348,20 @@ class RiskService:
                 f"daily circuit breaker tripped (realized {realized:+.0f} today)"
             )
 
-        # Time stop must be inside today's session and before the hard cutoff.
+        # Time stop must be in the future. Options additionally pin it inside
+        # the session and before the hard cutoff (expiry-day liquidation
+        # pressure); equities hold multi-day by design, so no cutoff applies.
         now = utcnow()
         if time_stop_utc <= now:
             violations.append("time stop is in the past")
-        stop_et = time_stop_utc.astimezone(ET)
-        is_expiry_day = stop_et.strftime("%Y-%m-%d") == expiry_date_et
-        cutoff_str = cfg["expiry_time_stop_et"] if is_expiry_day else cfg["time_stop_et"]
-        cutoff = time.fromisoformat(cutoff_str)
-        if stop_et.time() > cutoff:
-            violations.append(
-                f"time stop {stop_et.strftime('%H:%M')} ET after cutoff {cutoff_str} ET"
-                + (" (expiry day)" if is_expiry_day else "")
-            )
+        if not is_equity:
+            stop_et = time_stop_utc.astimezone(ET)
+            is_expiry_day = stop_et.strftime("%Y-%m-%d") == expiry_date_et
+            cutoff_str = cfg["expiry_time_stop_et"] if is_expiry_day else cfg["time_stop_et"]
+            cutoff = time.fromisoformat(cutoff_str)
+            if stop_et.time() > cutoff:
+                violations.append(
+                    f"time stop {stop_et.strftime('%H:%M')} ET after cutoff {cutoff_str} ET"
+                    + (" (expiry day)" if is_expiry_day else "")
+                )
         return violations

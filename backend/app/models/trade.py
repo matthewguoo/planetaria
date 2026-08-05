@@ -6,7 +6,7 @@ from these rows on every startup — a restart can never orphan a live position.
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import JSON, DateTime, Float, Integer, String, Text
+from sqlalchemy import JSON, Boolean, DateTime, Float, Integer, String, Text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -50,8 +50,17 @@ class TradePlan(Base):
 
     underlying: Mapped[str] = mapped_column(String(12))
     strategy: Mapped[str] = mapped_column(String(24))  # long_call, put_spread, ...
+    # Strategy-runtime provenance: which instance placed this plan (label in
+    # `strategy` stays for humans and pre-runtime rows).
+    strategy_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    # option: legs are contracts, premiums are per-share x100. equity: one
+    # leg of shares, "premium" IS the share price, multiplier 1.
+    asset_class: Mapped[str] = mapped_column(String(8), default="option")
+    # Equity DAY limits only (verified 2026-08-04: fills premarket, post-
+    # market AND overnight — 24/5). Options never set this.
+    extended_hours: Mapped[bool] = mapped_column(Boolean, default=False)
     legs: Mapped[list] = mapped_column(JSON)  # [{symbol, right, strike, expiry, side, ratio, entry, iv}]
-    qty: Mapped[int] = mapped_column(Integer)  # contract sets
+    qty: Mapped[int] = mapped_column(Integer)  # contract sets / shares
 
     entry_limit: Mapped[float] = mapped_column(Float)   # net debit limit / share
     tp_premium: Mapped[float] = mapped_column(Float)    # position value / share
@@ -94,8 +103,17 @@ class TradePlan(Base):
         """Contract sets actually held (partial fills); falls back to plan qty."""
         return self.filled_qty if self.filled_qty else self.qty
 
+    @property
+    def contract_multiplier(self) -> int:
+        """Dollars per point of premium per unit: 100 for option contract
+        sets, 1 for shares. A property derived from asset_class on purpose —
+        a separate column could drift from it and nothing needs a third
+        value. Default asset_class='option' keeps every pre-equity P/L
+        number bit-identical."""
+        return 1 if self.asset_class == "equity" else 100
+
     def pnl_at(self, premium: float | None, qty: int | None = None) -> float | None:
-        """Signed P/L dollars marking `qty` sets (default: all held) at
+        """Signed P/L dollars marking `qty` units (default: all held) at
         `premium` against the actual entry fill; None when either side of
         the round trip is unknown. THE realized/unrealized P/L formula —
         every P/L number in the system comes from here."""
@@ -103,7 +121,7 @@ class TradePlan(Base):
             return None
         if qty is None:
             qty = self.effective_qty
-        return round((premium - self.fill_premium) * 100 * qty, 2)
+        return round((premium - self.fill_premium) * self.contract_multiplier * qty, 2)
 
     def to_dict(self) -> dict:
         return {
@@ -111,6 +129,9 @@ class TradePlan(Base):
             "created_at": as_utc(self.created_at).isoformat() if self.created_at else None,
             "underlying": self.underlying,
             "strategy": self.strategy,
+            "strategy_id": self.strategy_id,
+            "asset_class": self.asset_class,
+            "extended_hours": self.extended_hours,
             "legs": self.legs,
             "qty": self.qty,
             "entry_limit": self.entry_limit,
