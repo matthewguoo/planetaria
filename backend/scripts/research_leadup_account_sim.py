@@ -226,7 +226,7 @@ def bracket_for(g: dict, entry_idx: int) -> tuple[float, float]:
 
 def simulate(events: pd.DataFrame, panel: Panel, entry_mode: str,
              max_new: int, start_equity: float = START_EQUITY,
-             rng=None) -> dict:
+             rng=None, allowed_dates: set | None = None) -> dict:
     """entry_mode: T3_close | T2_close | T1_open. rng -> random-null account
     (same slot counts, random symbol/date entries)."""
     lead = {"T3_close": 3, "T2_close": 2, "T1_open": 1}[entry_mode]
@@ -285,6 +285,10 @@ def simulate(events: pd.DataFrame, panel: Panel, entry_mode: str,
 
         # 2) entries
         cands = sorted(per_day.get(session, []), key=lambda x: -x[2])[:max_new]
+        # Regime gate (risk-on only): no NEW entries on risk-off sessions;
+        # open positions still walk to their exits. Applies to null too.
+        if allowed_dates is not None and session not in allowed_dates:
+            cands = []
         if rng is not None and cands:
             # Null: SAME day, SAME slot count, random liquid symbols with the
             # same holding horizon — entries must be session-aligned or the
@@ -345,6 +349,8 @@ def main() -> None:
     ap.add_argument("--equity", type=float, default=START_EQUITY)
     ap.add_argument("--start", default="2025-02-01")
     ap.add_argument("--end", default="2026-08-01")
+    ap.add_argument("--spy-filter", action="store_true",
+                    help="risk-on gate: new entries only when SPY > 200dma")
     ap.add_argument("--refresh", action="store_true")
     args = ap.parse_args()
 
@@ -362,12 +368,33 @@ def main() -> None:
     spy = panel.by_sym.get("SPY")
     spy_ret = (spy["c"][-1] / spy["c"][0] - 1) * 100 if spy is not None else None
 
-    rows = [simulate(cal, panel, mode, args.max_new, args.equity)
+    allowed: set | None = None
+    if args.spy_filter:
+        settings = get_settings()
+        client = StockHistoricalDataClient(settings.alpaca_api_key,
+                                           settings.alpaca_secret_key)
+        out = client.get_stock_bars(StockBarsRequest(
+            symbol_or_symbols="SPY", timeframe=TimeFrame.Day,
+            start=datetime.combine(win_start - timedelta(days=320),
+                                   datetime.min.time(), ET),
+            end=datetime.combine(end, datetime.min.time(), ET),
+            feed="sip", adjustment=Adjustment.ALL))
+        sp = pd.DataFrame({
+            "date": [b.timestamp.astimezone(ET).date() for b in out.data["SPY"]],
+            "c": [float(b.close) for b in out.data["SPY"]]})
+        sp["dma"] = sp["c"].rolling(200).mean()
+        allowed = set(sp.loc[sp["c"] > sp["dma"], "date"])
+        on = len([s for s in panel.sessions if s in allowed])
+        print(f"  risk-on gate: {on}/{len(panel.sessions)} sessions allowed")
+
+    rows = [simulate(cal, panel, mode, args.max_new, args.equity,
+                     allowed_dates=allowed)
             for mode in ("T3_close", "T2_close", "T1_open")]
     null_finals = []
     for b in range(N_ACCOUNT_BOOTS):
         r = simulate(cal, panel, "T3_close", args.max_new, args.equity,
-                     rng=np.random.default_rng(1000 + b))
+                     rng=np.random.default_rng(1000 + b),
+                     allowed_dates=allowed)
         null_finals.append(r["ret_pct"])
     nf = np.array(null_finals)
 
