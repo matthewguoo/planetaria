@@ -28,3 +28,4 @@ Thumbs.db
 # Runtime artifacts
 backend/trader.db
 *.db
+backend/scripts/_ict_cache/
