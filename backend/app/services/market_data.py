@@ -121,10 +121,9 @@ class MarketDataService:
         # the poll fallback so quiet markets don't hammer the API.
         self._oquote_fetch_ts: dict[str, float] = {}
 
-        # Synthetic feed when no keys (dev/UI QA); import here to avoid cycle.
-        from app.services.demo_feed import DemoFeed
-
-        self.demo = DemoFeed(self) if not alpaca.configured else None
+        # No keyless fallback feed: synthetic/delayed lookalike quotes are a
+        # staleness disaster waiting to be trusted (removed 2026-08-05).
+        # Keyless mode now simply has NO market data; the UI shows offline.
 
     # ---------------------------------------------------------------- status
 
@@ -138,10 +137,10 @@ class MarketDataService:
         return {
             "t": "status",
             "configured": self.alpaca.configured,
-            "demo": self.demo is not None,
-            # Per-symbol price source when keyless: "public" = real prices
-            # from the keyless public feed, "synthetic" = random walk.
-            "sources": self.demo.sources if self.demo else {},
+            # Kept as literal falsy values: the frontend still keys on these
+            # fields; they can never be true since the demo feed was removed.
+            "demo": False,
+            "sources": {},
             "redis": self.redis.healthy,
             "stream_age_s": self.stream_age_s,
             "stock_symbols": sorted(self._stock_refs.keys()),
@@ -280,8 +279,6 @@ class MarketDataService:
             )
 
     async def stop(self) -> None:
-        if self.demo:
-            await self.demo.stop()
         for task in self._tasks:
             task.cancel()
         for task in self._backfill_tasks.values():
@@ -309,9 +306,7 @@ class MarketDataService:
             self._stock_refs[symbol] = self._stock_refs.get(symbol, 0) + 1
             first = self._stock_refs[symbol] == 1
         if not self.alpaca.configured:
-            if self.demo:
-                await self.demo.ensure(symbol)
-            return
+            return  # keyless: no data, deliberately (no synthetic fallback)
         if first:
             # alpaca-py's sync subscribe_* blocks on run_coroutine_threadsafe(
             # ...).result() against THIS loop when the stream is live — calling
@@ -474,9 +469,7 @@ class MarketDataService:
         for sym in stale:
             self._oquote_fetch_ts[sym] = now_mono
         if not self.alpaca.configured:
-            if self.demo:
-                self.demo.publish_option_quotes(stale)
-            return
+            return  # keyless: monitors see missing quotes, not fabricated ones
         try:
             request = OptionLatestQuoteRequest(
                 symbol_or_symbols=stale, feed=self.alpaca.option_feed

@@ -741,8 +741,8 @@ class ExitEnforcer:
 
             log.info("monitor armed: plan %s TP=%.2f SL=%.2f stop=%s",
                      plan.id, plan.tp_premium, plan.sl_premium, plan.time_stop_utc)
-            # Seed the quote cache NOW (REST / demo-synth): a leg that never
-            # ticks on the stream must not leave TP/SL unevaluable.
+            # Seed the quote cache NOW over REST: a leg that never ticks on
+            # the stream must not leave TP/SL unevaluable.
             try:
                 await self._refresh_plan_quotes(plan, symbols, max_age_s=0)
             except Exception as exc:

@@ -71,14 +71,6 @@ async def startup(app: FastAPI, settings: Settings) -> None:
 
     await market.start()
 
-    # Apply persisted feed settings that can take effect live.
-    try:
-        feed_cfg = await app.state.feed_settings.get()
-        if market.demo is not None:
-            market.demo.poll_s = float(feed_cfg["public_poll_s"])
-    except Exception:
-        log.exception("feed settings load failed - using defaults")
-
     if alpaca.configured:
         stream = alpaca.make_trading_stream()
         stream.subscribe_trade_updates(trade.on_trade_update)

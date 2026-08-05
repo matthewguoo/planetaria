@@ -6,12 +6,11 @@ clients never hammer the 200 req/min REST budget.
 import asyncio
 import logging
 import time
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 
 from alpaca.data.requests import OptionChainRequest
 
 from app.services.alpaca import AlpacaService
-from app.services.demo_feed import demo_smile_iv
 from app.services.redis_client import RedisFacade
 from app.services.trade_service import parse_occ_symbol
 
@@ -80,13 +79,10 @@ class ChainService:
 
     async def _fetch(self, underlying: str, dte_max: int) -> dict:
         if not self.alpaca.configured:
-            # Activate the keyless feed FIRST so the modeled chain anchors to
-            # the real spot. Answering from an empty bar store would fabricate
-            # a default spot and hand the designer strikes that vanish once
-            # real data lands seconds later.
-            if self.market.demo:
-                await self.market.demo.ensure(underlying)
-            return self._demo_chain(underlying, dte_max)
+            # No synthetic fallback (demo feed removed 2026-08-05): a chain
+            # that LOOKS tradeable but prices nothing real is a staleness
+            # trap. Keyless mode gets an honest error instead.
+            raise ValueError("options chain requires Alpaca keys (no keyless fallback)")
 
         today = datetime.now(timezone.utc).date()
         spot = await self._spot(underlying)
@@ -186,72 +182,3 @@ class ChainService:
         await self.market.fetch_latest_stock_quote(underlying)
         return self.market.spot(underlying)
 
-    # ----------------------------------------------------------------- demo
-
-    def _demo_chain(self, underlying: str, dte_max: int) -> dict:
-        """Synthetic chain so the full designer works keyless/off-hours."""
-        bars = self.market.bars.get_bars(underlying, "1m", limit=1)
-        spot = float(bars[-1]["c"]) if bars else 450.0
-        today = date.today()
-        expirations = []
-        d = today
-        while len(expirations) < min(dte_max + 1, 4):
-            if d.weekday() < 5:
-                expirations.append(d.isoformat())
-            d += timedelta(days=1)
-
-        step = 1.0 if spot < 200 else (2.5 if spot < 600 else 5.0)
-        atm = round(spot / step) * step
-        strikes = [round(atm + i * step, 2) for i in range(-12, 13)]
-        contracts = []
-        from app.services.options_math import (
-            TRADING_HOURS_PER_YEAR,
-            bs_delta,
-            bs_price,
-            trading_hours_to_expiry,
-        )
-
-        now_ms = time.time() * 1000
-        for expiry in expirations:
-            # Use the SAME trading-hours clock as the frontend designer.
-            # A fake tau here makes demo premiums carry time value the P/L
-            # surface says doesn't exist — producing impossible states like
-            # "spot already below the stop-loss boundary at entry".
-            tau = max(
-                trading_hours_to_expiry(expiry, now_ms) / TRADING_HOURS_PER_YEAR, 2e-5
-            )
-            days_out = (date.fromisoformat(expiry) - today).days
-            for strike in strikes:
-                iv = demo_smile_iv(strike, spot, days_out)
-                for right in ("C", "P"):
-                    # Undiscounted BS for demo premiums — same pricer as the
-                    # demo option-quote feed (see demo_smile_iv).
-                    delta = bs_delta(spot, strike, tau, iv, right, r=0.0)
-                    mid = max(round(bs_price(spot, strike, tau, iv, right, r=0.0), 2), 0.01)
-                    spread = max(0.02, mid * 0.04)
-                    exp_compact = expiry.replace("-", "")[2:]
-                    occ = f"{underlying}{exp_compact}{right}{int(round(strike * 1000)):08d}"
-                    contracts.append(
-                        {
-                            "symbol": occ,
-                            "right": right,
-                            "strike": strike,
-                            "expiry": expiry,
-                            "bid": round(mid - spread / 2, 2),
-                            "ask": round(mid + spread / 2, 2),
-                            "mid": mid,
-                            "iv": round(iv, 4),
-                            "delta": round(delta, 4),
-                            "gamma": None,
-                            "theta": None,
-                            "vega": None,
-                        }
-                    )
-        return {
-            "underlying": underlying,
-            "spot": spot,
-            "asof": int(time.time() * 1000),
-            "expirations": expirations,
-            "contracts": contracts,
-            "demo": True,
-        }

@@ -26,11 +26,8 @@ async def update_feed_settings(request: Request, patch: dict) -> dict:
         updated = await request.app.state.feed_settings.update(patch)
     except ValueError as exc:
         raise HTTPException(422, str(exc))
-    # Live-apply where the consumer holds the value: the keyless public feed
-    # re-reads its poll interval from this attribute each cycle.
-    demo = request.app.state.market.demo
-    if demo is not None and "public_poll_s" in patch:
-        demo.poll_s = float(updated["public_poll_s"])
+    # (public_poll_s is stored but applies to nothing since the keyless demo
+    # feed was removed 2026-08-05; field kept for settings-schema stability.)
     return updated
 
 
