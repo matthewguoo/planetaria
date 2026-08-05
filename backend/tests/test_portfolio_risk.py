@@ -114,10 +114,13 @@ class TestPlanGreeks:
         from app.services.portfolio_risk import PortfolioRisk
         import time as _time
 
+        # Expiry must stay in the future or the option prices as expired
+        # (delta 0) and the assertions go vacuous.
+        expiry_dt = datetime.now(timezone.utc) + timedelta(days=3)
         plan = TradePlan(
             underlying="SPY", strategy="long_call",
-            legs=[{"symbol": "SPY260731C00745000", "right": "C", "strike": 745.0,
-                   "expiry": "2026-07-31", "side": 1, "ratio": 1, "entry": 2.0, "iv": 0.18}],
+            legs=[{"symbol": f"SPY{expiry_dt:%y%m%d}C00745000", "right": "C", "strike": 745.0,
+                   "expiry": f"{expiry_dt:%Y-%m-%d}", "side": 1, "ratio": 1, "entry": 2.0, "iv": 0.18}],
             qty=2, entry_limit=2.0, tp_premium=4.0, sl_premium=1.0,
             time_stop_utc=datetime.now(timezone.utc) + timedelta(hours=2),
             status="filled", fill_premium=2.0, filled_qty=2,
