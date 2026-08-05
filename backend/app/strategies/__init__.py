@@ -14,3 +14,8 @@ def register(cls: type[Strategy]) -> type[Strategy]:
         raise ValueError(f"duplicate strategy kind {cls.kind!r}")
     REGISTRY[cls.kind] = cls
     return cls
+
+
+# Built-in strategies self-register on import. Bottom of the module so the
+# decorator above exists; add new strategy modules here.
+from app.strategies import ref_tick  # noqa: E402,F401
