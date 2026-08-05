@@ -98,6 +98,12 @@ class AlpacaService:
         s = self.settings
         return TradingStream(s.alpaca_api_key, s.alpaca_secret_key, paper=s.alpaca_paper)
 
+    def make_news_stream(self):
+        from alpaca.data.live.news import NewsDataStream
+
+        s = self.settings
+        return NewsDataStream(s.alpaca_api_key, s.alpaca_secret_key)
+
     async def call(self, fn, /, *args, timeout: float = CALL_TIMEOUT_S,
                    retries: int = 0, **kwargs):
         """Run a sync SDK call in the threadpool, bounded and optionally

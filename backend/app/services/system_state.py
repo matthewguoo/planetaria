@@ -170,6 +170,26 @@ async def system_state(app_state) -> dict:
             # the ladder resumes at the open).
             "parked_exits": sorted(enforcer._parked),
         },
+        # Strategy data plane: a dead feed shows as task state + climbing
+        # last_event_age, never as quiet no-trading. Bus drop counters must
+        # stay zero — a lossless drop means a wedged consumer.
+        "signals": {
+            "feeds": {
+                feed.name: {
+                    "task": _task_state(task),
+                    **feed.status(),
+                }
+                for feed, task in zip(
+                    getattr(app_state, "feeds", ()),
+                    getattr(app_state, "feed_tasks", ()),
+                )
+            },
+            "event_bus": (
+                app_state.event_bus.status()
+                if getattr(app_state, "event_bus", None)
+                else {}
+            ),
+        },
         "tasks": {
             "trading_stream": _task_state(getattr(app_state, "trading_stream_task", None)),
             "reconcile_loop": _task_state(getattr(app_state, "reconcile_loop_task", None)),

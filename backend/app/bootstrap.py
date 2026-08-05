@@ -16,6 +16,9 @@ from app.services.market_data import MarketDataService
 from app.services.options_chain import ChainService
 from app.services.redis_client import RedisFacade
 from app.services.risk import RiskService
+from app.services.signals.events import EventBus
+from app.services.signals.feeds import AlpacaNewsFeed, TimerFeed
+from app.services.signals.store import SignalStore
 from app.services.supervision import supervise
 from app.services.trade_service import TradeService
 
@@ -116,6 +119,24 @@ async def startup(app: FastAPI, settings: Settings) -> None:
         name="wake-watchdog",
     )
 
+    # Strategy data plane: DataFeed adapters normalize external sources into
+    # journaled events on the in-process bus; strategies subscribe by type.
+    # Each feed is one supervised connection — a feed crash restarts with
+    # backoff and can never take the engine down.
+    bus = EventBus()
+    signal_store = SignalStore(db)
+    feeds = [TimerFeed(bus)]
+    if alpaca.configured:
+        feeds.append(AlpacaNewsFeed(alpaca, bus, signal_store))
+    app.state.event_bus = bus
+    app.state.signal_store = signal_store
+    app.state.feeds = feeds
+    app.state.feed_tasks = [
+        asyncio.create_task(supervise(f"feed-{feed.name}", feed.run),
+                            name=f"feed-{feed.name}")
+        for feed in feeds
+    ]
+
 
 async def _reconcile_with_retry(enforcer: ExitEnforcer, attempts: int = 5) -> None:
     for attempt in range(1, attempts + 1):
@@ -131,6 +152,8 @@ async def _reconcile_with_retry(enforcer: ExitEnforcer, attempts: int = 5) -> No
 
 async def shutdown(app: FastAPI) -> None:
     state = app.state
+    for task in getattr(state, "feed_tasks", ()):  # stop event intake first
+        task.cancel()
     if getattr(state, "reconcile_task", None):
         state.reconcile_task.cancel()
     if getattr(state, "reconcile_loop_task", None):
