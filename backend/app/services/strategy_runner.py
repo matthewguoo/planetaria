@@ -417,6 +417,35 @@ class StrategyRunner:
         data["decisions"] = await self.decisions(row_id, limit=20)
         return data
 
+    async def performance(self, row_id: str) -> dict:
+        """Per-strategy execution rollup from the plans that carry its name:
+        open/closed counts, realized P&L, win rate, and the recent plans
+        themselves (the strategy label on TradePlan is the join key the
+        whole engine already maintains)."""
+        async with self.db.session() as session:
+            row = await session.get(StrategyInstanceRow, row_id)
+            if row is None:
+                raise ValueError("no such strategy instance")
+            plans = (await session.scalars(
+                select(TradePlan)
+                .where(TradePlan.strategy == row.name)
+                .order_by(TradePlan.created_at.desc())
+                .limit(200)
+            )).all()
+        closed = [p for p in plans if p.realized_pnl is not None]
+        wins = [p.realized_pnl for p in closed if p.realized_pnl > 0]
+        losses = [p.realized_pnl for p in closed if p.realized_pnl <= 0]
+        return {
+            "name": row.name,
+            "open": sum(1 for p in plans if p.status in OPEN_STATUSES),
+            "closed": len(closed),
+            "win_rate": round(len(wins) / len(closed), 3) if closed else None,
+            "realized_pnl": round(sum(p.realized_pnl for p in closed), 2),
+            "avg_win": round(sum(wins) / len(wins), 2) if wins else None,
+            "avg_loss": round(sum(losses) / len(losses), 2) if losses else None,
+            "plans": [p.to_dict() for p in plans[:50]],
+        }
+
     async def decisions(self, row_id: str, limit: int = 100) -> list[dict]:
         async with self.db.session() as session:
             rows = (await session.scalars(

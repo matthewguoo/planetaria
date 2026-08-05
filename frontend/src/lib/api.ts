@@ -355,3 +355,40 @@ export const getStrategyDecisions = (id: string, limit = 100) =>
     .then((r) => r.data.decisions);
 export const getSignals = (params: { limit?: number; type?: string; symbol?: string } = {}) =>
   api.get<{ signals: SignalRecord[] }>("/api/signals", { params }).then((r) => r.data.signals);
+
+export type StrategySource = {
+  kind: string;
+  module: string;
+  file: string;
+  source: string;
+};
+
+export type StrategyPlanRow = {
+  id: string;
+  underlying: string;
+  status: string;
+  qty: number;
+  entry_limit: number;
+  exit_premium: number | null;
+  realized_pnl: number | null;
+  created_at?: string | null;
+  asset_class?: string | null;
+};
+
+export type StrategyPerformance = {
+  name: string;
+  open: number;
+  closed: number;
+  win_rate: number | null;
+  realized_pnl: number;
+  avg_win: number | null;
+  avg_loss: number | null;
+  plans: StrategyPlanRow[];
+};
+
+export const getStrategySource = (kind: string) =>
+  api
+    .get<StrategySource>(`/api/strategies/catalog/${encodeURIComponent(kind)}/source`)
+    .then((r) => r.data);
+export const getStrategyPerformance = (id: string) =>
+  api.get<StrategyPerformance>(`/api/strategies/${id}/performance`).then((r) => r.data);

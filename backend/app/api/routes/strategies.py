@@ -3,7 +3,9 @@ HEADLESS); the GUI is just another client of these routes with no privileged
 path. Thin adapters over app.state.strategy_runner, same error mapping as
 trading.py (ValueError -> 422)."""
 
+import inspect
 from datetime import datetime, timezone
+from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -45,6 +47,25 @@ async def catalog() -> dict:
             for cls in REGISTRY.values()
         ]
     }
+
+
+@router.get("/strategies/catalog/{kind}/source")
+async def catalog_source(kind: str) -> dict:
+    """The strategy's actual module source — what the machine is really
+    running, served read-only so the UI can show it next to the journal.
+    Module (not class) source on purpose: schemas, constants, and helpers
+    are part of the behavior."""
+    cls = REGISTRY.get(kind)
+    if cls is None:
+        raise HTTPException(404, f"unknown strategy kind {kind!r}")
+    module = inspect.getmodule(cls)
+    try:
+        source = inspect.getsource(module)
+        file = Path(inspect.getsourcefile(module) or "?").name
+    except (OSError, TypeError) as exc:
+        raise HTTPException(500, f"source unavailable: {exc}")
+    return {"kind": kind, "module": module.__name__, "file": file,
+            "source": source}
 
 
 @router.get("/strategies")
@@ -133,6 +154,16 @@ async def trigger(request: Request, row_id: str, body: TriggerIn) -> dict:
 @router.get("/strategies/{row_id}/decisions")
 async def decisions(request: Request, row_id: str, limit: int = 100) -> dict:
     return {"decisions": await request.app.state.strategy_runner.decisions(row_id, limit)}
+
+
+@router.get("/strategies/{row_id}/performance")
+async def performance(request: Request, row_id: str) -> dict:
+    """Executions + outcomes for this instance: its plans (orders, fills,
+    exits) and the realized-P&L rollup."""
+    try:
+        return await request.app.state.strategy_runner.performance(row_id)
+    except ValueError as exc:
+        raise HTTPException(404, str(exc))
 
 
 @router.get("/signals")

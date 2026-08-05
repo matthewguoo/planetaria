@@ -10,10 +10,13 @@ import {
   apiError,
   createStrategy,
   getStrategyCatalog,
+  getStrategyPerformance,
+  getStrategySource,
   type SignalRecord,
   type StrategyDecision,
   type StrategyInstance,
   type StrategyKind,
+  type StrategyPerformance,
 } from "../../lib/api";
 import {
   actions,
@@ -123,7 +126,9 @@ export default function StrategiesPage() {
       </div>
 
       {selected && <ParamsPanel key={selected.id} inst={selected} onAction={run} />}
+      {selected && <PerformancePanel key={`perf-${selected.id}`} inst={selected} />}
       {selected && <DecisionsPanel inst={selected} decisions={decisions} />}
+      {selected && <SourcePanel key={`src-${selected.kind}`} kind={selected.kind} />}
 
       <CreatePanel onAction={run} />
       <SignalsPanel signals={signals} />
@@ -287,6 +292,159 @@ function DecisionsPanel({
           </table>
         </div>
       )}
+    </div>
+  );
+}
+
+function PerformancePanel({ inst }: { inst: StrategyInstance }) {
+  const [perf, setPerf] = useState<StrategyPerformance | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    const load = () =>
+      getStrategyPerformance(inst.id)
+        .then((p) => alive && setPerf(p))
+        .catch((err) => alive && setError(apiError(err)));
+    load();
+    const t = window.setInterval(load, POLL_MS);
+    return () => {
+      alive = false;
+      window.clearInterval(t);
+    };
+  }, [inst.id]);
+
+  const pnlColor = (v: number | null | undefined) =>
+    v == null ? "text-bb-muted" : v >= 0 ? "text-bb-profit" : "text-bb-loss";
+
+  return (
+    <div className="panel flex shrink-0 flex-col">
+      <div className="panel-title">
+        PERFORMANCE — {inst.name.toUpperCase()} (plans carrying this strategy label)
+      </div>
+      {error ? (
+        <div className="px-2 py-2 text-[11px] text-bb-loss">{error}</div>
+      ) : !perf ? (
+        <div className="px-2 py-2 text-[11px] text-bb-muted">loading…</div>
+      ) : (
+        <>
+          <div className="flex items-center gap-4 px-2 py-1 text-[11px]" data-numeric>
+            <span className="text-bb-muted">
+              open <span className="text-bb-amber">{perf.open}</span>
+            </span>
+            <span className="text-bb-muted">
+              closed <span className="text-bb-amber">{perf.closed}</span>
+            </span>
+            <span className="text-bb-muted">
+              win rate{" "}
+              <span className="text-bb-amber">
+                {perf.win_rate == null ? "—" : `${Math.round(perf.win_rate * 100)}%`}
+              </span>
+            </span>
+            <span className="text-bb-muted">
+              realized{" "}
+              <span className={pnlColor(perf.realized_pnl)}>
+                {perf.realized_pnl.toFixed(2)}
+              </span>
+            </span>
+            <span className="text-bb-muted">
+              avg win{" "}
+              <span className={pnlColor(perf.avg_win)}>
+                {perf.avg_win == null ? "—" : perf.avg_win.toFixed(2)}
+              </span>
+            </span>
+            <span className="text-bb-muted">
+              avg loss{" "}
+              <span className={pnlColor(perf.avg_loss)}>
+                {perf.avg_loss == null ? "—" : perf.avg_loss.toFixed(2)}
+              </span>
+            </span>
+          </div>
+          {perf.plans.length === 0 ? (
+            <div className="flex h-10 items-center justify-center text-[11px] text-bb-muted">
+              no plans yet — note-mode strategies journal would-be trades in the
+              decision journal instead
+            </div>
+          ) : (
+            <div className="max-h-48 overflow-y-auto">
+              <table className="w-full border-collapse text-[11px]">
+                <thead className="text-[10px] text-bb-muted">
+                  <tr className="border-b border-bb-border">
+                    <th className="px-2 py-1 text-left">TIME</th>
+                    <th className="px-2 py-1 text-left">SYMBOL</th>
+                    <th className="px-2 py-1 text-left">STATUS</th>
+                    <th className="px-2 py-1 text-right">QTY</th>
+                    <th className="px-2 py-1 text-right">ENTRY</th>
+                    <th className="px-2 py-1 text-right">EXIT</th>
+                    <th className="px-2 py-1 text-right">P&L</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {perf.plans.map((p) => (
+                    <tr key={p.id} className="border-b border-bb-border/50 hover:bg-bb-hover">
+                      <td className="whitespace-nowrap px-2 py-1 text-bb-muted" data-numeric>
+                        {p.created_at?.slice(5, 16).replace("T", " ") ?? "-"}
+                      </td>
+                      <td className="px-2 py-1 text-bb-amber">{p.underlying}</td>
+                      <td className="px-2 py-1 text-bb-muted">{p.status}</td>
+                      <td className="px-2 py-1 text-right" data-numeric>
+                        {p.qty}
+                      </td>
+                      <td className="px-2 py-1 text-right" data-numeric>
+                        {p.entry_limit?.toFixed(2) ?? "-"}
+                      </td>
+                      <td className="px-2 py-1 text-right" data-numeric>
+                        {p.exit_premium == null ? "—" : p.exit_premium.toFixed(2)}
+                      </td>
+                      <td className={"px-2 py-1 text-right " + pnlColor(p.realized_pnl)} data-numeric>
+                        {p.realized_pnl == null ? "—" : p.realized_pnl.toFixed(2)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+function SourcePanel({ kind }: { kind: string }) {
+  const [open, setOpen] = useState(false);
+  const [source, setSource] = useState<{ file: string; text: string } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!open || source) return;
+    getStrategySource(kind)
+      .then((s) => setSource({ file: s.file, text: s.source }))
+      .catch((err) => setError(apiError(err)));
+  }, [open, source, kind]);
+
+  return (
+    <div className="panel flex shrink-0 flex-col">
+      <button
+        className="panel-title flex w-full items-center justify-between text-left hover:bg-bb-hover"
+        onClick={() => setOpen((o) => !o)}
+        title="The exact module source the engine is running for this strategy kind"
+      >
+        <span>
+          SOURCE — {kind} {source ? `(${source.file})` : ""}
+        </span>
+        <span className="pr-2 text-bb-muted">{open ? "▾ hide" : "▸ show"}</span>
+      </button>
+      {open &&
+        (error ? (
+          <div className="px-2 py-2 text-[11px] text-bb-loss">{error}</div>
+        ) : !source ? (
+          <div className="px-2 py-2 text-[11px] text-bb-muted">loading…</div>
+        ) : (
+          <pre className="max-h-96 overflow-auto bg-black p-2 text-[10.5px] leading-snug text-bb-neutral">
+            {source.text}
+          </pre>
+        ))}
     </div>
   );
 }

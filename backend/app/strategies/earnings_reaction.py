@@ -355,7 +355,7 @@ class EarningsReaction(Strategy):
                            signal_ids=provenance)
             return
 
-        intent = self._intent(sym, side, px, ctx.params, provenance)
+        intent = self._intent(sym, side, px, quote, ctx.params, provenance)
         if not bool(ctx.params["live"]):
             await ctx.note({"would_trade": {**detail, "side": side,
                                             "intent": _intent_dict(intent)}},
@@ -366,9 +366,15 @@ class EarningsReaction(Strategy):
                      "long" if side > 0 else "short", sym, px, move_pct,
                      verdict["confidence"])
 
-    def _intent(self, sym: str, side: int, px: float, params: dict,
-                signal_ids: tuple[int, ...]) -> TradeIntent:
-        price = round(px, 2)
+    def _intent(self, sym: str, side: int, px: float, quote: dict,
+                params: dict, signal_ids: tuple[int, ...]) -> TradeIntent:
+        # Marketable entry: cross the spread on the entry side (ref_tick's
+        # convention) — longs lift the ask, shorts hit the bid. `px` (mid)
+        # stays the MOVE measurement; the order prices at the touch, and the
+        # exec-quality ledger records what immediacy cost.
+        touch = float((quote.get("ask") if side > 0
+                       else (quote.get("bid") or quote.get("ask"))) or px)
+        price = round(touch, 2)
         qty = max(1, int(float(params["notional_per_name"]) // price))
         entry = side * price
         tp = round(side * price * (1 + side * float(params["tp_pct"])), 2)
@@ -386,6 +392,11 @@ class EarningsReaction(Strategy):
             reason=f"earnings reaction {'long' if side > 0 else 'short'}",
             signal_ids=signal_ids,
             dedupe_key=f"earn:{sym}:{self._watch_date}",
+            # Event ts = EDGAR acceptance; acceptance->text->analysis can
+            # legitimately take 2-5 min on a busy night. 10 min still means
+            # "same release, reaction phase" for a T+1 hold; the default
+            # 300s would refuse valid entries on slow-analysis nights.
+            max_event_age_s=600.0,
         )
 
     # ---------------------------------------------------------------- manual

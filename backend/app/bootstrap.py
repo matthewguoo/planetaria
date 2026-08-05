@@ -149,6 +149,9 @@ async def startup(app: FastAPI, settings: Settings) -> None:
         db, bus, signal_store, trade, risk, market, enforcer.clock, settings
     )
     app.state.strategy_runner = runner
+    # KeepAwake watches the runner too: enabled strategies need the box
+    # awake for feeds and timer ticks even with zero open plans (note-mode).
+    app.state.keep_awake.runner = runner
     await runner.start()
 
 

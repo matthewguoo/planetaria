@@ -44,7 +44,11 @@ class Settings(BaseSettings):
 
     # LLM analysis gateway (ctx.analyze). Absent key = analyze() raises a
     # clean AnalysisError; nothing else in the engine depends on it.
+    # LLM_BACKEND=claude-cli runs analyses through the local Claude Code CLI
+    # on subscription auth instead of the API (see llm.ClaudeCliClient for
+    # the measured latency/quota tradeoffs).
     anthropic_api_key: str = ""
+    llm_backend: Literal["api", "claude-cli"] = "api"
     llm_model: str = "claude-opus-5"
     llm_effort: Literal["low", "medium", "high", "xhigh", "max"] = "low"
 

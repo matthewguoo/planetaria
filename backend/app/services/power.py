@@ -6,9 +6,11 @@ sleeps with a position open takes the SL and the time stop down with it
 position was still open at 22:48). Two defenses:
 
 - KeepAwake: hold Windows' ES_SYSTEM_REQUIRED execution state while any
-  plan is open, so the OS does not idle-sleep on an open position. Display
-  sleep stays allowed. A lid close or an explicit user sleep still wins —
-  this blocks the idle timer, not the user. No-op off Windows (Docker/CI).
+  plan is open OR any strategy instance is running (added 2026-08-05: a
+  note-mode watcher holds no plans, but a box that idle-sleeps at 15:00
+  misses the calendar fetch, the watchlist tick, and the whole night).
+  Display sleep stays allowed. A lid close or an explicit user sleep still
+  wins — this blocks the idle timer, not the user. No-op off Windows.
 - wake_watchdog: detect that the event loop STOPPED anyway (sleep,
   hibernate, suspended VM) by comparing actual vs expected wake time, then
   reconcile immediately — the time-stop backstop and the parked-exit logic
@@ -37,13 +39,22 @@ def _set_execution_state(keep_awake: bool) -> bool:
 
 
 class KeepAwake:
-    def __init__(self, risk, interval_s: float = 30.0):
+    def __init__(self, risk, interval_s: float = 30.0, runner=None):
         self.risk = risk
+        # Strategy runner is constructed AFTER KeepAwake in bootstrap;
+        # assigned post-construction (app.state.keep_awake.runner = runner).
+        self.runner = runner
         self.interval_s = interval_s
         self.supported = sys.platform == "win32"
         self.active = False
 
-    def _apply(self, want: bool) -> None:
+    def _wanted_reason(self) -> str | None:
+        """Why the machine must stay awake right now, or None."""
+        if self.runner is not None and getattr(self.runner, "_running", None):
+            return "strategy instances running"
+        return None
+
+    def _apply(self, want: bool, reason: str | None) -> None:
         if not _set_execution_state(want):
             log.warning("SetThreadExecutionState failed (keep-awake=%s)", want)
             return
@@ -51,7 +62,7 @@ class KeepAwake:
             log.warning(
                 "keep-awake %s (%s)",
                 "ON - system sleep inhibited" if want else "off - system may sleep",
-                "open plans present" if want else "no open plans",
+                reason if want else "no open plans, no running strategies",
             )
         self.active = want
 
@@ -67,8 +78,12 @@ class KeepAwake:
             while True:
                 try:
                     # Any open plan needs the engine: entries want their TTL
-                    # cancel, positions want TP/SL/time-stop enforcement.
-                    self._apply(bool(await self.risk.open_plans()))
+                    # cancel, positions want TP/SL/time-stop enforcement. Any
+                    # running strategy needs feeds and timer ticks live.
+                    reason = ("open plans present"
+                              if await self.risk.open_plans()
+                              else self._wanted_reason())
+                    self._apply(reason is not None, reason)
                 except asyncio.CancelledError:
                     raise
                 except Exception:
@@ -78,7 +93,7 @@ class KeepAwake:
             # Never leave a dead process's claim standing (best effort: the
             # OS drops per-thread state with the thread anyway).
             if self.active:
-                self._apply(False)
+                self._apply(False, None)
 
 
 async def wake_watchdog(enforcer, interval_s: float = 5.0, threshold_s: float = 30.0) -> None:

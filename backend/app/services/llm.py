@@ -26,9 +26,12 @@ intent gate and the risk stack decide what happens to it.
 import asyncio
 import json
 import logging
+import os
+import shutil
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
 from app.services.signals.events import Event
 
@@ -71,6 +74,72 @@ class Analysis:
     latency_ms: int
 
 
+class ClaudeCliClient:
+    """Duck-typed stand-in for AsyncAnthropic that shells out to the local
+    Claude Code CLI (`claude -p`) on the user's SUBSCRIPTION auth — zero
+    API key. Selected via LLM_BACKEND=claude-cli.
+
+    Empirically verified 2026-08-05 on claude 2.1.220 (Windows .exe):
+    --json-schema returns schema-valid JSON in the envelope's `result`;
+    prompt piped via stdin (press releases exceed Windows argv limits);
+    --allowedTools "" + --permission-mode dontAsk denies all tool use, and
+    --system-prompt REPLACES Claude Code's default context. Costs to know:
+    ~4-19s api time + process start per call, and ~33k tokens of CLI
+    context overhead billed to the subscription window per call (each call
+    is a fresh session). Fine for tens of analyses a night; the API-key
+    backend is the right choice when latency or quota headroom matter."""
+
+    def __init__(self):
+        self.messages = SimpleNamespace(create=self._create)
+
+    @staticmethod
+    def available() -> bool:
+        return shutil.which("claude") is not None
+
+    async def _create(self, *, model, max_tokens, system, output_config,
+                      messages, **_ignored):
+        exe = shutil.which("claude")
+        if exe is None:
+            raise RuntimeError("claude CLI not found on PATH")
+        prompt = str(messages[0]["content"])
+        args = [
+            exe, "-p",
+            "--system-prompt", system,
+            "--output-format", "json",
+            "--json-schema", json.dumps(output_config["format"]["schema"]),
+            "--allowedTools", "",
+            "--permission-mode", "dontAsk",
+            "--model", model,
+        ]
+        # Force subscription auth and a clean context even when the backend
+        # itself was launched from inside a Claude Code terminal session.
+        env = {k: v for k, v in os.environ.items()
+               if k not in ("ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL",
+                            "ANTHROPIC_AUTH_TOKEN", "CLAUDECODE")}
+        proc = await asyncio.create_subprocess_exec(
+            *args,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=env,
+        )
+        out, err = await proc.communicate(prompt.encode("utf-8"))
+        if proc.returncode != 0:
+            raise RuntimeError(
+                f"claude CLI exited {proc.returncode}: "
+                f"{err.decode('utf-8', 'replace')[:300]}")
+        envelope = json.loads(out.decode("utf-8", "replace"))
+        if envelope.get("is_error") or envelope.get("subtype") != "success":
+            raise RuntimeError(f"claude CLI error: "
+                               f"{str(envelope.get('result'))[:300]}")
+        # The gateway's contract: a response with stop_reason + text blocks.
+        return SimpleNamespace(
+            stop_reason="end_turn",
+            content=[SimpleNamespace(type="text",
+                                     text=envelope.get("result") or "")],
+        )
+
+
 class LLMAnalyst:
     def __init__(self, settings, store, client: object | None = None):
         self.settings = settings
@@ -78,16 +147,27 @@ class LLMAnalyst:
         self._client = client  # injected in tests; lazily constructed live
 
     @property
+    def backend(self) -> str:
+        return getattr(self.settings, "llm_backend", "api")
+
+    @property
     def configured(self) -> bool:
-        return bool(getattr(self.settings, "anthropic_api_key", "")) or self._client is not None
+        if self._client is not None:
+            return True
+        if self.backend == "claude-cli":
+            return ClaudeCliClient.available()
+        return bool(getattr(self.settings, "anthropic_api_key", ""))
 
     def _get_client(self):
         if self._client is None:
-            # Imported here so the engine boots (and 300+ tests run) without
-            # the SDK installed when no key is configured.
-            from anthropic import AsyncAnthropic
+            if self.backend == "claude-cli":
+                self._client = ClaudeCliClient()
+            else:
+                # Imported here so the engine boots (and 300+ tests run)
+                # without the SDK installed when no key is configured.
+                from anthropic import AsyncAnthropic
 
-            self._client = AsyncAnthropic(api_key=self.settings.anthropic_api_key)
+                self._client = AsyncAnthropic(api_key=self.settings.anthropic_api_key)
         return self._client
 
     async def analyze(
@@ -109,12 +189,17 @@ class LLMAnalyst:
         journals the outcome either way (refusals and errors are evidence)."""
         if not self.configured:
             raise AnalysisError(
-                "LLM not configured: set ANTHROPIC_API_KEY in .env to enable ctx.analyze()"
+                "LLM not configured: set ANTHROPIC_API_KEY in .env (backend "
+                "'api'), or LLM_BACKEND=claude-cli with the Claude Code CLI "
+                "on PATH, to enable ctx.analyze()"
             )
         model = model or getattr(self.settings, "llm_model", DEFAULT_MODEL)
         effort = effort or getattr(self.settings, "llm_effort", DEFAULT_EFFORT)
         max_tokens = max_tokens or DEFAULT_MAX_TOKENS
-        timeout_s = timeout_s or DEFAULT_TIMEOUT_S
+        # CLI backend pays process start + a fresh session per call; the
+        # 25s API default would time out cold starts spuriously.
+        timeout_s = timeout_s or (60.0 if self.backend == "claude-cli"
+                                  else DEFAULT_TIMEOUT_S)
 
         system_prompt = HARDENED_SYSTEM if not system else f"{HARDENED_SYSTEM}\n\n{system}"
         user_content = f"{task}\n\n<data>\n{data}\n</data>"

@@ -310,11 +310,12 @@ class _FakeRisk:
 
 
 @pytest.mark.asyncio
-async def test_keep_awake_tracks_open_plans(monkeypatch):
+async def test_keep_awake_tracks_open_plans_and_running_strategies(monkeypatch):
     calls: list[bool] = []
     monkeypatch.setattr(power, "_set_execution_state", lambda keep: calls.append(keep) or True)
     risk = _FakeRisk()
-    keeper = KeepAwake(risk, interval_s=0.01)
+    runner = SimpleNamespace(_running={})
+    keeper = KeepAwake(risk, interval_s=0.01, runner=runner)
     keeper.supported = True  # force the Windows path regardless of test OS
 
     task = asyncio.create_task(keeper.run())
@@ -323,6 +324,14 @@ async def test_keep_awake_tracks_open_plans(monkeypatch):
         await asyncio.sleep(0.05)
         assert keeper.active is True
         risk.plans = []
+        await asyncio.sleep(0.05)
+        assert keeper.active is False
+        # Zero plans but a running strategy instance (note-mode watcher):
+        # the box must stay awake for feeds and timer ticks.
+        runner._running["row-1"] = object()
+        await asyncio.sleep(0.05)
+        assert keeper.active is True
+        runner._running.clear()
         await asyncio.sleep(0.05)
         assert keeper.active is False
     finally:
