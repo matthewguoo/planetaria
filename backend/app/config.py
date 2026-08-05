@@ -48,6 +48,12 @@ class Settings(BaseSettings):
     llm_model: str = "claude-opus-5"
     llm_effort: Literal["low", "medium", "high", "xhigh", "max"] = "low"
 
+    # Earnings data plane (Phase 10). EDGAR requires a real User-Agent with a
+    # contact address (SEC fair-access rules); the calendar feed only starts
+    # when a Finnhub key is present (free tier: finnhub.io/register).
+    edgar_user_agent: str = "planetaria/0.1 (contact: matthewguo.x86@gmail.com)"
+    finnhub_api_key: str = ""
+
     def validate_paper_lock(self) -> None:
         # v1 is hard-locked to paper trading. Refuse to boot otherwise.
         if not self.alpaca_paper:

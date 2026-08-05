@@ -128,6 +128,17 @@ async def startup(app: FastAPI, settings: Settings) -> None:
     feeds = [TimerFeed(bus)]
     if alpaca.configured:
         feeds.append(AlpacaNewsFeed(alpaca, bus, signal_store))
+    # EDGAR needs no key (free, authoritative 8-K full text). The Finnhub
+    # earnings calendar only runs with a key; without it the reaction
+    # strategy has no watchlist but nothing else degrades.
+    from app.services.signals.edgar import EdgarFeed
+    from app.services.signals.earnings_calendar import EarningsCalendarFeed
+
+    feeds.append(EdgarFeed(bus, signal_store, settings))
+    if settings.finnhub_api_key:
+        feeds.append(EarningsCalendarFeed(bus, signal_store, settings))
+    else:
+        log.info("FINNHUB_API_KEY not set - earnings calendar feed disabled")
     app.state.event_bus = bus
     app.state.signal_store = signal_store
     app.state.feeds = feeds
