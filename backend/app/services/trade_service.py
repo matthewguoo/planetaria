@@ -171,7 +171,7 @@ class TradeService:
                     "occ": occ if is_option else None,
                 }
             )
-        self._positions_cache = (_time.monotonic(), out)
+        self._positions_cache = (time.monotonic(), out)
         return out
 
     async def untracked_positions(self) -> list[dict]:

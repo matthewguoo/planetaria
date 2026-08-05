@@ -29,6 +29,25 @@ class _Enforcer:
         self.armed.append(plan_id)
 
 
+class _FakeAlpaca:
+    """Fake AlpacaService exercising the real broker_positions() code path:
+    call() actually invokes the SDK fn, unlike tests that monkeypatch
+    broker_positions wholesale."""
+
+    def __init__(self, positions):
+        self.configured = True
+        self.get_all_calls = 0
+
+        def get_all_positions():
+            self.get_all_calls += 1
+            return positions
+
+        self.trading = SimpleNamespace(get_all_positions=get_all_positions)
+
+    async def call(self, fn, /, *args, **kwargs):
+        return fn(*args)
+
+
 @pytest_asyncio.fixture
 async def service(tmp_path):
     db = Database()
@@ -113,6 +132,50 @@ async def test_adopt_credit_group_brackets_correctly(service, monkeypatch):
     assert plan["sl_premium"] < plan["entry_limit"] < plan["tp_premium"]
     assert plan["tp_premium"] == pytest.approx(-0.6)
     assert plan["sl_premium"] == pytest.approx(-1.8)
+
+
+@pytest.mark.asyncio
+async def test_broker_positions_normalizes_and_caches(service):
+    # Regression: the cache-store line referenced a nonexistent `_time`
+    # alias, so every real broker_positions() call raised NameError (and
+    # every caller swallowed it). Run the REAL method end to end.
+    raw = [
+        SimpleNamespace(
+            symbol="SPY260731C00450000",
+            qty="2",
+            asset_class="us_option",
+            avg_entry_price="3.0",
+            current_price="3.5",
+            market_value="700",
+            unrealized_pl="100",
+        ),
+        SimpleNamespace(
+            symbol="AAPL",
+            qty="-10",
+            asset_class="us_equity",
+            avg_entry_price="200",
+            current_price=None,
+            market_value=None,
+            unrealized_pl=None,
+        ),
+    ]
+    service.alpaca = _FakeAlpaca(raw)
+
+    out = await service.broker_positions()
+
+    assert [p["symbol"] for p in out] == ["SPY260731C00450000", "AAPL"]
+    opt, stk = out
+    assert opt["asset_class"] == "option"
+    assert opt["occ"] == {
+        "underlying": "SPY", "expiry": "2026-07-31", "right": "C", "strike": 450.0
+    }
+    assert opt["qty"] == 2.0 and opt["side"] == 1
+    assert stk["asset_class"] == "stock" and stk["occ"] is None
+    assert stk["qty"] == -10.0 and stk["side"] == -1
+
+    # Second call within max_age_s must come from the cache.
+    assert await service.broker_positions() == out
+    assert service.alpaca.get_all_calls == 1
 
 
 @pytest.mark.asyncio
