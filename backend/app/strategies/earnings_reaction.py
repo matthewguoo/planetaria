@@ -95,14 +95,22 @@ class EarningsReaction(Strategy):
     default_params = {
         "n_names": 8,
         "min_price": 5.0,
-        "notional_per_name": 1000.0,
+        # Sizing is stop-risk based, scaled by account equity and the
+        # verdict (2026-08-05, replacing fixed notional): risk_pct_per_name
+        # of equity is what the STOP may lose, so base notional =
+        # equity * risk_pct / sl_pct (0.5% risk / 5% stop = 10% of equity),
+        # then conviction multipliers — confidence x1.5/x1.0/x0.5, any
+        # quality flag x0.75, |tape move| > 6% x0.5 (the continuation is
+        # partly spent). Engine risk gates (per-name notional cap, gross
+        # exposure, borrow checks) still apply downstream.
+        "risk_pct_per_name": 0.5,
         "min_move_pct": 1.0,       # tape agreement threshold, percent
         "tp_pct": 0.10,            # guardrail bracket; the THESIS exit is
         "sl_pct": 0.05,            # the time stop
         "hold": "T+1",             # T+1 | T+2, exits 15:55 ET
         "live": False,             # note-mode until Matthew flips it
         "max_text": 12_000,
-        "effort": None,            # None -> engine default
+        "effort": "medium",        # release parsing deserves real effort
         "analysis_timeout_s": 90.0,
     }
 
@@ -115,13 +123,17 @@ class EarningsReaction(Strategy):
 
     @classmethod
     def validate_params(cls, params: dict) -> dict:
+        # Legacy key from the fixed-notional era: tolerate and drop, so
+        # pre-2026-08-05 instance rows can still spawn after upgrade.
+        params = {k: v for k, v in params.items() if k != "notional_per_name"}
         clean = super().validate_params(params)
         if not (1 <= int(clean["n_names"]) <= 20):
             raise ValueError("n_names must be 1-20")
         if float(clean["min_price"]) < 1.0:
             raise ValueError("min_price must be >= 1")
-        if not (100.0 <= float(clean["notional_per_name"]) <= 5000.0):
-            raise ValueError("notional_per_name must be 100-5000 (paper skeleton)")
+        if not (0.05 <= float(clean["risk_pct_per_name"]) <= 2.0):
+            raise ValueError("risk_pct_per_name must be 0.05-2.0 (% of equity "
+                             "at the stop)")
         if not (0.2 <= float(clean["min_move_pct"]) <= 5.0):
             raise ValueError("min_move_pct must be 0.2-5.0 (percent)")
         for key in ("tp_pct", "sl_pct"):
@@ -360,7 +372,21 @@ class EarningsReaction(Strategy):
                            signal_ids=provenance)
             return
 
-        intent = self._intent(sym, side, px, quote, ctx.params, provenance)
+        try:
+            equity = float((await ctx.account()).get("equity") or 0)
+        except Exception as exc:
+            await ctx.note({"skip": f"cannot size {sym}: account equity "
+                                    f"unavailable ({exc})"},
+                           signal_ids=provenance)
+            return
+        if equity <= 0:
+            await ctx.note({"skip": f"cannot size {sym}: equity reads {equity}"},
+                           signal_ids=provenance)
+            return
+        sizing = _size_position(equity, verdict, move_pct, ctx.params)
+        detail["sizing"] = sizing
+        intent = self._intent(sym, side, px, quote, sizing["notional"],
+                              ctx.params, provenance)
         if not bool(ctx.params["live"]):
             await ctx.note({"would_trade": {**detail, "side": side,
                                             "intent": _intent_dict(intent)}},
@@ -372,7 +398,8 @@ class EarningsReaction(Strategy):
                      verdict["confidence"])
 
     def _intent(self, sym: str, side: int, px: float, quote: dict,
-                params: dict, signal_ids: tuple[int, ...]) -> TradeIntent:
+                notional: float, params: dict,
+                signal_ids: tuple[int, ...]) -> TradeIntent:
         # Marketable entry: cross the spread on the entry side (ref_tick's
         # convention) — longs lift the ask, shorts hit the bid. `px` (mid)
         # stays the MOVE measurement; the order prices at the touch, and the
@@ -380,7 +407,7 @@ class EarningsReaction(Strategy):
         touch = float((quote.get("ask") if side > 0
                        else (quote.get("bid") or quote.get("ask"))) or px)
         price = round(touch, 2)
-        qty = max(1, int(float(params["notional_per_name"]) // price))
+        qty = max(1, int(notional // price))
         entry = side * price
         tp = round(side * price * (1 + side * float(params["tp_pct"])), 2)
         sl = round(side * price * (1 - side * float(params["sl_pct"])), 2)
@@ -442,6 +469,29 @@ class EarningsReaction(Strategy):
 
 
 # ------------------------------------------------------------------ helpers
+
+def _size_position(equity: float, verdict: dict, move_pct: float,
+                   params: dict) -> dict:
+    """Stop-risk sizing with conviction scaling (see default_params note).
+    Returns the full audit trail — every sizing decision must be
+    reconstructible from the journal."""
+    risk_dollars = equity * float(params["risk_pct_per_name"]) / 100.0
+    base_notional = risk_dollars / float(params["sl_pct"])
+    conf_mult = {"high": 1.5, "medium": 1.0, "low": 0.5}.get(
+        str(verdict.get("confidence")), 1.0)
+    flag_mult = 0.75 if verdict.get("quality_flags") else 1.0
+    move_mult = 0.5 if abs(move_pct) > 6.0 else 1.0
+    notional = base_notional * conf_mult * flag_mult * move_mult
+    return {
+        "equity": round(equity, 2),
+        "risk_dollars": round(risk_dollars, 2),
+        "base_notional": round(base_notional, 2),
+        "conf_mult": conf_mult,
+        "flag_mult": flag_mult,
+        "move_mult": move_mult,
+        "notional": round(notional, 2),
+    }
+
 
 def _usable_price(quote: dict | None, max_age_s: float | None = None
                   ) -> float | None:

@@ -68,9 +68,17 @@ async def rig(tmp_path):
     store = SignalStore(db)
     fake = FakeAnthropic(ok_response(verdict_json()))
     market = FakeMarket()
+
+    class NoteModeTrade:
+        """get_account only: sizing needs equity; note-mode must never
+        reach place_trade (its absence IS the assertion)."""
+
+        async def get_account(self):
+            return {"equity": 100_000.0}
+
     runner = StrategyRunner(
-        db, bus, store, trade=None, risk=RiskService(db), market=market,
-        clock=None, settings=SETTINGS,
+        db, bus, store, trade=NoteModeTrade(), risk=RiskService(db),
+        market=market, clock=None, settings=SETTINGS,
         llm=LLMAnalyst(SETTINGS, store, client=fake),
     )
     yield SimpleNamespace(db=db, bus=bus, store=store, runner=runner,
@@ -176,7 +184,11 @@ class TestNightFlow:
         assert wt["side"] == 1
         assert wt["move_pct"] == pytest.approx(2.0, abs=0.05)
         assert wt["intent"]["dedupe_key"] == f"earn:AMD:{today_et()}"
-        assert wt["intent"]["qty"] == 1  # 1000 notional // 510
+        # Stop-risk sizing: $100k equity, 0.5% risk / 5% stop = $10k base;
+        # high confidence x1.5, no flags, +2% move -> $15k at the 510.50 ask.
+        assert wt["sizing"]["risk_dollars"] == 500.0
+        assert wt["sizing"]["notional"] == 15_000.0
+        assert wt["intent"]["qty"] == 29  # 15000 // 510.5
         assert wt["intent"]["extended_hours"] is True
 
         # Consensus AND before-close setup reached the model; text was the
@@ -412,9 +424,14 @@ def test_validate_params():
     with pytest.raises(ValueError):
         cls.validate_params({"hold": "T+5"})
     with pytest.raises(ValueError):
-        cls.validate_params({"notional_per_name": 50_000})
+        cls.validate_params({"risk_pct_per_name": 5.0})
     with pytest.raises(ValueError):
         cls.validate_params({"nope": 1})
+    # Legacy fixed-notional key from pre-upgrade instance rows: dropped, not
+    # fatal — old DB rows must still spawn.
+    clean = cls.validate_params({"notional_per_name": 1000.0})
+    assert "notional_per_name" not in clean
+    assert clean["risk_pct_per_name"] == 0.5
 
 
 def test_exit_time_skips_weekend():
