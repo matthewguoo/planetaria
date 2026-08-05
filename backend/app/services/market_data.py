@@ -535,6 +535,38 @@ class MarketDataService:
             log.error("latest quote %s failed: %s", symbol, exc)
             return cached
 
+    async def daily_closes(self, symbol: str, days: int = 6) -> list[dict]:
+        """COMPLETED daily bars for the last `days` sessions, oldest first:
+        [{"date", "close", "volume"}]. Read-only strategy context (prior
+        close, run-up into an earnings print) — deliberately excludes
+        today's partial bar: the window ends at last ET midnight, which both
+        pins the meaning of "close" to finished sessions and keeps the
+        request clear of the free tier's SIP recency cut (which empirically
+        rejects windows ending anywhere near now — see
+        scripts/verify_news_latency.py, 2026-08-05). Compute today's move
+        against a live quote instead. Keyless mode / errors return []."""
+        if not self.alpaca.configured or days < 1:
+            return []
+        from zoneinfo import ZoneInfo
+
+        midnight_et = (datetime.now(ZoneInfo("America/New_York"))
+                       .replace(hour=0, minute=0, second=0, microsecond=0))
+        request = StockBarsRequest(
+            symbol_or_symbols=symbol,
+            timeframe=TimeFrame.Day,
+            start=midnight_et - timedelta(days=days * 2 + 5),  # weekend/holiday pad
+            end=midnight_et,
+            feed=DataFeed.SIP,  # historical dailies: SIP is free-tier-fine and accurate
+        )
+        try:
+            result = await self.alpaca.call(self.alpaca.stock_data.get_stock_bars, request)
+        except Exception as exc:
+            log.error("daily_closes %s failed: %s", symbol, exc)
+            return []
+        bars = result.data.get(symbol, [])
+        return [{"date": b.timestamp.date().isoformat(), "close": float(b.close),
+                 "volume": float(b.volume)} for b in bars][-days:]
+
     def spot(self, symbol: str) -> float:
         """Freshest defensible spot for pricing (see freshest_spot)."""
         bars = self.bars.get_bars(symbol, "1m", limit=1)

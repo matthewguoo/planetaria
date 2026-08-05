@@ -11,7 +11,14 @@ time stop T+1/T+2. Disagreement = no trade, journaled.
 One instance watches many tickers:
 - `estimate` events (earnings-cal feed) accumulate; the 15:30 ET timer tick
   freezes tonight's AMC watchlist (n_names cap, min_price floor) and
-  snapshots each name's pre-release price (px0).
+  snapshots each name's pre-release price (px0) plus BEFORE-CLOSE CONTEXT:
+  prior close, day move, and 5-session run-up (market.daily_closes). The
+  run-up rides into the LLM task so "beat but priced in" is scoreable —
+  AMD 2026-08-04 came in +14.1%/5d, double-beat, and dropped 5.7%.
+- The 16:04 ET tick re-anchors px0 to the post-auction tape for names whose
+  release hasn't crossed (guards: decided names and anything already past
+  min_move_pct keep their anchor), so move_pct measures reaction to the
+  release, not 15:30->close drift.
 - The first results-bearing `news` event per watched name — edgar-8k
   full text, or a single-symbol numbers headline from alpaca-news,
   whichever lands first (neither source dominates: measured median -33s
@@ -40,6 +47,7 @@ from app.strategies.base import Strategy, StrategyContext, TradeIntent
 ET = ZoneInfo("America/New_York")
 
 WATCHLIST_ET = "15:30"     # freeze tonight's watchlist on this tick
+REANCHOR_ET = "16:04"      # re-anchor px0 to the post-auction tape (see below)
 EXIT_ET = dtime(15, 55)    # time-stop lands just before the close T+1/T+2
 QUOTE_MAX_AGE_S = 120.0    # ref_tick's freshness backstop, same reasoning
 SCAN_CAP_MULT = 3          # quote at most 3*n_names candidates at 15:30
@@ -133,8 +141,10 @@ class EarningsReaction(Strategy):
         if event.type == "estimate":
             self._stash_estimate(event)
         elif event.type == "timer":
-            if self._watchlist_tick(event):
+            if self._tick_at(event, WATCHLIST_ET):
                 await self._build_watchlist(ctx)
+            elif self._tick_at(event, REANCHOR_ET) and self._watch:
+                await self._reanchor(ctx)
         elif event.type == "news":
             for sym in event.symbols:
                 if self._eligible(sym, event):
@@ -154,15 +164,14 @@ class EarningsReaction(Strategy):
             self._est_ids[sym] = event.signal_id
 
     @staticmethod
-    def _watchlist_tick(event: Event) -> bool:
+    def _tick_at(event: Event, hhmm: str) -> bool:
         if event.payload.get("kind") != "tick":
             return False
         et_iso = event.payload.get("et")
         if not et_iso:
             return False
         now_et = datetime.fromisoformat(et_iso)
-        return (now_et.weekday() < 5
-                and now_et.strftime("%H:%M") == WATCHLIST_ET)
+        return now_et.weekday() < 5 and now_et.strftime("%H:%M") == hhmm
 
     async def _build_watchlist(self, ctx: StrategyContext) -> None:
         today = datetime.now(ET).date().isoformat()
@@ -186,19 +195,65 @@ class EarningsReaction(Strategy):
             if px is None or px < min_price:
                 skipped.append(sym)
                 continue
+            # Before-close context: run-up into the print is a first-class
+            # feature (AMD 2026-08-04 came in +14.1%/5d, double-beat, and
+            # dropped 5.7% — "priced in" is real). Optional by design:
+            # daily_closes returning [] never blocks watching.
+            closes = await ctx.market.daily_closes(sym, days=6)
+            prior_close = closes[-1]["close"] if closes else None
+            run_pct = (round((closes[-1]["close"] / closes[0]["close"] - 1) * 100, 2)
+                       if len(closes) >= 2 else None)
+            day_move = (round((px / prior_close - 1) * 100, 2)
+                        if prior_close else None)
             watch[sym] = {"est": candidates[sym], "px0": px,
-                          "est_id": self._est_ids.get(sym)}
+                          "est_id": self._est_ids.get(sym),
+                          "prior_close": prior_close,
+                          "day_move_pct": day_move,
+                          "run5d_pct": run_pct}
         self._watch = watch
         self._watch_date = today
         await ctx.note(
             {"watchlist": {sym: {"px0": w["px0"],
-                                 "eps_consensus": w["est"].get("eps_consensus")}
+                                 "eps_consensus": w["est"].get("eps_consensus"),
+                                 "day_move_pct": w["day_move_pct"],
+                                 "run5d_pct": w["run5d_pct"]}
                            for sym, w in watch.items()},
              "date": today, "amc_candidates": len(candidates),
              "skipped": skipped},
             signal_ids=tuple(w["est_id"] for w in watch.values()
                              if w["est_id"] is not None),
         )
+
+    async def _reanchor(self, ctx: StrategyContext) -> None:
+        """16:04 ET: the closing auction has printed, so re-anchor px0 for
+        names whose release has not crossed yet — move_pct should measure
+        reaction to the RELEASE, not 15:30->close drift plus the auction
+        (AMD 2026-08-04: 15:59 tape ~526 vs 518.58 official close). Guards:
+        decided names keep their anchor, and a name already >= min_move_pct
+        off its 15:30 snapshot is left alone — a move that size before our
+        sources fired means a release is in flight and re-anchoring would
+        erase exactly the signal we trade."""
+        min_move = float(ctx.params["min_move_pct"])
+        changed: dict[str, dict] = {}
+        skipped: dict[str, str] = {}
+        for sym, w in self._watch.items():
+            if f"{sym}:{self._watch_date}" in self._decided:
+                skipped[sym] = "decided"
+                continue
+            quote = await ctx.market.overnight_price(sym)
+            px = _usable_price(quote, max_age_s=QUOTE_MAX_AGE_S)
+            if px is None:
+                skipped[sym] = "no fresh quote"
+                continue
+            drift_pct = (px / w["px0"] - 1) * 100
+            if abs(drift_pct) >= min_move:
+                skipped[sym] = f"already {drift_pct:+.2f}% - release in flight?"
+                continue
+            changed[sym] = {"px0": round(px, 4), "was": w["px0"]}
+            w["px0"] = px
+            if w.get("prior_close"):
+                w["day_move_pct"] = round((px / w["prior_close"] - 1) * 100, 2)
+        await ctx.note({"reanchor": changed, "skipped": skipped})
 
     # -------------------------------------------------------------- decision
 
@@ -239,6 +294,16 @@ class EarningsReaction(Strategy):
         move_pct = (px / watch["px0"] - 1) * 100
 
         est = watch["est"]
+        setup_bits = []
+        if watch.get("day_move_pct") is not None:
+            setup_bits.append(f"{watch['day_move_pct']:+.1f}% today into the print")
+        if watch.get("run5d_pct") is not None:
+            setup_bits.append(f"{watch['run5d_pct']:+.1f}% over the prior 5 sessions")
+        setup_line = (
+            f" Setup into the print: {', '.join(setup_bits)}. Weigh whether "
+            f"these results were already priced in by that run-up."
+            if setup_bits else ""
+        )
         task = (
             f"{sym} released quarterly results after the close. Street "
             f"consensus for {est.get('fiscal_period') or 'the quarter'}: "
@@ -246,6 +311,7 @@ class EarningsReaction(Strategy):
             f"{est.get('revenue_consensus', 'unknown')}. Extract the "
             f"reported figures and guidance from the release, compare "
             f"against that consensus, and judge near-term direction."
+            f"{setup_line}"
         )
         # News id first: the analysis row chains (parent_id) to the text it
         # analyzed; the estimate rides along as secondary provenance.
@@ -277,6 +343,8 @@ class EarningsReaction(Strategy):
         detail = {
             "symbol": sym, "verdict": verdict, "source": event.source,
             "px0": watch["px0"], "px": px, "move_pct": round(move_pct, 2),
+            "day_move_pct": watch.get("day_move_pct"),
+            "run5d_pct": watch.get("run5d_pct"),
             "model": analysis.model, "latency_ms": analysis.latency_ms,
         }
         if side == 0:

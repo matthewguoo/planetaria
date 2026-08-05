@@ -40,12 +40,16 @@ def verdict_json(direction="bullish", confidence="high") -> str:
 class FakeMarket:
     def __init__(self):
         self.prices: dict[str, tuple[float, float]] = {}
+        self.daily: dict[str, list[dict]] = {}
 
     async def overnight_price(self, symbol: str) -> dict | None:
         px = self.prices.get(symbol)
         if px is None:
             return None
         return {"bid": px[0], "ask": px[1], "ts": time.time() * 1000}
+
+    async def daily_closes(self, symbol: str, days: int = 6) -> list[dict]:
+        return self.daily.get(symbol, [])[-days:]
 
 
 @pytest_asyncio.fixture
@@ -133,10 +137,15 @@ async def publish_release(rig, symbol, source="edgar-8k", headline=None,
 
 
 async def armed_instance(rig, params=None):
-    """Create+enable an instance, feed it AMD estimate, freeze watchlist."""
+    """Create+enable an instance, feed it AMD estimate, freeze watchlist.
+    Daily context: prior close 490, +8.89% run over the 5 prior sessions."""
     row = await rig.runner.create("earnings_reaction", "earn", params or {})
     await rig.runner.set_state(row["id"], "enabled")
     rig.market.prices["AMD"] = (500.0, 500.5)
+    rig.market.daily["AMD"] = [
+        {"date": f"2026-07-{27 + i}", "close": close, "volume": 1e6}
+        for i, close in enumerate([450.0, 452.0, 470.0, 465.0, 480.0, 490.0])
+    ]
     est = await publish_estimate(rig, "AMD")
     publish_tick(rig)
     note = await wait_note(rig, row["id"], "watchlist")
@@ -162,10 +171,18 @@ class TestNightFlow:
         assert wt["intent"]["qty"] == 1  # 1000 notional // 510
         assert wt["intent"]["extended_hours"] is True
 
-        # Consensus reached the model; text was the data payload.
+        # Consensus AND before-close setup reached the model; text was the
+        # data payload. px0 500.25 vs prior close 490 = +2.09% day move;
+        # 490 vs 450 five sessions back = +8.89% run-up.
         call = rig.fake.calls[0]
-        assert "1.61" in call["messages"][0]["content"]
-        assert "Revenue $7.7B" in call["messages"][0]["content"]
+        content = call["messages"][0]["content"]
+        assert "1.61" in content
+        assert "Revenue $7.7B" in content
+        assert "+2.1% today into the print" in content
+        assert "+8.9% over the prior 5 sessions" in content
+        assert "priced in" in content
+        assert wt["day_move_pct"] == pytest.approx(2.09, abs=0.01)
+        assert wt["run5d_pct"] == pytest.approx(8.89, abs=0.01)
 
         # Provenance: news + estimate + analysis ids all on the note; the
         # analysis row chains to the NEWS event.
@@ -208,6 +225,59 @@ class TestNightFlow:
         await publish_release(rig, "AMD")
         note = await wait_note(rig, row["id"], "would_trade")
         assert note and len(rig.fake.calls) == 2
+
+
+@pytest.mark.asyncio
+class TestReanchor:
+    async def test_reanchor_moves_baseline_before_release(self, rig):
+        row, _, _ = await armed_instance(rig)
+        rig.market.prices["AMD"] = (502.0, 502.5)  # +0.45% auction drift
+        publish_tick(rig, "16:04")
+        note = await wait_note(rig, row["id"], "reanchor")
+        assert note["detail"]["reanchor"]["AMD"]["px0"] == 502.25
+        assert note["detail"]["reanchor"]["AMD"]["was"] == 500.25
+
+        rig.market.prices["AMD"] = (512.3, 512.8)  # +2.0% vs NEW anchor
+        await publish_release(rig, "AMD")
+        wt = (await wait_note(rig, row["id"], "would_trade"))["detail"]["would_trade"]
+        assert wt["px0"] == 502.25
+        assert wt["move_pct"] == pytest.approx(2.0, abs=0.05)
+
+    async def test_reanchor_leaves_inflight_release_alone(self, rig):
+        """A name already past min_move_pct at 16:04 is a release our
+        sources have not delivered yet - erasing that move would erase the
+        signal."""
+        row, _, _ = await armed_instance(rig)
+        rig.market.prices["AMD"] = (510.0, 510.5)  # +2% already
+        publish_tick(rig, "16:04")
+        note = await wait_note(rig, row["id"], "reanchor")
+        assert note["detail"]["reanchor"] == {}
+        assert "release in flight" in note["detail"]["skipped"]["AMD"]
+        await publish_release(rig, "AMD")
+        wt = (await wait_note(rig, row["id"], "would_trade"))["detail"]["would_trade"]
+        assert wt["px0"] == 500.25  # original anchor kept
+
+    async def test_reanchor_skips_decided(self, rig):
+        row, _, _ = await armed_instance(rig)
+        rig.market.prices["AMD"] = (510.0, 510.5)
+        await publish_release(rig, "AMD")
+        assert await wait_note(rig, row["id"], "would_trade")
+        publish_tick(rig, "16:04")
+        note = await wait_note(rig, row["id"], "reanchor")
+        assert note["detail"]["skipped"]["AMD"] == "decided"
+
+    async def test_missing_daily_context_never_blocks(self, rig):
+        row = await rig.runner.create("earnings_reaction", "earn", {})
+        await rig.runner.set_state(row["id"], "enabled")
+        rig.market.prices["AMD"] = (500.0, 500.5)  # no daily data set
+        await publish_estimate(rig, "AMD")
+        publish_tick(rig)
+        note = await wait_note(rig, row["id"], "watchlist")
+        assert note["detail"]["watchlist"]["AMD"]["day_move_pct"] is None
+        rig.market.prices["AMD"] = (510.0, 510.5)
+        await publish_release(rig, "AMD")
+        assert await wait_note(rig, row["id"], "would_trade")
+        assert "Setup into the print" not in rig.fake.calls[0]["messages"][0]["content"]
 
 
 @pytest.mark.asyncio
