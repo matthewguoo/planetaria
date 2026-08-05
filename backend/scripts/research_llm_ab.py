@@ -61,28 +61,44 @@ CONCURRENCY = 3
 
 # ------------------------------------------------------------------ data
 
-def load_events() -> pd.DataFrame:
-    ev = pd.read_parquet(CACHE / "pead_events_2025-02-01_2026-08-01_2873.parquet")
+WINDOWS = {
+    "2025": ("pead_events_2025-02-01_2026-08-01_2873.parquet", "2025-01"),
+    "2022": ("pead_events_2022-01-01_2022-12-31_*.parquet", "2021-12"),
+    "2023": ("pead_events_2023-01-01_2023-12-31_*.parquet", "2022-12"),
+}
+
+
+def load_events(window: str, top_per_day: int, min_dv: float) -> pd.DataFrame:
+    pat, bars_tag = WINDOWS[window]
+    ev = pd.read_parquet(sorted(CACHE.glob(pat))[0])
     ev["move_pct"] = (ev["react"] / ev["anchor"] - 1) * 100
     ev["fwd_bp"] = (ev["exit"] / ev["react"] - 1) * 1e4
     ev["month"] = ev["date"].astype(str).str[:7]
     g = ev[np.abs(ev["move_pct"]) >= GATE].copy()
-    # run-up context, as live
     bars = pd.read_parquet(
-        [f for f in CACHE.glob("bars_ohlc_*") if "2025-01" in f.name][0])
+        [f for f in CACHE.glob("bars_ohlc_*") if bars_tag in f.name][0])
     bars["date"] = pd.to_datetime(bars["date"]).dt.date
     bars = bars.sort_values(["symbol", "date"])
-    panel = {s: (gg["date"].to_list(), gg["c"].to_numpy())
+    panel = {s: (gg["date"].to_list(), gg["c"].to_numpy(),
+                 (gg["c"] * gg["v"]).to_numpy())
              for s, gg in bars.groupby("symbol")}
 
-    def runup(row):
-        d, c = panel.get(row["symbol"], (None, None))
+    def ctx(row):
+        d, c, dv = panel.get(row["symbol"], (None, None, None))
         if d is None:
-            return np.nan
+            return pd.Series({"run5d": np.nan, "dv": np.nan})
         i = np.searchsorted(d, pd.to_datetime(row["date"]).date())
-        return (c[i - 1] / c[i - 6] - 1) * 100 if 6 <= i < len(c) else np.nan
+        if not (6 <= i < len(c)):
+            return pd.Series({"run5d": np.nan, "dv": np.nan})
+        return pd.Series({"run5d": (c[i - 1] / c[i - 6] - 1) * 100,
+                          "dv": dv[i]})
 
-    g["run5d"] = g.apply(runup, axis=1)
+    g = pd.concat([g, g.apply(ctx, axis=1)], axis=1)
+    # Live-matching universe: per announce-day, the top_per_day most liquid
+    # reporters above the floor — the watchlist rule, applied historically.
+    g = g[g["dv"] >= min_dv]
+    g = (g.sort_values("dv", ascending=False)
+         .groupby("date").head(top_per_day))
     return g.reset_index(drop=True)
 
 
@@ -161,10 +177,13 @@ def build_task(sym: str, day_move: float | None, run5d: float | None) -> str:
 
 # ------------------------------------------------------------------- run
 
-async def run_arm(model: str, sample: pd.DataFrame,
+async def run_arm(model: str, window: str, sample: pd.DataFrame,
                   tick2cik: dict[str, int]) -> None:
     OUT.mkdir(parents=True, exist_ok=True)
-    out_path = OUT / f"{model}.jsonl"
+    # 2025 keeps the legacy filename so the first sampled run's verdicts
+    # are reused as checkpoints.
+    out_path = OUT / (f"{model}.jsonl" if window == "2025"
+                      else f"{model}_{window}.jsonl")
     done = set()
     if out_path.exists():
         for line in out_path.read_text(encoding="utf-8").splitlines():
@@ -258,15 +277,20 @@ def score(sample: pd.DataFrame) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--n", type=int, default=150)
+    ap.add_argument("--n", type=int, default=0,
+                    help="sample size; 0 = ALL selected events")
+    ap.add_argument("--window", default="2025", choices=list(WINDOWS))
+    ap.add_argument("--top-per-day", type=int, default=5)
+    ap.add_argument("--min-dv", type=float, default=5e7)
     ap.add_argument("--models", default="claude-fable-5,claude-opus-5")
     ap.add_argument("--score-only", action="store_true")
     args = ap.parse_args()
 
-    g = load_events()
-    sample = stratified_sample(g, args.n)
-    print(f"gate-{GATE:.0f}% events: {len(g)}; sampled {len(sample)} "
-          f"({(sample['month'] >= CUTOFF_MONTH).sum()} post-cutoff)")
+    g = load_events(args.window, args.top_per_day, args.min_dv)
+    sample = stratified_sample(g, args.n) if args.n else g
+    print(f"[{args.window}] gate-{GATE:.0f}% top-{args.top_per_day}/day "
+          f"dv>=${args.min_dv/1e6:.0f}M: {len(g)} events; running "
+          f"{len(sample)} ({(sample['month'] >= CUTOFF_MONTH).sum()} post-cutoff)")
     if not args.score_only:
         with httpx.Client(headers=SEC_UA, timeout=30) as http:
             rows = http.get("https://www.sec.gov/files/company_tickers.json").json()
@@ -274,7 +298,7 @@ def main() -> None:
         for r in rows.values():
             tick2cik.setdefault(str(r["ticker"]).upper(), int(r["cik_str"]))
         for model in args.models.split(","):
-            asyncio.run(run_arm(model.strip(), sample, tick2cik))
+            asyncio.run(run_arm(model.strip(), args.window, sample, tick2cik))
     score(sample)
 
 
