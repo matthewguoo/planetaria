@@ -195,7 +195,10 @@ def run(months: int, min_dollar_vol: float, refresh: bool) -> None:
     cal = cal[cal["symbol"].str.fullmatch(r"[A-Z]{1,5}")]  # plain US tickers
 
     start = min(cal["date"]) - timedelta(days=14)
-    end = max(cal["date"]) + timedelta(days=5)
+    # Clamp to last midnight: a window ending in the future (or near now)
+    # trips the free tier's SIP recency refusal wholesale (the same quirk
+    # documented in verify_news_latency.py).
+    end = min(max(cal["date"]) + timedelta(days=5), date.today())
     symbols = sorted(cal["symbol"].unique())
     print(f"{len(cal)} events / {len(symbols)} symbols; bars {start}..{end}")
     bars = fetch_daily_bars(symbols, start, end, refresh)
