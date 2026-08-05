@@ -154,8 +154,11 @@ async def publish_release(rig, symbol, source="edgar-8k", headline=None,
 
 async def armed_instance(rig, params=None):
     """Create+enable an instance, feed it AMD estimate, freeze watchlist.
-    Daily context: prior close 490, +8.89% run over the 5 prior sessions."""
-    row = await rig.runner.create("earnings_reaction", "earn", params or {})
+    Daily context: prior close 490, +8.89% run over the 5 prior sessions,
+    avg |daily ret| 2.16% -> vol-scaled stop 5.4%. confirm_min=0 keeps
+    legacy tests immediate; the delay has its own coverage."""
+    row = await rig.runner.create("earnings_reaction", "earn",
+                                  {"confirm_min": 0, **(params or {})})
     await rig.runner.set_state(row["id"], "enabled")
     rig.market.prices["AMD"] = (500.0, 500.5)
     rig.market.daily["AMD"] = [
@@ -184,11 +187,14 @@ class TestNightFlow:
         assert wt["side"] == 1
         assert wt["move_pct"] == pytest.approx(2.0, abs=0.05)
         assert wt["intent"]["dedupe_key"] == f"earn:AMD:{today_et()}"
-        # Stop-risk sizing: $100k equity, 0.5% risk / 5% stop = $10k base;
-        # high confidence x1.5, no flags, +2% move -> $15k at the 510.50 ask.
+        # Vol-scaled bracket: avg |ret| 2.16% x2.5 = 5.4% stop (above the 5%
+        # floor), TP 10.8%. Sizing: $500 risk / 0.054 = $9259.26 base, high
+        # confidence x1.5 -> $13888.89; 27 shares at the 510.50 ask.
+        assert wt["bracket"]["sl_pct"] == 0.054
+        assert wt["bracket"]["tp_pct"] == 0.108
         assert wt["sizing"]["risk_dollars"] == 500.0
-        assert wt["sizing"]["notional"] == 15_000.0
-        assert wt["intent"]["qty"] == 29  # 15000 // 510.5
+        assert wt["sizing"]["notional"] == 13_888.89
+        assert wt["intent"]["qty"] == 27
         assert wt["intent"]["extended_hours"] is True
 
         # Consensus AND before-close setup reached the model; text was the
@@ -287,7 +293,8 @@ class TestReanchor:
         assert note["detail"]["skipped"]["AMD"] == "decided"
 
     async def test_missing_daily_context_never_blocks(self, rig):
-        row = await rig.runner.create("earnings_reaction", "earn", {})
+        row = await rig.runner.create("earnings_reaction", "earn",
+                                      {"confirm_min": 0})
         await rig.runner.set_state(row["id"], "enabled")
         rig.market.prices["AMD"] = (500.0, 500.5)  # no daily data set
         await publish_estimate(rig, "AMD")
@@ -368,7 +375,8 @@ class TestManualDryRun:
     async def test_manual_build_watchlist_salvages_late_boot(self, rig):
         """Engine booted after 15:30: the command freezes the watchlist
         without a timer tick, and the normal decision path works after."""
-        row = await rig.runner.create("earnings_reaction", "earn", {})
+        row = await rig.runner.create("earnings_reaction", "earn",
+                                      {"confirm_min": 0})
         await rig.runner.set_state(row["id"], "enabled")
         rig.market.prices["AMD"] = (500.0, 500.5)
         rig.market.daily["AMD"] = [{"date": "2026-08-04", "close": 490.0,
@@ -414,6 +422,45 @@ class TestManualDryRun:
         rig.bus.publish(journaled)
         note = await wait_note(rig, row["id"], "would_trade")
         assert note and note["detail"]["would_trade"]["side"] == 1
+
+
+@pytest.mark.asyncio
+class TestConfirmationDelay:
+    async def test_release_queues_then_decides_on_tick(self, rig):
+        """confirm_min > 0: the release parks, no LLM call; a timer tick
+        after the delay runs the decision with the tape re-checked."""
+        row, _, _ = await armed_instance(rig, {"confirm_min": 0.005})  # 0.3s
+        rig.market.prices["AMD"] = (510.0, 510.5)
+        await publish_release(rig, "AMD")
+        note = await wait_note(rig, row["id"], "queued")
+        assert note["detail"]["queued"]["symbol"] == "AMD"
+        assert rig.fake.calls == []  # analysis deferred
+
+        await asyncio.sleep(0.4)
+        publish_tick(rig, "16:20")  # any tick past due processes the queue
+        assert await wait_note(rig, row["id"], "would_trade")
+        assert len(rig.fake.calls) == 1
+
+    async def test_second_source_does_not_requeue(self, rig):
+        row, _, _ = await armed_instance(rig, {"confirm_min": 5.0})
+        rig.market.prices["AMD"] = (510.0, 510.5)
+        await publish_release(rig, "AMD")
+        assert await wait_note(rig, row["id"], "queued")
+        await publish_release(rig, "AMD")  # burst twin while pending
+        await asyncio.sleep(0.3)
+        assert rig.fake.calls == []  # still just parked, once
+
+
+def test_effective_bracket_scales_and_clamps():
+    from app.strategies.earnings_reaction import EarningsReaction, _effective_bracket
+
+    params = EarningsReaction.validate_params({})
+    assert _effective_bracket({"avg_abs_ret_pct": None}, params) == (0.05, 0.10)
+    assert _effective_bracket({"avg_abs_ret_pct": 2.16}, params) == (0.054, 0.108)
+    # Wild name: 2.5 x 6% = 15% -> clamped to the 12% cap.
+    assert _effective_bracket({"avg_abs_ret_pct": 6.0}, params) == (0.12, 0.24)
+    # Sleepy name: 2.5 x 1% = 2.5% -> floored at 5%.
+    assert _effective_bracket({"avg_abs_ret_pct": 1.0}, params) == (0.05, 0.10)
 
 
 def test_validate_params():

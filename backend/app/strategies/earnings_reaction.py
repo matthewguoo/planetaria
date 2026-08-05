@@ -105,8 +105,25 @@ class EarningsReaction(Strategy):
         # exposure, borrow checks) still apply downstream.
         "risk_pct_per_name": 0.5,
         "min_move_pct": 1.0,       # tape agreement threshold, percent
-        "tp_pct": 0.10,            # guardrail bracket; the THESIS exit is
-        "sl_pct": 0.05,            # the time stop
+        # Bracket scales with the NAME's volatility (2026-08-05): a flat 5%
+        # stop sits inside the whipsaw band of a +/-10% earnings mover and
+        # gets shaken out on path noise. Stop = clamp(vol_stop_mult x avg
+        # |daily ret| over the run-up window, sl_pct floor, sl_pct_cap);
+        # TP = 2x stop (keeps the 2:1 shape). Sizing divides risk by the
+        # SAME effective stop, so wilder name = wider berth = fewer shares,
+        # identical dollars at risk.
+        "tp_pct": 0.10,            # floor TP (2x sl floor); both scale up
+        "sl_pct": 0.05,            # stop FLOOR
+        "sl_pct_cap": 0.12,        # stop ceiling (wildest names)
+        "vol_stop_mult": 2.5,      # x avg abs daily return
+        # Confirmation delay (2026-08-05): the first minutes post-release
+        # are the worst microstructure of the day (price discovery,
+        # widest AH spreads, dip-then-spike whipsaw). Queue the release and
+        # decide confirm_min minutes later — the tape must STILL clear
+        # min_move_pct then. The drift thesis is day-scale; skipping the
+        # discovery chaos costs little and filters transient first reads.
+        # 0 = decide immediately (the pre-2026-08-05 behavior).
+        "confirm_min": 10.0,
         "hold": "T+1",             # T+1 | T+2, exits 15:55 ET
         "live": False,             # note-mode until Matthew flips it
         "max_text": 12_000,
@@ -120,6 +137,11 @@ class EarningsReaction(Strategy):
         self._watch: dict[str, dict] = {}                  # sym -> watch entry
         self._watch_date: str | None = None
         self._decided: set[str] = set()                    # "sym:date"
+        # Releases queued for the confirmation delay: sym -> {text, ids,
+        # source, due_mono}. In-memory: a restart mid-window drops pending
+        # confirmations (the release event cannot re-fire past the journal
+        # dedupe) — documented cost of the delay design.
+        self._pending: dict[str, dict] = {}
 
     @classmethod
     def validate_params(cls, params: dict) -> dict:
@@ -136,9 +158,15 @@ class EarningsReaction(Strategy):
                              "at the stop)")
         if not (0.2 <= float(clean["min_move_pct"]) <= 5.0):
             raise ValueError("min_move_pct must be 0.2-5.0 (percent)")
-        for key in ("tp_pct", "sl_pct"):
-            if not (0.01 <= float(clean[key]) <= 0.25):
-                raise ValueError(f"{key} must be 0.01-0.25")
+        for key in ("tp_pct", "sl_pct", "sl_pct_cap"):
+            if not (0.01 <= float(clean[key]) <= 0.30):
+                raise ValueError(f"{key} must be 0.01-0.30")
+        if float(clean["sl_pct_cap"]) < float(clean["sl_pct"]):
+            raise ValueError("sl_pct_cap must be >= sl_pct (floor)")
+        if not (1.0 <= float(clean["vol_stop_mult"]) <= 5.0):
+            raise ValueError("vol_stop_mult must be 1-5")
+        if not (0.0 <= float(clean["confirm_min"]) <= 60.0):
+            raise ValueError("confirm_min must be 0-60 minutes")
         if clean["hold"] not in ("T+1", "T+2"):
             raise ValueError("hold must be T+1 or T+2")
         if not (1_000 <= int(clean["max_text"]) <= 20_000):
@@ -157,12 +185,46 @@ class EarningsReaction(Strategy):
                 await self._build_watchlist(ctx)
             elif self._tick_at(event, REANCHOR_ET) and self._watch:
                 await self._reanchor(ctx)
+            await self._process_due(ctx)
         elif event.type == "news":
             for sym in event.symbols:
                 if self._eligible(sym, event):
-                    await self._decide(sym, event, ctx)
+                    await self._queue_or_decide(sym, event, ctx)
         elif event.type == "manual":
             await self._manual(event, ctx)
+
+    async def _queue_or_decide(self, sym: str, event: Event,
+                               ctx: StrategyContext) -> None:
+        """confirm_min > 0: park the release and decide when the delay
+        elapses (the tape must still agree then). 0: the old immediate
+        path."""
+        import time as _time
+
+        delay_min = float(ctx.params["confirm_min"])
+        if delay_min <= 0:
+            await self._decide(sym, event, ctx)
+            return
+        self._decided.add(f"{sym}:{self._watch_date}")  # burst-safe
+        self._pending[sym] = {
+            "text": _text_of(event, int(ctx.params["max_text"])),
+            "ids": _ids(event),
+            "source": event.source,
+            "due_mono": _time.monotonic() + delay_min * 60.0,
+        }
+        await ctx.note({"queued": {"symbol": sym, "source": event.source,
+                                   "confirm_min": delay_min}},
+                       signal_ids=_ids(event))
+
+    async def _process_due(self, ctx: StrategyContext) -> None:
+        import time as _time
+
+        now = _time.monotonic()
+        for sym in [s for s, p in self._pending.items() if p["due_mono"] <= now]:
+            pending = self._pending.pop(sym)
+            await self._decide_text(
+                sym, pending["text"], tuple(pending["ids"]),
+                pending["source"], ctx,
+            )
 
     # ------------------------------------------------------------- estimates
 
@@ -222,11 +284,16 @@ class EarningsReaction(Strategy):
                        if len(closes) >= 2 else None)
             day_move = (round((px / prior_close - 1) * 100, 2)
                         if prior_close else None)
+            abs_rets = [abs(closes[i]["close"] / closes[i - 1]["close"] - 1)
+                        for i in range(1, len(closes))]
+            avg_abs = (round(sum(abs_rets) / len(abs_rets) * 100, 2)
+                       if abs_rets else None)
             watch[sym] = {"est": candidates[sym], "px0": px,
                           "est_id": self._est_ids.get(sym),
                           "prior_close": prior_close,
                           "day_move_pct": day_move,
-                          "run5d_pct": run_pct}
+                          "run5d_pct": run_pct,
+                          "avg_abs_ret_pct": avg_abs}
         self._watch = watch
         self._watch_date = today
         await ctx.note(
@@ -291,14 +358,19 @@ class EarningsReaction(Strategy):
 
     async def _decide(self, sym: str, event: Event, ctx: StrategyContext,
                       forced_text: str | None = None) -> None:
+        text = forced_text or _text_of(event, int(ctx.params["max_text"]))
+        await self._decide_text(sym, text, _ids(event), event.source, ctx)
+
+    async def _decide_text(self, sym: str, text: str,
+                           event_ids: tuple[int, ...], source: str,
+                           ctx: StrategyContext) -> None:
         key = f"{sym}:{self._watch_date}"
         self._decided.add(key)  # burst-safe: headline+filing arrive seconds apart
         watch = self._watch[sym]
-        text = forced_text or _text_of(event, int(ctx.params["max_text"]))
         if not text:
             self._decided.discard(key)
-            await ctx.note({"skip": f"no text for {sym}", "source": event.source},
-                           signal_ids=_ids(event))
+            await ctx.note({"skip": f"no text for {sym}", "source": source},
+                           signal_ids=event_ids)
             return
 
         quote = await ctx.market.overnight_price(sym)
@@ -306,7 +378,7 @@ class EarningsReaction(Strategy):
         if px is None:
             self._decided.discard(key)
             await ctx.note({"skip": f"no fresh quote for {sym}"},
-                           signal_ids=_ids(event))
+                           signal_ids=event_ids)
             return
         move_pct = (px / watch["px0"] - 1) * 100
 
@@ -332,7 +404,7 @@ class EarningsReaction(Strategy):
         )
         # News id first: the analysis row chains (parent_id) to the text it
         # analyzed; the estimate rides along as secondary provenance.
-        signal_ids = tuple(i for i in (*_ids(event), watch.get("est_id"))
+        signal_ids = tuple(i for i in (*event_ids, watch.get("est_id"))
                            if i is not None)
         try:
             analysis = await ctx.analyze(
@@ -357,11 +429,14 @@ class EarningsReaction(Strategy):
             side = 1
         elif verdict["direction"] == "bearish" and move_pct <= -min_move:
             side = -1
+        sl_eff, tp_eff = _effective_bracket(watch, ctx.params)
         detail = {
-            "symbol": sym, "verdict": verdict, "source": event.source,
+            "symbol": sym, "verdict": verdict, "source": source,
             "px0": watch["px0"], "px": px, "move_pct": round(move_pct, 2),
             "day_move_pct": watch.get("day_move_pct"),
             "run5d_pct": watch.get("run5d_pct"),
+            "bracket": {"sl_pct": sl_eff, "tp_pct": tp_eff,
+                        "avg_abs_ret_pct": watch.get("avg_abs_ret_pct")},
             "model": analysis.model, "latency_ms": analysis.latency_ms,
         }
         if side == 0:
@@ -383,10 +458,10 @@ class EarningsReaction(Strategy):
             await ctx.note({"skip": f"cannot size {sym}: equity reads {equity}"},
                            signal_ids=provenance)
             return
-        sizing = _size_position(equity, verdict, move_pct, ctx.params)
+        sizing = _size_position(equity, verdict, move_pct, ctx.params, sl_eff)
         detail["sizing"] = sizing
         intent = self._intent(sym, side, px, quote, sizing["notional"],
-                              ctx.params, provenance)
+                              sl_eff, tp_eff, ctx.params, provenance)
         if not bool(ctx.params["live"]):
             await ctx.note({"would_trade": {**detail, "side": side,
                                             "intent": _intent_dict(intent)}},
@@ -398,7 +473,7 @@ class EarningsReaction(Strategy):
                      verdict["confidence"])
 
     def _intent(self, sym: str, side: int, px: float, quote: dict,
-                notional: float, params: dict,
+                notional: float, sl_pct: float, tp_pct: float, params: dict,
                 signal_ids: tuple[int, ...]) -> TradeIntent:
         # Marketable entry: cross the spread on the entry side (ref_tick's
         # convention) — longs lift the ask, shorts hit the bid. `px` (mid)
@@ -409,8 +484,8 @@ class EarningsReaction(Strategy):
         price = round(touch, 2)
         qty = max(1, int(notional // price))
         entry = side * price
-        tp = round(side * price * (1 + side * float(params["tp_pct"])), 2)
-        sl = round(side * price * (1 - side * float(params["sl_pct"])), 2)
+        tp = round(side * price * (1 + side * tp_pct), 2)
+        sl = round(side * price * (1 - side * sl_pct), 2)
         return TradeIntent(
             asset_class="equity",
             underlying=sym,
@@ -470,13 +545,26 @@ class EarningsReaction(Strategy):
 
 # ------------------------------------------------------------------ helpers
 
+def _effective_bracket(watch: dict, params: dict) -> tuple[float, float]:
+    """(sl_pct, tp_pct) scaled to the name's own volatility — see the
+    default_params note. Unknown vol (no daily history) -> the floors."""
+    sl_floor = float(params["sl_pct"])
+    avg_abs = watch.get("avg_abs_ret_pct")
+    if avg_abs:
+        sl = float(params["vol_stop_mult"]) * float(avg_abs) / 100.0
+        sl = min(max(sl, sl_floor), float(params["sl_pct_cap"]))
+    else:
+        sl = sl_floor
+    return round(sl, 4), round(2 * sl, 4)
+
+
 def _size_position(equity: float, verdict: dict, move_pct: float,
-                   params: dict) -> dict:
+                   params: dict, sl_pct: float) -> dict:
     """Stop-risk sizing with conviction scaling (see default_params note).
     Returns the full audit trail — every sizing decision must be
     reconstructible from the journal."""
     risk_dollars = equity * float(params["risk_pct_per_name"]) / 100.0
-    base_notional = risk_dollars / float(params["sl_pct"])
+    base_notional = risk_dollars / sl_pct
     conf_mult = {"high": 1.5, "medium": 1.0, "low": 0.5}.get(
         str(verdict.get("confidence")), 1.0)
     flag_mult = 0.75 if verdict.get("quality_flags") else 1.0
