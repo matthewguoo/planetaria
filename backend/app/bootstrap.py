@@ -137,6 +137,17 @@ async def startup(app: FastAPI, settings: Settings) -> None:
         for feed in feeds
     ]
 
+    # Strategy runtime: one supervised task per enabled instance, intents
+    # funneled through the SAME place_trade path human clicks use. State
+    # rebuilds from strategy_instances rows, the enforcer pattern.
+    from app.services.strategy_runner import StrategyRunner
+
+    runner = StrategyRunner(
+        db, bus, signal_store, trade, risk, market, enforcer.clock, settings
+    )
+    app.state.strategy_runner = runner
+    await runner.start()
+
 
 async def _reconcile_with_retry(enforcer: ExitEnforcer, attempts: int = 5) -> None:
     for attempt in range(1, attempts + 1):
@@ -152,7 +163,11 @@ async def _reconcile_with_retry(enforcer: ExitEnforcer, attempts: int = 5) -> No
 
 async def shutdown(app: FastAPI) -> None:
     state = app.state
-    for task in getattr(state, "feed_tasks", ()):  # stop event intake first
+    # Order matters: stop generating intents (runner), then stop event intake
+    # (feeds), THEN the enforcer — in-flight exits must finish enforced.
+    if getattr(state, "strategy_runner", None):
+        await state.strategy_runner.shutdown()
+    for task in getattr(state, "feed_tasks", ()):
         task.cancel()
     if getattr(state, "reconcile_task", None):
         state.reconcile_task.cancel()

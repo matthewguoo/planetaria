@@ -190,6 +190,11 @@ async def system_state(app_state) -> dict:
                 else {}
             ),
         },
+        "strategies": (
+            app_state.strategy_runner.status()
+            if getattr(app_state, "strategy_runner", None)
+            else {}
+        ),
         "tasks": {
             "trading_stream": _task_state(getattr(app_state, "trading_stream_task", None)),
             "reconcile_loop": _task_state(getattr(app_state, "reconcile_loop_task", None)),

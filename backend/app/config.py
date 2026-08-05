@@ -38,6 +38,10 @@ class Settings(BaseSettings):
     # Bar cache retention: 10 trading days of 1-minute bars per symbol.
     bar_cache_days: int = 10
 
+    # STRATEGIES_ENABLED=false is the boot-time kill switch for the whole
+    # strategy runtime: instances stay in the DB but nothing spawns.
+    strategies_enabled: bool = True
+
     def validate_paper_lock(self) -> None:
         # v1 is hard-locked to paper trading. Refuse to boot otherwise.
         if not self.alpaca_paper:

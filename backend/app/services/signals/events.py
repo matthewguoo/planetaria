@@ -50,9 +50,18 @@ class EventBus:
         self._topics: dict[str, _Topic] = defaultdict(_Topic)
 
     def subscribe(
-        self, event_type: str, *, maxsize: int = DEFAULT_QUEUE_SIZE, lossless: bool = True
+        self,
+        event_type: str,
+        *,
+        maxsize: int = DEFAULT_QUEUE_SIZE,
+        lossless: bool = True,
+        queue: asyncio.Queue | None = None,
     ) -> asyncio.Queue:
-        queue: asyncio.Queue[Event] = asyncio.Queue(maxsize=maxsize)
+        """Pass an existing `queue` to fan several event types into one
+        consumer loop (how a strategy instance watches all its
+        subscriptions with a single get())."""
+        if queue is None:
+            queue = asyncio.Queue(maxsize=maxsize)
         self._topics[event_type].subs.append(_Subscription(queue, lossless))
         return queue
 

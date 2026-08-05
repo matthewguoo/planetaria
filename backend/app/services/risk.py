@@ -147,6 +147,86 @@ class RiskService:
                     return True
         return False
 
+    async def validate_strategy_budget(
+        self,
+        *,
+        strategy_name: str,
+        budget: dict | None,
+        intent_notional: float,
+        symbol: str,
+    ) -> list[str]:
+        """Per-strategy budget, layered UNDER the global guards (both must
+        pass). Budget lives in strategy_instances.params["budget"]:
+        {max_open_plans, max_daily_loss_usd, max_trade_notional_usd,
+        max_gross_notional_usd, allowed_symbols}. No budget = only the
+        global guards apply. Scoped by the TradePlan.strategy label until
+        the strategy_id FK lands."""
+        if not budget:
+            return []
+        violations: list[str] = []
+
+        allowed = budget.get("allowed_symbols")
+        if allowed and symbol.upper() not in {s.upper() for s in allowed}:
+            violations.append(f"{symbol} not in strategy allowlist {sorted(allowed)}")
+
+        max_trade = budget.get("max_trade_notional_usd")
+        if max_trade is not None and intent_notional > float(max_trade) + 0.01:
+            violations.append(
+                f"trade notional ${intent_notional:.0f} exceeds strategy cap "
+                f"${float(max_trade):.0f}"
+            )
+
+        async with self.db.session() as session:
+            open_plans = list((await session.execute(
+                select(TradePlan).where(
+                    TradePlan.strategy == strategy_name,
+                    TradePlan.status.in_(OPEN_STATUSES),
+                )
+            )).scalars())
+
+        max_open = budget.get("max_open_plans")
+        if max_open is not None and len(open_plans) >= int(max_open):
+            violations.append(
+                f"strategy has {len(open_plans)} open plans (max {int(max_open)})"
+            )
+
+        max_gross = budget.get("max_gross_notional_usd")
+        if max_gross is not None:
+            # Options-shaped for now (x100); Phase 4 swaps in the plan's
+            # contract multiplier so equity plans count at x1.
+            gross = sum(
+                abs(p.entry_limit) * 100 * p.effective_qty for p in open_plans
+            )
+            if gross + intent_notional > float(max_gross) + 0.01:
+                violations.append(
+                    f"gross notional ${gross + intent_notional:.0f} would exceed "
+                    f"strategy cap ${float(max_gross):.0f}"
+                )
+
+        max_daily_loss = budget.get("max_daily_loss_usd")
+        if max_daily_loss is not None:
+            realized = await self._todays_realized_for(strategy_name)
+            if realized <= -abs(float(max_daily_loss)):
+                violations.append(
+                    f"strategy daily loss breaker tripped (realized {realized:+.0f})"
+                )
+        return violations
+
+    async def _todays_realized_for(self, strategy_name: str) -> float:
+        now_et = datetime.now(ET)
+        start_utc = now_et.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(
+            timezone.utc
+        )
+        async with self.db.session() as session:
+            result = await session.execute(
+                select(TradePlan).where(
+                    TradePlan.strategy == strategy_name,
+                    TradePlan.status == "closed",
+                    TradePlan.updated_at >= start_utc,
+                )
+            )
+            return sum(plan.realized_pnl or 0.0 for plan in result.scalars())
+
     async def validate_new_trade(
         self,
         *,
