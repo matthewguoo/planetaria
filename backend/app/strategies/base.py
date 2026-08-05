@@ -1,7 +1,9 @@
 """Strategy contract. A strategy is a plugin that consumes Events and emits
 TradeIntents; everything else — journaling, budgets, global risk, order
 placement, exit enforcement — is the runtime's job. Strategies never talk to
-the broker, the DB, or an LLM directly.
+the broker, the DB, or an LLM directly: market access goes through
+ctx.submit(), LLM access through ctx.analyze() (structured-output-only,
+injection-hardened, journaled — see services/llm.py).
 
 Design rule: ctx.submit() is the ONLY path to the market, and it funnels into
 the same TradeService.place_trade() a human click uses, so every automated
@@ -17,7 +19,10 @@ from typing import ClassVar, Literal
 
 from app.services.signals.events import Event
 
-# A wedged strategy must not stall its own event queue silently.
+# A wedged strategy must not stall its own event queue silently. This is the
+# DEFAULT; a strategy that legitimately blocks longer per event (LLM analysis
+# runs seconds-to-minutes) declares its own budget via the event_timeout_s
+# ClassVar instead of racing this one.
 EVENT_TIMEOUT_S = 30.0
 # Stale-event guard default: an intent derived from events older than this is
 # refused. A restart or a backed-up queue can never trade on old news.
@@ -71,6 +76,33 @@ class StrategyContext:
     async def account(self) -> dict:
         return await self._runner.account()
 
+    async def analyze(
+        self,
+        *,
+        task: str,
+        data: str,
+        schema: dict,
+        system: str | None = None,
+        symbols: tuple[str, ...] = (),
+        signal_ids: tuple[int, ...] = (),
+        model: str | None = None,
+        effort: str | None = None,
+        max_tokens: int | None = None,
+        timeout_s: float | None = None,
+    ):
+        """Structured LLM analysis of untrusted text (see services/llm.py for
+        the guarantees). Returns an Analysis whose .signal_id should be
+        included in TradeIntent.signal_ids so the verdict is part of the
+        trade's provenance chain. Raises AnalysisError/AnalysisRefused —
+        letting it propagate journals an error for this event, which is
+        usually the right call. Budget on_event accordingly: declare a larger
+        event_timeout_s on the strategy class than the analysis timeout."""
+        return await self._runner.execute_analysis(
+            self._instance_id, task=task, data=data, schema=schema,
+            system=system, symbols=symbols, parent_signal_ids=signal_ids,
+            model=model, effort=effort, max_tokens=max_tokens, timeout_s=timeout_s,
+        )
+
 
 class Strategy(abc.ABC):
     """Subclass, set the ClassVars, implement on_event. Register the class in
@@ -79,6 +111,10 @@ class Strategy(abc.ABC):
     kind: ClassVar[str]                        # registry key
     subscriptions: ClassVar[tuple[str, ...]]   # event types to receive
     default_params: ClassVar[dict] = {}
+    # Per-event wall-clock budget. Raise on strategies whose on_event
+    # legitimately blocks (ctx.analyze) — the queue is per-instance, so a
+    # longer budget only delays THIS strategy's own later events.
+    event_timeout_s: ClassVar[float] = EVENT_TIMEOUT_S
 
     @classmethod
     def validate_params(cls, params: dict) -> dict:

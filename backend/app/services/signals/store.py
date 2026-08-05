@@ -54,8 +54,20 @@ class SignalStore:
                 return replace(event, signal_id=existing), False
             return replace(event, signal_id=row.id), True
 
+    async def record_analysis(self, event: Event) -> Event:
+        """Journal an un-prompted (root) analysis row. Analyses are unkeyed —
+        every call is a distinct observation, so no dedupe applies."""
+        row = SignalRow(
+            ts=event.ts, source=event.source, type=event.type, key=None,
+            symbols=list(event.symbols), payload=event.payload,
+        )
+        async with self.db.session() as session:
+            session.add(row)
+            await session.commit()
+            return replace(event, signal_id=row.id)
+
     async def enrich(self, parent_id: int, event: Event) -> Event:
-        """Journal a derived row chained to its source (future LLM worker)."""
+        """Journal a derived row chained to its source (the LLM analyst)."""
         row = SignalRow(
             ts=event.ts, source=event.source, type=event.type, key=event.key,
             symbols=list(event.symbols), payload=event.payload, parent_id=parent_id,

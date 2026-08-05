@@ -130,7 +130,9 @@ async def wait_for(predicate, timeout=6.0):
 
 @pytest.mark.asyncio
 async def test_hung_handler_times_out_and_queue_keeps_draining(rig, monkeypatch):
-    monkeypatch.setattr("app.services.strategy_runner.EVENT_TIMEOUT_S", 0.2)
+    # The budget is a per-CLASS declaration now (LLM strategies raise it);
+    # the runner reads it from the strategy's type at dispatch time.
+    monkeypatch.setattr(ChaosStrategy, "event_timeout_s", 0.2)
     row = await rig.runner.create("chaos", "hang", {})
     await rig.runner.set_state(row["id"], "enabled")
     strategy = rig.runner._running[row["id"]].strategy

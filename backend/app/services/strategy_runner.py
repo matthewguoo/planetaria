@@ -26,11 +26,12 @@ from app.models.strategies import (
     StrategyInstanceRow,
 )
 from app.models.trade import OPEN_STATUSES, TradePlan
+from app.services.llm import LLMAnalyst
 from app.services.signals.events import EventBus
 from app.services.signals.store import SignalStore
 from app.services.supervision import supervise
 from app.strategies import REGISTRY
-from app.strategies.base import EVENT_TIMEOUT_S, Strategy, StrategyContext, TradeIntent
+from app.strategies.base import Strategy, StrategyContext, TradeIntent
 
 log = logging.getLogger("app.strategy")
 
@@ -56,7 +57,7 @@ class _Running:
 
 class StrategyRunner:
     def __init__(self, db, bus: EventBus, store: SignalStore, trade, risk, market,
-                 clock, settings):
+                 clock, settings, llm: LLMAnalyst | None = None):
         self.db = db
         self.bus = bus
         self.store = store
@@ -65,6 +66,7 @@ class StrategyRunner:
         self.market = market
         self.clock = clock
         self.settings = settings
+        self.llm = llm if llm is not None else LLMAnalyst(settings, store)
         self._running: dict[str, _Running] = {}
         self._lock = asyncio.Lock()  # serializes start/stop/state transitions
 
@@ -141,14 +143,17 @@ class StrategyRunner:
                 continue
             running.events_seen += 1
             running.last_event_mono = time.monotonic()
+            # Per-CLASS budget: LLM strategies declare a bigger one (their
+            # queue is their own, so only their later events wait).
+            timeout_s = float(type(running.strategy).event_timeout_s)
             try:
                 await asyncio.wait_for(
-                    running.strategy.on_event(event, running.ctx), EVENT_TIMEOUT_S
+                    running.strategy.on_event(event, running.ctx), timeout_s
                 )
             except asyncio.TimeoutError:
                 running.errors += 1
                 await self._journal(running.row_id, "error", detail={
-                    "error": f"on_event timeout after {EVENT_TIMEOUT_S:.0f}s",
+                    "error": f"on_event timeout after {timeout_s:.0f}s",
                     "event_type": event.type,
                 }, signal_ids=_ids(event))
             except ValueError:
@@ -342,6 +347,17 @@ class StrategyRunner:
                             plan_id=result.get("id"), signal_ids=signal_ids)
         return result
 
+    async def execute_analysis(self, row_id: str, *, parent_signal_ids=(), **kwargs):
+        """ctx.analyze() lands here: resolve the instance name for the
+        journal's provenance chain, then delegate to the LLM gateway. The
+        analysis itself is a SIGNAL (data plane), not a decision — the
+        decision journal only sees what the strategy chooses to do with it."""
+        running = self._running.get(row_id)
+        name = running.name if running else row_id
+        return await self.llm.analyze(
+            strategy=name, parent_signal_ids=tuple(parent_signal_ids), **kwargs
+        )
+
     async def journal_note(self, row_id: str, detail: dict,
                            signal_ids: tuple[int, ...] = ()) -> None:
         await self._journal(row_id, "note", detail=detail, signal_ids=list(signal_ids))
@@ -439,6 +455,10 @@ class StrategyRunner:
     def status(self) -> dict:
         return {
             "enabled": getattr(self.settings, "strategies_enabled", True),
+            "llm": {
+                "configured": self.llm.configured,
+                "model": getattr(self.settings, "llm_model", None),
+            },
             "running": {
                 r.name: self._runtime_status(r) for r in self._running.values()
             },

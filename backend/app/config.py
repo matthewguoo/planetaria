@@ -42,6 +42,12 @@ class Settings(BaseSettings):
     # strategy runtime: instances stay in the DB but nothing spawns.
     strategies_enabled: bool = True
 
+    # LLM analysis gateway (ctx.analyze). Absent key = analyze() raises a
+    # clean AnalysisError; nothing else in the engine depends on it.
+    anthropic_api_key: str = ""
+    llm_model: str = "claude-opus-5"
+    llm_effort: Literal["low", "medium", "high", "xhigh", "max"] = "low"
+
     def validate_paper_lock(self) -> None:
         # v1 is hard-locked to paper trading. Refuse to boot otherwise.
         if not self.alpaca_paper:
