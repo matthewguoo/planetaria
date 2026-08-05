@@ -39,16 +39,21 @@ async def main() -> None:
             "the root .env and re-run."
         )
     today = datetime.now(ET).date()
+    rows: list[dict] = []
     async with httpx.AsyncClient(
         headers={"X-Finnhub-Token": settings.finnhub_api_key}, timeout=20
     ) as http:
-        resp = await http.get(FINNHUB_URL, params={
-            "from": today.isoformat(),
-            "to": (today + timedelta(days=7)).isoformat(),
-        })
-        print(f"HTTP {resp.status_code}")
-        resp.raise_for_status()
-        rows = (resp.json() or {}).get("earningsCalendar") or []
+        # Day-by-day paging: wide windows silently drop their EARLIEST
+        # dates once the response hits the 1500-row cap (verified
+        # 2026-08-05 - a 7d peak-season query returned zero rows for its
+        # own start date).
+        for offset in range(0, 8):
+            day = (today + timedelta(days=offset)).isoformat()
+            resp = await http.get(FINNHUB_URL, params={"from": day, "to": day})
+            if offset == 0:
+                print(f"HTTP {resp.status_code}")
+            resp.raise_for_status()
+            rows.extend((resp.json() or {}).get("earningsCalendar") or [])
 
     print(f"{len(rows)} reporters {today}..+7d")
     by_date = Counter(r.get("date") for r in rows)

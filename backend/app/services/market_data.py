@@ -560,6 +560,38 @@ class MarketDataService:
         return [{"date": b.timestamp.date().isoformat(), "close": float(b.close),
                  "volume": float(b.volume)} for b in bars][-days:]
 
+    async def daily_dollar_volumes(self, symbols: list[str]) -> dict[str, float]:
+        """Prior-session dollar volume (close*volume, $) per symbol in ONE
+        batched request — the liquidity rank for watchlist selection over
+        hundreds of candidates, where per-symbol daily_closes calls would
+        blow the REST budget. Same completed-sessions window rules as
+        daily_closes. Missing symbols are absent from the result."""
+        if not self.alpaca.configured or not symbols:
+            return {}
+        from zoneinfo import ZoneInfo
+
+        midnight_et = (datetime.now(ZoneInfo("America/New_York"))
+                       .replace(hour=0, minute=0, second=0, microsecond=0))
+        request = StockBarsRequest(
+            symbol_or_symbols=list(symbols),
+            timeframe=TimeFrame.Day,
+            start=midnight_et - timedelta(days=6),
+            end=midnight_et,
+            feed=DataFeed.SIP,
+        )
+        try:
+            result = await self.alpaca.call(self.alpaca.stock_data.get_stock_bars,
+                                            request, timeout=30.0)
+        except Exception as exc:
+            log.error("daily_dollar_volumes (%d symbols) failed: %s",
+                      len(symbols), exc)
+            return {}
+        out: dict[str, float] = {}
+        for symbol, bars in result.data.items():
+            if bars:
+                out[symbol] = float(bars[-1].close) * float(bars[-1].volume)
+        return out
+
     def spot(self, symbol: str) -> float:
         """Freshest defensible spot for pricing (see freshest_spot)."""
         bars = self.bars.get_bars(symbol, "1m", limit=1)

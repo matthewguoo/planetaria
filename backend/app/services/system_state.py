@@ -110,11 +110,11 @@ class AccountService:
         self.settings = settings
         self.applied_name: str | None = None
 
-    def registry(self) -> dict[str, dict]:
-        """name -> {api_key, secret_key} from process env + the same .env
-        files config.py reads. First source wins per name."""
+    def _env_sources(self) -> dict[str, str]:
+        """Process env over the same .env files config.py reads. A method
+        so tests can stub it — reading the REAL .env in a test run leaks
+        actual keys into assertion output."""
         import os
-        import re
 
         from dotenv import dotenv_values
 
@@ -128,14 +128,25 @@ class AccountService:
             except Exception:
                 pass
         merged.update(os.environ)
+        return merged
+
+    def registry(self) -> dict[str, dict]:
+        """name -> {api_key, secret_key}. First source wins per name."""
+        import re
+
+        merged = self._env_sources()
 
         out: dict[str, dict] = {}
-        default_key = getattr(self.settings, "alpaca_api_key", "")
+        # Default pair from the ENV SOURCES, not live settings: apply()
+        # mutates settings to the selected account's keys, which would make
+        # 'default' silently mirror whatever is active.
+        default_key = merged.get("ALPACA_API_KEY", "") or \
+            getattr(self.settings, "alpaca_api_key", "")
+        default_secret = merged.get("ALPACA_SECRET_KEY", "") or \
+            getattr(self.settings, "alpaca_secret_key", "")
         if default_key:
-            out["default"] = {
-                "api_key": default_key,
-                "secret_key": getattr(self.settings, "alpaca_secret_key", ""),
-            }
+            out["default"] = {"api_key": default_key,
+                              "secret_key": default_secret}
         for var, value in merged.items():
             m = re.match(ACCOUNT_ENV_RE, var)
             if not m or not value:

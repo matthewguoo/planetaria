@@ -12,13 +12,18 @@ the next fetch, and an idempotent watchlist add makes duplicates harmless.
 News replays stay swallowed (AlpacaNewsFeed/EdgarFeed) because news drives
 orders and replay there is a stale-trade hazard.
 
-Response shape per Finnhub docs 2026-08-04 (free tier, 60 calls/min):
-GET /api/v1/calendar/earnings?from=&to= with X-Finnhub-Token header ->
-{"earningsCalendar": [{"date", "epsEstimate", "epsActual", "hour":
-"bmo"|"amc"|"dmh", "quarter", "revenueEstimate", "revenueActual", "symbol",
-"year"}]}. EMPIRICAL VERIFICATION PENDING a key in .env — run
-scripts/verify_earnings_calendar.py once FINNHUB_API_KEY is set, then
-update this comment with the date.
+Response shape VERIFIED EMPIRICALLY 2026-08-05 (free tier, header auth):
+GET /api/v1/calendar/earnings?from=&to= -> {"earningsCalendar": [{"date",
+"epsEstimate", "epsActual", "hour": "bmo"|"amc"|"" (empty is common on
+far-out dates; maps to "unknown" here), "quarter", "revenueEstimate",
+"revenueActual", "symbol", "year"}]}. Coverage on the 2026-08-05 sample
+(n=1500): epsEstimate 66%, revenueEstimate 64%, quarter/year 100%.
+
+CAP TRAP (verified 2026-08-05): responses cap at 1500 rows and a window
+that overflows silently DROPS THE EARLIEST DATES — a peak-season 7-day
+query returned zero rows for its own start date. This feed's today+1d
+window stays far under the cap by design; widen it only with paging by
+single days.
 """
 
 import asyncio

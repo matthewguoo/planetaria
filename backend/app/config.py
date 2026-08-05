@@ -19,6 +19,10 @@ class Settings(BaseSettings):
     alpaca_api_key: str = ""
     alpaca_secret_key: str = ""
     alpaca_paper: bool = True
+    # Which named paper account the keys above currently represent; stamped
+    # onto plans. Set at boot by AccountService.apply() — pydantic requires
+    # the field declared for that assignment to exist.
+    alpaca_account_name: str = "default"
 
     alpaca_stock_feed: Literal["iex", "sip"] = "iex"
     alpaca_option_feed: Literal["indicative", "opra"] = "indicative"

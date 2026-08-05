@@ -1,5 +1,6 @@
 """AccountService: paper-only key pool, persistent selection, switch guards."""
 
+import os
 from types import SimpleNamespace
 
 import pytest
@@ -7,6 +8,16 @@ import pytest_asyncio
 
 from app.db.session import Database
 from app.services.system_state import AccountService
+
+
+@pytest.fixture(autouse=True)
+def hermetic_env(monkeypatch):
+    """Never read the real .env in tests: actual keys would leak into
+    assertion diffs. os.environ stays live so setenv-based cases work."""
+    monkeypatch.setattr(AccountService, "_env_sources",
+                        lambda self: dict(os.environ))
+    for var in [v for v in os.environ if v.startswith("ALPACA")]:
+        monkeypatch.delenv(var, raising=False)
 
 
 @pytest_asyncio.fixture

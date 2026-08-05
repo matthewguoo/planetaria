@@ -183,10 +183,15 @@ class EarningsReaction(Strategy):
         min_price = float(ctx.params["min_price"])
         watch: dict[str, dict] = {}
         skipped: list[str] = []
-        # No liquidity data on ctx.market yet, so selection is price-gated
-        # first-come (sorted for determinism); ranking by $ volume is a
-        # later refinement the latency study says matters.
-        for sym in sorted(candidates):
+        # Liquidity rank FIRST (one batched daily-bars call): a peak-season
+        # night has 250+ AMC reporters and alphabetical scanning would
+        # watch the ABC small-caps while DIS/UBER report unwatched
+        # (2026-08-05: 269 AMC candidates). Fall back to alphabetical when
+        # the batch fails - a degraded rank must not kill the night.
+        volumes = await ctx.market.daily_dollar_volumes(sorted(candidates))
+        ranked = sorted(candidates,
+                        key=lambda s: (-(volumes.get(s, 0.0)), s))
+        for sym in ranked:
             if len(watch) >= n_names or len(watch) + len(skipped) >= \
                     n_names * SCAN_CAP_MULT:
                 break

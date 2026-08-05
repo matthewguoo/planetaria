@@ -51,6 +51,14 @@ class FakeMarket:
     async def daily_closes(self, symbol: str, days: int = 6) -> list[dict]:
         return self.daily.get(symbol, [])[-days:]
 
+    async def daily_dollar_volumes(self, symbols: list[str]) -> dict[str, float]:
+        out = {}
+        for sym in symbols:
+            bars = self.daily.get(sym)
+            if bars:
+                out[sym] = bars[-1]["close"] * bars[-1]["volume"]
+        return out
+
 
 @pytest_asyncio.fixture
 async def rig(tmp_path):
@@ -315,6 +323,22 @@ class TestEligibility:
         note = await wait_note(rig, row["id"], "watchlist")
         assert note["detail"]["watchlist"] == {}
         assert note["detail"]["skipped"] == ["PENY"]
+
+    async def test_watchlist_ranks_by_dollar_volume(self, rig):
+        """269 AMC candidates on a real night: the big names must win the
+        n_names slots, not the alphabet."""
+        row = await rig.runner.create("earnings_reaction", "earn",
+                                      {"n_names": 2})
+        await rig.runner.set_state(row["id"], "enabled")
+        for sym, px, vol in (("AAAA", 20.0, 1e5), ("DIS", 118.0, 8e6),
+                             ("UBER", 92.0, 6e6), ("ZZZZ", 30.0, 2e5)):
+            rig.market.prices[sym] = (px, px + 0.1)
+            rig.market.daily["ZZZZ" if sym == "ZZZZ" else sym] = [
+                {"date": "2026-08-04", "close": px, "volume": vol}]
+            await publish_estimate(rig, sym)
+        publish_tick(rig)
+        note = await wait_note(rig, row["id"], "watchlist")
+        assert set(note["detail"]["watchlist"]) == {"DIS", "UBER"}
 
     async def test_bmo_reporters_not_watched_tonight(self, rig):
         row = await rig.runner.create("earnings_reaction", "earn", {})
