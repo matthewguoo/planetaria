@@ -156,13 +156,25 @@ async def test_intent_storm_capped_by_budget(rig):
     for i in range(10):
         rig.bus.publish(news(submit=True, dedupe_key=f"storm-{i}"))
     assert await wait_for(lambda: strategy.events == 10)
+
+    # events increments at handler ENTRY, so the 10th submit's journal write
+    # can still be in flight here — settle on the journal itself.
+    async def journal_actions() -> list[str]:
+        async with rig.db.session() as session:
+            return [r.action for r in (await session.scalars(
+                select(StrategyDecisionRow).where(
+                    StrategyDecisionRow.strategy_id == row["id"])
+            )).all()]
+
+    deadline = asyncio.get_event_loop().time() + 6.0
+    actions = await journal_actions()
+    while (actions.count("placed") + actions.count("rejected") < 10
+           and asyncio.get_event_loop().time() < deadline):
+        await asyncio.sleep(0.05)
+        actions = await journal_actions()
+
     # Exactly the budgeted number of plans exist; the rest were refused.
     assert rig.trade.placed == 3
-    async with rig.db.session() as session:
-        actions = [r.action for r in (await session.scalars(
-            select(StrategyDecisionRow).where(
-                StrategyDecisionRow.strategy_id == row["id"])
-        )).all()]
     assert actions.count("placed") == 3
     assert actions.count("rejected") == 7
 
