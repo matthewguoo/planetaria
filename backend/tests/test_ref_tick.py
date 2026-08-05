@@ -31,13 +31,15 @@ class FakeTrade:
 
 
 def fake_market(ask=700.10, bid=699.90, age_s=0.0):
+    """Both quote entry points serve the same book (the real overnight_price
+    delegates to fetch_latest_stock_quote outside the overnight session)."""
     import time
 
-    async def fetch_latest_stock_quote(symbol):
+    async def quote(symbol):
         return {"bid": bid, "ask": ask, "mid": (ask + bid) / 2,
                 "ts": (time.time() - age_s) * 1000}
 
-    return SimpleNamespace(fetch_latest_stock_quote=fetch_latest_stock_quote)
+    return SimpleNamespace(fetch_latest_stock_quote=quote, overnight_price=quote)
 
 
 @pytest_asyncio.fixture
@@ -131,6 +133,32 @@ async def test_stale_quote_refused(rig, tmp_path):
                 StrategyDecisionRow.action == "note")
         )).all()]
     assert any("stale" in str(n) for n in notes)
+
+
+@pytest.mark.asyncio
+async def test_overnight_prices_off_tape_not_dead_book(rig):
+    """The 2026-08-04 e2e failure: overnight, REST latest-quote serves the
+    17:00 book (791.22 ask) while Blue Ocean prints 772.93. The strategy must
+    price off overnight_price (the tape), never the dead REST book."""
+    import time
+
+    async def dead_book(symbol):  # what fetch_latest_stock_quote returned
+        return {"bid": 790.90, "ask": 791.22, "mid": 791.06,
+                "ts": (time.time() - 4 * 3600) * 1000}
+
+    async def tape(symbol):  # what the overnight poller synthesizes
+        return {"bid": 772.93, "ask": 772.93, "mid": 772.93,
+                "ts": time.time() * 1000, "src": "overnight"}
+
+    rig.runner.market = SimpleNamespace(
+        fetch_latest_stock_quote=dead_book, overnight_price=tape)
+    row = await rig.runner.create("ref_tick", "ref-on", {})
+    await rig.runner.set_state(row["id"], "enabled")
+    running = rig.runner._running[row["id"]]
+
+    await running.strategy.on_event(manual_event(row["id"]), running.ctx)
+    assert len(rig.trade.placed) == 1
+    assert rig.trade.placed[0]["entry_limit"] == pytest.approx(772.93)
 
 
 @pytest.mark.asyncio

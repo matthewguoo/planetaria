@@ -66,14 +66,19 @@ class RefTick(Strategy):
             return
 
         symbol = str(ctx.params["symbol"]).upper()
-        quote = await ctx.market.fetch_latest_stock_quote(symbol)
+        # Overnight-aware: inside the 20:00-04:00 ET session this subscribes
+        # the symbol and polls the Blue Ocean tape (the REST book is the dead
+        # 17:00 close there — observed 18 points off the live tape in the
+        # 2026-08-04 e2e run); every other session it is the plain
+        # staleness-aware REST quote.
+        quote = await ctx.market.overnight_price(symbol)
         if not quote or not quote.get("ask"):
             await ctx.note({"skip": f"no usable quote for {symbol}"},
                            signal_ids=_ids(event))
             return
-        # Freshness gate: overnight the IEX book goes dark and REST returns
-        # the 17:00 close — observed 18 points off the live Blue Ocean tape
-        # (2026-08-04 e2e run). Never price an entry off a dead quote.
+        # Freshness backstop: whatever the source, never price an entry off
+        # a dead quote (e.g. a failed overnight poll, or the post-17:00 REST
+        # book going stale between sessions).
         import time as _time
 
         quote_ts = float(quote.get("ts") or 0)

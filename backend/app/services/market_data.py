@@ -540,6 +540,73 @@ class MarketDataService:
         bars = self.bars.get_bars(symbol, "1m", limit=1)
         return freshest_spot(self._latest_quotes.get(symbol), bars[-1] if bars else None)
 
+    def equity_tape_age_s(self, symbol: str) -> float | None:
+        """Seconds since SYMBOL's freshest per-symbol market evidence: the
+        cached quote or the latest 1m bar. The bar counts as of its CLOSE
+        (clamped to now) — the overnight poller updates the forming bar in
+        place, so a bar opened 59s ago is live tape, not a minute of
+        staleness. None = no evidence at all (callers must block)."""
+        now_ms = time.time() * 1000
+        newest = 0.0
+        quote = self._latest_quotes.get(symbol)
+        if quote and quote.get("ts"):
+            newest = float(quote["ts"])
+        bars = self.bars.get_bars(symbol, "1m", limit=1)
+        if bars:
+            newest = max(newest, min(float(bars[-1]["t"]) + 60_000, now_ms))
+        if newest <= 0:
+            return None
+        return max(0.0, (now_ms - newest) / 1000)
+
+    async def overnight_price(self, symbol: str) -> dict | None:
+        """Entry-pricing quote for an equity symbol, overnight-aware.
+
+        Outside the overnight session this is just the staleness-aware REST
+        quote (fetch_latest_stock_quote). Inside it, that REST book is a
+        trap: IEX closed at 17:00 and latest-quote answers with the dead
+        17:00 book — observed 18 points off the live Blue Ocean tape
+        (2026-08-04 e2e). So instead: subscribe the symbol (the 10s
+        overnight poller then keeps quote/bars fresh for the plan's whole
+        life, which the exit enforcer's TP/SL synthesis also needs) and
+        poll the latest overnight trade ONCE so the caller isn't waiting on
+        the next poll tick. Returns the freshest of the cached quote vs the
+        latest 1m bar as a quote-shaped dict (tape prints carry
+        bid == ask == last); None when there is no live evidence."""
+        symbol = symbol.upper()
+        if not is_overnight_et(datetime.now(timezone.utc)):
+            return await self.fetch_latest_stock_quote(symbol)
+        await self.subscribe_stock(symbol)
+        if self.alpaca.configured:
+            try:
+                await self._poll_overnight_once(symbol)
+            except Exception as exc:
+                log.warning("one-shot overnight poll %s failed: %s", symbol, exc)
+        quote = self._latest_quotes.get(symbol)
+        bars = self.bars.get_bars(symbol, "1m", limit=1)
+        last_bar = bars[-1] if bars else None
+        now_ms = time.time() * 1000
+        q_ts = float(quote["ts"]) if quote and quote.get("mid") and quote.get("ts") else 0.0
+        bar_close = min(float(last_bar["t"]) + 60_000, now_ms) if last_bar else 0.0
+        if last_bar and bar_close > q_ts and float(last_bar["c"]) > 0:
+            # Bars outlive the quote cache (a restart hydrates them from
+            # Redis) — synthesize the tape print the bar recorded.
+            price = float(last_bar["c"])
+            return {"t": "quote", "symbol": symbol, "bid": price, "ask": price,
+                    "mid": price, "ts": int(bar_close), "src": "overnight-bar"}
+        return quote
+
+    async def _poll_overnight_once(self, symbol: str) -> None:
+        """One-shot Blue Ocean latest-trade poll (same parse/dedupe/guards as
+        the poll loop) for callers that need tape freshness NOW."""
+        import httpx
+
+        headers = {
+            "APCA-API-KEY-ID": self.settings.alpaca_api_key,
+            "APCA-API-SECRET-KEY": self.settings.alpaca_secret_key,
+        }
+        async with httpx.AsyncClient(headers=headers, timeout=8.0) as client:
+            await self._poll_overnight_symbol(client, symbol)
+
     # -------------------------------------------------------------- handlers
 
     def _quote_msg(self, kind: str, symbol: str, bid, ask, ts,

@@ -22,6 +22,7 @@ from alpaca.trading.requests import (
 
 from app.models.trade import TradePlan, as_utc, utcnow
 from app.services.alpaca import AlpacaService
+from app.services.market_clock import equity_session
 from app.services.plan_fsm import (
     TERMINAL_STATES,
     PlanEvent,
@@ -332,13 +333,9 @@ class TradeService:
                 structural = structural_max_loss(leg_objs)
                 entry_cost = (structural * 100 * qty) if structural is not None else max_loss * 3
             expiry = max(leg["expiry"] for leg in legs)
-        # Stream age: None while a tick has never arrived reads as "no data",
-        # which must block trading, not silently pass.
         stream_age: float | None = None
         if self.alpaca.configured:
-            stream_age = self.market.stream_age_s
-            if stream_age is None:
-                stream_age = float("inf")
+            stream_age = self._entry_staleness_s(asset_class, legs)
         violations = await self.risk.validate_new_trade(
             account_equity=account["equity"],
             entry_cost_dollars=entry_cost,
@@ -417,6 +414,23 @@ class TradeService:
             await self.enforcer.arm(plan.id)
         log.info("plan %s submitted (%s x%d, order %s)", plan.id, plan.strategy, qty, order.id)
         return (await self.get_plan(plan.id)).to_dict()
+
+    def _entry_staleness_s(self, asset_class: str, legs: list[dict]) -> float:
+        """Market-data age fed to the risk gate (>30s blocks). inf — meaning
+        no data has ever arrived — must block trading, not silently pass.
+
+        Options (and equities in stream-covered sessions) read the GLOBAL
+        stream age. Equity entries during the overnight session must not:
+        the IEX stream is rightly silent 20:00-04:00 ET while Blue Ocean
+        keeps printing, so the global age reads infinite all night — measure
+        the entry symbol's own tape instead (freshest of its cached quote vs
+        its latest 1m bar, which the overnight poller rolls from live
+        prints)."""
+        if asset_class == "equity" and equity_session() == "overnight":
+            age = self.market.equity_tape_age_s(legs[0]["symbol"])
+        else:
+            age = self.market.stream_age_s
+        return float("inf") if age is None else age
 
     def _quality_snapshot(self, legs: list, kind: str) -> dict | None:
         """{kind: {fair, half_spread, ts}} from the live quote cache at
