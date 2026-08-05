@@ -23,9 +23,10 @@ import { StrategyPanel } from "../Panels/StrategyPanel";
 import { SymbolSearch } from "../SymbolSearch";
 import { SystemMenu } from "../System/SystemMenu";
 import { MobileDataTabs } from "./MobileDataTabs";
+import { MobileMonitorSheet } from "./MobileMonitorSheet";
 import { Sheet } from "./Sheet";
 
-type SheetTab = null | "trade" | "account";
+type SheetTab = null | "trade" | "account" | "bot";
 
 function statusColor(status: {
   connection: string;
@@ -229,6 +230,15 @@ export function MobileApp() {
           {modified ? "TRADE · CUSTOM" : "TRADE"}
         </button>
         <button
+          onClick={() => setSheet(sheet === "bot" ? null : "bot")}
+          className={
+            "flex-1 text-[11px] tracking-widest " +
+            (sheet === "bot" ? "bg-bb-hover text-bb-amber" : "text-bb-muted")
+          }
+        >
+          BOT
+        </button>
+        <button
           onClick={() => setSheet(sheet === "account" ? null : "account")}
           className={
             "flex-1 text-[11px] tracking-widest " +
@@ -246,6 +256,11 @@ export function MobileApp() {
             <div className="h-64"><SizingPanel designer={designer} /></div>
             <div className="h-72"><OrderPanel designer={designer} /></div>
           </div>
+        </Sheet>
+      )}
+      {sheet === "bot" && (
+        <Sheet title="BOT — LIVE MONITOR" onClose={() => setSheet(null)} tall>
+          <MobileMonitorSheet />
         </Sheet>
       )}
       {sheet === "account" && (
