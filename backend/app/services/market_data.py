@@ -572,24 +572,32 @@ class MarketDataService:
 
         midnight_et = (datetime.now(ZoneInfo("America/New_York"))
                        .replace(hour=0, minute=0, second=0, microsecond=0))
-        request = StockBarsRequest(
-            symbol_or_symbols=list(symbols),
-            timeframe=TimeFrame.Day,
-            start=midnight_et - timedelta(days=6),
-            end=midnight_et,
-            feed=DataFeed.SIP,
-        )
-        try:
-            result = await self.alpaca.call(self.alpaca.stock_data.get_stock_bars,
-                                            request, timeout=30.0)
-        except Exception as exc:
-            log.error("daily_dollar_volumes (%d symbols) failed: %s",
-                      len(symbols), exc)
-            return {}
         out: dict[str, float] = {}
-        for symbol, bars in result.data.items():
-            if bars:
-                out[symbol] = float(bars[-1].close) * float(bars[-1].volume)
+        # Chunked: a single 272-symbol request hit the SDK's internal 10s
+        # read-timeout on a real night (2026-08-05). Smaller batches stay
+        # fast and one bad/slow chunk cannot zero the whole rank.
+        chunk_size = 75
+        chunks = [list(symbols)[i:i + chunk_size]
+                  for i in range(0, len(symbols), chunk_size)]
+        for chunk in chunks:
+            request = StockBarsRequest(
+                symbol_or_symbols=chunk,
+                timeframe=TimeFrame.Day,
+                start=midnight_et - timedelta(days=6),
+                end=midnight_et,
+                feed=DataFeed.SIP,
+            )
+            try:
+                result = await self.alpaca.call(
+                    self.alpaca.stock_data.get_stock_bars, request,
+                    timeout=30.0, retries=1)
+            except Exception as exc:
+                log.error("daily_dollar_volumes chunk (%d symbols) failed: %s",
+                          len(chunk), exc)
+                continue
+            for symbol, bars in result.data.items():
+                if bars:
+                    out[symbol] = float(bars[-1].close) * float(bars[-1].volume)
         return out
 
     def spot(self, symbol: str) -> float:
