@@ -363,6 +363,26 @@ controls built to detect that; Section 5.9 reports the one that settles it.</p>
     bid and the best offer, i.e. what it costs to trade. Always written
     <em class="term">quoted</em> spread to keep the two apart (Section 6).</dd>
   </dl>
+  <p style="margin-top:.6rem">Four more that appear once the results start:</p>
+  <dl class="terms">
+    <dt>never stand down</dt><dd>an alternative to the gate that trades
+    <em>every</em> event instead of skipping some: with the tape when the model's
+    verdict agrees with it, against the tape when it disagrees. The gate's
+    refusals become trades in the opposite direction rather than no trade at all
+    (Section 5.4).</dd>
+    <dt>holdout</dt><dd>the years 2016 to mid-2021, which were added to the study
+    only after every design decision had already been made on the later years.
+    Nothing about the strategy was chosen by looking at them, so performance
+    there is a test rather than a fit (Section 5.8).</dd>
+    <dt>in-corpus / after cutoff</dt><dd>whether an earnings release happened
+    before or after the date a given model's training data ends — that is,
+    whether the model could possibly have read what happened next (Section
+    5.9).</dd>
+    <dt>gross exposure</dt><dd>how much of the account is invested at once,
+    averaged over time. The strategy holds a few positions for one session each,
+    so it is idle much of the time; unless stated otherwise every account figure
+    here runs at about 30% average exposure (Section 6.3).</dd>
+  </dl>
 </div>
 
 <h2><span class="n">2</span> The strategy, stated exactly</h2>
@@ -941,6 +961,22 @@ quietly delete the tail that does the damage.</p>
 </table></div>
 
 <p id="fc-mc-para"></p>
+
+<h3>6.3 How much capital is deployed</h3>
+
+<p id="fc-dep-intro">Every account figure in this paper runs at about 30% average
+gross exposure. That is a risk cap written into the simulation, not a property of
+the signal: the strategy holds roughly three positions at a time and is idle most
+of the session, so comparing its return to a fully-invested index compares two
+different amounts of risk. The table below makes the dial explicit rather than
+leaving it implicit in a footnote, for the gate and for the never-stand-down
+policy of Section 5.4, both charged their own measured spreads.</p>
+
+<div class="scroll"><table id="fc-dep-table">
+  <caption><b>Table 27:</b> The same trades at different deployment, charged their measured spreads</caption>
+</table></div>
+
+<p id="fc-dep-para"></p>
 
 <h2><span class="n">7</span> What the evidence supports</h2>
 
@@ -1642,15 +1678,20 @@ if (!MC.arms || MC.arms.length < 2) {
     on this panel.</p>`;
 } else {
   const best = MC.arms[0];
+  const mcN = (MC.arms && MC.arms[0]) ? MC.arms[0].n : MC.paired_n;
   $("model-intro").innerHTML = `Everything above runs on one model at one
     reasoning effort. This slice asks what that choice was worth, on the
-    ${int(MC.paired_n)} events since ${MC.since} where three arms overlap:
-    Opus at the study's <em class="term">medium</em> effort, the same model at
+    ${int(mcN)} events since ${MC.since} where three arms overlap: Opus at the
+    study's <em class="term">medium</em> effort, the same model at
     <em class="term">low</em>, and the smaller Fable model at its default. Same
     events, same entries, same exits — the only thing that varies is what read
-    the release. Six months is also the window that matters most for Fable: its
-    knowledge cutoff falls at the start of it, so this is the one stretch that is
-    genuinely out of corpus for that model.`;
+    the release.
+    <b>Read the comparison, not the level.</b> These events were selected while
+    the earlier fixed-window panel was in use, so they over-represent issuers
+    that filed and moved immediately, and the absolute returns here sit above
+    what the full population of that window returns (Section 5.2). Because all
+    three arms are scored on the identical events with identical entries, the
+    differences between them are still clean; the level is not a forecast.`;
   table($("model-table"),
     ["model", "events", "keeps", "ungated", "gated", "refused", "spread", "t", "agrees with medium"],
     MC.arms.map((a, i) => ({ cls: i === 0 ? "hl" : "", cells: [
@@ -2651,6 +2692,60 @@ if (FC.unavailable || !FC.measured) {
     ${n1(M.assumed_bp, 0)}bp used everywhere above understates the real cost by
     roughly ${n1(FC.implied_round_trip_bp / M.assumed_bp, 1)}×, and every per-trade
     figure in this paper should be read with that discount applied.`);
+  const DEP = FC.deployment || {};
+  if (DEP.policies) {
+    const rows = [];
+    DEP.policies.forEach((pol) => {
+      rows.push({ cls: "hl", cells: [
+        `<b>${pol.policy}</b> — ${int(pol.n)} trades`, "", "", "", "", ""] });
+      pol.rows.forEach((r) => rows.push({
+        cls: r.target_gross_pct === 30 ? "" : "",
+        cells: [n1(r.realised_gross_pct, 0) + "%", n1(r.per_name_pct, 0) + "%",
+          { v: sgn(r.total_pct, 0) + "%", c: cls(r.total_pct) },
+          { v: n1(r.cagr_pct, 1) + "%", c: cls(r.cagr_pct) },
+          { v: "−" + n1(r.max_dd_pct) + "%", c: "neg" }, n1(r.sharpe, 2)] }));
+    });
+    rows.push({ cls: "dim", cells: ["SPY, fully invested", "—", "—",
+      n1(DEP.spy_cagr_pct, 1) + "%", "−" + n1(DEP.spy_max_dd_pct) + "%", "—"] });
+    table($("fc-dep-table"),
+      ["average gross exposure", "per position", "total", "CAGR", "max drawdown", "Sharpe"],
+      rows);
+
+    const gatePol = DEP.policies[0], bestPol = DEP.policies[DEP.policies.length - 1];
+    DEP.rows = bestPol.rows;
+    const at30 = bestPol.rows.find((r) => r.target_gross_pct === 30) || {};
+    /* The row CLOSEST to a 30% CAGR, not the first one at or above it. The
+       latter skips from 28.9% at half exposure to 43.8% at three quarters and
+       reports the cost of the wrong one — an overstatement of nearly fifteen
+       points of drawdown for a target the row below effectively already
+       meets. */
+    const beats = DEP.rows.slice().sort(
+      (a, b) => Math.abs(a.cagr_pct - 30) - Math.abs(b.cagr_pct - 30))[0];
+    const g30 = gatePol.rows.find((r) => r.target_gross_pct === 30) || {};
+    setHTML("fc-dep-para", `<b>Within each block the Sharpe ratio is identical
+      at every level</b> — ${n1(at30.sharpe, 2)} throughout the lower one — and
+      that is the point of the table. Deployment buys return and drawdown in the
+      same proportion, so it slides the book along a line rather than moving it
+      to a better one. Two figures from the same row of the same strategy, one
+      quoted without the other, are half a number.
+      <b>What does move the line is the policy.</b> Never standing down runs at
+      Sharpe ${n1(at30.sharpe, 2)} against ${n1(g30.sharpe, 2)} for the gate,
+      so at any chosen exposure it earns more per unit of drawdown: at
+      ${n1(at30.realised_gross_pct, 0)}% it returns ${n1(at30.cagr_pct, 1)}%
+      against the gate's ${n1(g30.cagr_pct, 1)}%, and it does so with a
+      ${n1(at30.max_dd_pct, 0)}% drawdown rather than
+      ${n1(g30.max_dd_pct, 0)}%.
+      ${beats ? `A CAGR above 30% arrives at roughly
+      ${n1(beats.realised_gross_pct, 0)}% average exposure —
+      ${n1(beats.cagr_pct, 1)}%, at a ${n1(beats.max_dd_pct, 0)}% drawdown,
+      against SPY's ${n1(DEP.spy_cagr_pct, 1)}% at
+      ${n1(DEP.spy_max_dd_pct, 0)}% over the same decade.` : ""}
+      That comparison is the honest one to make, and it is worth stating plainly:
+      the strategy's advantage over the index is not that it compounds faster at
+      a given size — anything levered does that — but that it compounds faster
+      <em>per unit of drawdown</em>, which is the only part of it that leverage
+      cannot manufacture.`);
+  }
   drawFillCharts();
 }
 

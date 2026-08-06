@@ -324,20 +324,23 @@ def contamination_estimate(panel: str = "v1") -> dict:
     return out
 
 
-def model_compare() -> dict:
+def model_compare(panel: str = "v2") -> dict:
     """Opus at medium, Opus at low, and Fable — same events, same entries.
 
-    Scored on the six months from 2026-02, which is the only window where all
-    three arms overlap AND the one boundary that matters for Fable: its
-    knowledge cutoff. Everything before it is in-corpus for that model and
-    cannot separate reading from recall; everything after is genuinely out of
-    sample for it.
+    Scored on the six months from 2026-02, the only window where all three
+    arms overlap.
 
-    This slice is scored on the v1 panel deliberately. The Fable and CLI arms
-    were generated against v1's entry prices, and a model comparison only
-    needs the entry to be COMMON across arms, not to match the rest of the
-    paper — re-entering them on v2 would drop 94 of the 180 paired events for
-    no gain in what is being compared.
+    ON THE PANEL. An earlier version ran this on v1, reasoning that a model
+    comparison only needs the entry to be COMMON across arms rather than to
+    match the rest of the paper, and that re-entering on v2 costs half the
+    paired events. That reasoning is locally true and globally wrong: it put a
+    +249bp spread in Section 5.6 for a window where Section 5.2 reports a
+    negative one, with nothing on the page to explain the difference, and a
+    reader comparing the two is entitled to conclude the paper contradicts
+    itself. v1 measures every reaction in a fixed [16:00, 16:20] slice, so it
+    can only see issuers that moved inside those twenty minutes — a real
+    subsample, not a neutral one. Fewer events on the same basis as everything
+    else beats more events on a basis the paper elsewhere rejects.
     """
     ab_dir = CACHE / "llm_ab"
     if not ab_dir.exists():
@@ -370,10 +373,11 @@ def model_compare() -> dict:
     if not paired or len(paired) < 30:
         return {}
 
-    paths = pd.read_parquet(paths_file("v1"))
-    base = scored_events("medium", all_events=True, panel="v1")[
+    paths = pd.read_parquet(paths_file(panel))
+    base = scored_events("medium", all_events=(panel == "v1"), panel=panel)[
         ["symbol", "date", "move_pct"]]
-    out = {"since": SIX_MONTHS, "paired_n": len(paired), "arms": []}
+    out = {"since": SIX_MONTHS, "paired_n": len(paired), "panel": panel,
+           "arms": []}
     ref = None
     for label, v in arms.items():
         v = v[[(s, d) in paired for s, d in zip(v["symbol"], v["date"])]]
@@ -588,7 +592,7 @@ def main() -> None:
         "panel_compare": panel_compare(),
         "reaction_shape": reaction_shape(),
         "model_compare": model_compare(),
-        "contamination": contamination_estimate("v1"),
+        "contamination": contamination_estimate("v2"),
         "regimes": regimes([str(min(p["edate"])), str(max(p["edate"]))]),
     }
 
@@ -721,13 +725,17 @@ def main() -> None:
                    "max_dd_pct": _f((1 - spy_curve / peak).max() * 100)}
 
     # --- effort calibration (paired, same events, both efforts) -----------
-    both = scored_events("low", all_events=True, panel="v1", arm="named")
+    # On v2 like everything else. The low-effort arm was bought on 180 events
+    # and 81 survive onto the acceptance-relative panel, which is a thinner
+    # calibration than it was — but it is a calibration of the same quantity
+    # the rest of the paper reports, which the v1 version was not.
+    both = scored_events("low", all_events=False, panel="v2", arm="named")
     # NOT "effort": that key already holds the string the study ran at, and
     # overwriting it with the calibration dict silently broke the paper.
     data["effort_cal"] = {}
     for eff, frame in (("low", both),
-                       ("medium", scored_events("medium", all_events=True,
-                                                panel="v1"))):
+                       ("medium", scored_events("medium", all_events=False,
+                                                panel="v2"))):
         f = frame.copy()
         f["pnl"] = np.sign(f["move_pct"]) * f["fwd_bp"] - COSTS_BP
         k = _gate(f)
@@ -737,7 +745,7 @@ def main() -> None:
             "out_tokens": int(f["out"].mean())}
     key = ["symbol", "date"]
     pair = both[[*key, "direction"]].merge(
-        scored_events("medium", all_events=True, panel="v1")[[*key, "direction"]],
+        scored_events("medium", all_events=False, panel="v2")[[*key, "direction"]],
         on=key, suffixes=("_low", "_med"))
     data["effort_cal"]["agreement_pct"] = _f(
         (pair["direction_low"] == pair["direction_med"]).mean() * 100)

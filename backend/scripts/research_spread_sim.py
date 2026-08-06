@@ -186,6 +186,78 @@ def _alpha_under_costs(p, gross, gated, half, rng, pools, idx_by_key) -> dict:
                 float(np.mean(np.asarray(alphas) < 0)), 3)}
 
 
+GROSS_LEVELS = (0.15, 0.30, 0.50, 0.75, 1.00)
+
+
+def _deployment(p, gross, gated, half) -> dict:
+    """CAGR against how much capital is actually deployed.
+
+    Every account figure in this paper runs at 30% average gross exposure —
+    a risk cap in the simulation, not a property of the signal. The book is
+    idle two thirds of the time, so a reader comparing its CAGR to a
+    fully-invested index is comparing two different amounts of risk. This
+    sweep makes the dial explicit.
+
+    ONE TRAP, AND IT IS SILENT. account() also caps any single position at
+    max_weight, and the per-name cap binds before the gross target does:
+    at 2.7 concurrent positions a 20% per-name cap tops out near 54% gross,
+    so asking for 100% and reading back the number would report a leverage
+    that never happened. max_weight is raised with the target here, and the
+    REALISED gross is reported next to the requested one so the reader can
+    see whether the cap bound anyway.
+    """
+    from research_holding_period import account
+    from research_llm_contamination import _spy_daily
+
+    if "edate" not in p.columns:
+        p = p.assign(edate=pd.to_datetime(p["date"]).dt.date)
+    spy = _spy_daily(min(p["edate"]),
+                     max(p["edate"]) + pd.Timedelta(days=14).to_pytimedelta())
+    spy = spy.sort_values("date")
+    sessions, spy_close = spy["date"].to_list(), spy["close"].to_numpy()
+
+    # TWO BOOKS, because sizing a table around the weaker one is misleading.
+    # `gross` was computed on the tape's side, so never-standing-down is the
+    # same trade with its sign flipped wherever the gate would have refused —
+    # no re-resolution needed, and exactly the Section 5.4 policy.
+    books = {
+        "the gate": (p[gated].reset_index(drop=True),
+                     gross[gated] - half[gated] / 1e4),
+        "never stand down": (p.reset_index(drop=True),
+                             gross * np.where(gated, 1.0, -1.0) - half / 1e4),
+    }
+
+    out: dict = {"policies": []}
+    for name, (book, ret) in books.items():
+        rows = []
+        h1 = np.ones(len(book), int)
+        for target in GROSS_LEVELS:
+            a = account(book, ret, h1, sessions, spy_close,
+                        target_gross=target, max_weight=target)
+            realised = a["weight_pct"] / 100 * a["avg_concurrent"]
+            rows.append({
+                "target_gross_pct": round(target * 100),
+                "realised_gross_pct": round(realised * 100, 1),
+                "per_name_pct": round(a["weight_pct"], 1),
+                "total_pct": round(a["total_pct"], 1),
+                "cagr_pct": round(a["cagr_pct"], 2),
+                "max_dd_pct": round(a["max_dd_pct"], 1),
+                "sharpe": round(a["sharpe"], 2),
+                "alpha_pct": round(a["alpha_pct"], 2),
+            })
+        out["policies"].append({"policy": name, "n": int(len(book)),
+                                "rows": rows})
+    # Kept for the existing renderer: the gate's ladder stays at the top level.
+    out["rows"] = out["policies"][0]["rows"]
+    cur = spy_close / spy_close[0]
+    peak = np.maximum.accumulate(cur)
+    out["spy_cagr_pct"] = round(float((cur[-1] ** (252 / len(cur)) - 1) * 100), 2)
+    out["spy_max_dd_pct"] = round(float((1 - cur / peak).max() * 100), 1)
+    out["note"] = ("gross exposure is a sizing choice, not a finding; "
+                   "drawdown scales with it")
+    return out
+
+
 def compute(args=None) -> dict:
     """Everything the paper cites about fill costs. Pure, so build_report_data
     and the dated note cannot disagree."""
@@ -307,6 +379,7 @@ def compute(args=None) -> dict:
     # does, so the two are comparable line for line.
     out["alpha"] = _alpha_under_costs(p, gross, gated, half, rng, pools,
                                       idx_by_key)
+    out["deployment"] = _deployment(p, gross, gated, half)
 
     # --- the same picture per year, because liquidity is not stationary -----
     out["by_year"] = []
@@ -363,6 +436,18 @@ def stage_report(args) -> None:
         print(f"\n  Monte Carlo alpha vs SPY: {al['mc_alpha_mean']:+.2f}%/yr "
               f"[{al['mc_alpha_p05']:+.2f}, {al['mc_alpha_p95']:+.2f}], "
               f"negative in {al['mc_negative_alpha_frac'] * 100:.0f}% of runs")
+    dep = d.get("deployment") or {}
+    for pol in dep.get("policies", []):
+        print(f"\n{pol['policy']} ({pol['n']} trades)")
+        print(f"{'gross':>10}{'per name':>10}{'total':>11}{'CAGR':>8}"
+              f"{'maxDD':>8}{'Sharpe':>8}")
+        for r in pol["rows"]:
+            print(f"{r['realised_gross_pct']:>9.0f}%{r['per_name_pct']:>9.1f}%"
+                  f"{r['total_pct']:>+10.0f}%{r['cagr_pct']:>7.1f}%"
+                  f"{r['max_dd_pct']:>7.1f}%{r['sharpe']:>8.2f}")
+    if dep:
+        print(f"{'SPY':>10}{'—':>10}{'':>11}{dep['spy_cagr_pct']:>7.1f}%"
+              f"{dep['spy_max_dd_pct']:>7.1f}%")
 
     doc = Path(__file__).resolve().parents[2] / "docs" / "notes"
     doc.mkdir(parents=True, exist_ok=True)
