@@ -227,9 +227,15 @@ def _deployment(p, gross, gated, half) -> dict:
                              gross * np.where(gated, 1.0, -1.0) - half / 1e4),
     }
 
-    out: dict = {"policies": []}
+    # Every equity figure in Section 5 is drawn on the flat cost assumption.
+    # The curves below are the same book priced at the spreads the market
+    # actually quoted, so Section 6 can show its own chart rather than asking
+    # the reader to mentally discount one drawn twenty pages earlier.
+    STRIDE = max(1, len(sessions) // 400)
+    out: dict = {"policies": [],
+                 "dates": [str(d) for d in sessions[::STRIDE]]}
     for name, (book, ret) in books.items():
-        rows = []
+        rows, curves = [], {}
         h1 = np.ones(len(book), int)
         for target in GROSS_LEVELS:
             a = account(book, ret, h1, sessions, spy_close,
@@ -245,8 +251,12 @@ def _deployment(p, gross, gated, half) -> dict:
                 "sharpe": round(a["sharpe"], 2),
                 "alpha_pct": round(a["alpha_pct"], 2),
             })
+            curves[str(round(target * 100))] = [
+                round(float(v), 4) for v in a["equity"][::STRIDE]]
         out["policies"].append({"policy": name, "n": int(len(book)),
-                                "rows": rows})
+                                "rows": rows, "curves": curves})
+    sc = spy_close[::STRIDE]
+    out["spy_curve"] = [round(float(v / spy_close[0]), 4) for v in sc]
     # Kept for the existing renderer: the gate's ladder stays at the top level.
     out["rows"] = out["policies"][0]["rows"]
     cur = spy_close / spy_close[0]
