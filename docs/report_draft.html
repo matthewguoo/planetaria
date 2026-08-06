@@ -1,0 +1,933 @@
+<title>Gating Post-Earnings Drift with an LLM — Five-Year Replication</title>
+<style>
+:root {
+  color-scheme: light;
+  --paper:#FBFAF7; --ink:#16150F; --muted:#6B6A5F; --faint:#8E8B7F;
+  --rule:#DEDBD0; --panel:#F4F2EC; --accent:#B8730A;
+  --s1:#B8730A; --s2:#1BAF7A; --s3:#2A78D6;
+  --pos:#1B6B3A; --neg:#A8261C;
+  --mono: ui-monospace,"SF Mono","Cascadia Mono",Menlo,Consolas,"Liberation Mono",monospace;
+  --serif: Charter,"Bitstream Charter","Iowan Old Style","Source Serif 4",Georgia,serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) {
+    color-scheme: dark;
+    --paper:#12120F; --ink:#E9E7DE; --muted:#918E82; --faint:#75726A;
+    --rule:#2C2B25; --panel:#1A1A16; --accent:#FFB000;
+    --s1:#C98500; --s2:#199E70; --s3:#3987E5;
+    --pos:#35C46A; --neg:#FF6B5A;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --paper:#12120F; --ink:#E9E7DE; --muted:#918E82; --faint:#75726A;
+  --rule:#2C2B25; --panel:#1A1A16; --accent:#FFB000;
+  --s1:#C98500; --s2:#199E70; --s3:#3987E5;
+  --pos:#35C46A; --neg:#FF6B5A;
+}
+:root[data-theme="light"] {
+  color-scheme: light;
+  --paper:#FBFAF7; --ink:#16150F; --muted:#6B6A5F; --faint:#8E8B7F;
+  --rule:#DEDBD0; --panel:#F4F2EC; --accent:#B8730A;
+  --s1:#B8730A; --s2:#1BAF7A; --s3:#2A78D6;
+  --pos:#1B6B3A; --neg:#A8261C;
+}
+
+* { box-sizing: border-box; }
+body {
+  margin:0; background:var(--paper); color:var(--ink);
+  font-family:var(--serif); font-size:17px; line-height:1.62;
+  -webkit-font-smoothing:antialiased;
+}
+.wrap {
+  display:grid; gap:0 2rem; padding:0 1.5rem 6rem;
+  grid-template-columns:
+    [full-start] minmax(0,1fr)
+    [wide-start] minmax(0,10rem)
+    [text-start] minmax(0,64ch) [text-end]
+    minmax(0,10rem) [wide-end]
+    minmax(0,1fr) [full-end];
+}
+.wrap > * { grid-column: text; }
+.wide { grid-column: wide; }
+@media (max-width: 60rem) {
+  .wrap { grid-template-columns:[full-start][wide-start][text-start] minmax(0,1fr) [text-end][wide-end][full-end]; }
+  body { font-size:16px; }
+}
+
+h1,h2,h3,.label,.masthead,table,.fig,.stat,.kv,code,.tag { font-family:var(--mono); }
+h1 { font-size:1.72rem; line-height:1.22; font-weight:600; letter-spacing:-.02em; margin:.4rem 0 .6rem; text-wrap:balance; }
+h2 { font-size:.83rem; text-transform:uppercase; letter-spacing:.14em; font-weight:600;
+     margin:3.4rem 0 .9rem; padding-bottom:.45rem; border-bottom:1.5px solid var(--ink); }
+h2 .n { color:var(--accent); margin-right:.7em; }
+h3 { font-size:.79rem; text-transform:uppercase; letter-spacing:.1em; font-weight:600;
+     color:var(--muted); margin:2rem 0 .5rem; }
+p { margin:0 0 1.05rem; }
+a { color:var(--accent); text-decoration:none; border-bottom:1px solid color-mix(in srgb, var(--accent) 35%, transparent); }
+a:hover, a:focus-visible { border-bottom-color:var(--accent); }
+:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+strong { font-weight:600; }
+em.term { font-style:normal; font-family:var(--mono); font-size:.9em; color:var(--accent); }
+
+.masthead { border-bottom:3px double var(--ink); padding:2.6rem 0 .8rem; margin-bottom:1.6rem; }
+.masthead .kicker { font-size:.68rem; letter-spacing:.22em; text-transform:uppercase; color:var(--accent); }
+.byline { font-size:.72rem; color:var(--muted); letter-spacing:.04em; margin-top:.9rem; line-height:1.7; }
+.byline b { color:var(--ink); font-weight:600; }
+
+.abstract { background:var(--panel); border-left:2px solid var(--accent); padding:1.1rem 1.3rem; margin:1.6rem 0 0; font-size:.95em; }
+.abstract .label { font-size:.66rem; letter-spacing:.2em; text-transform:uppercase; color:var(--muted); display:block; margin-bottom:.5rem; }
+.abstract p:last-child { margin-bottom:0; }
+
+.keyfigs { display:grid; grid-template-columns:repeat(auto-fit,minmax(8.5rem,1fr)); gap:1px;
+           background:var(--rule); border:1px solid var(--rule); margin:1.8rem 0; }
+.stat { background:var(--paper); padding:.75rem .85rem; }
+.stat .k { display:block; font-size:.6rem; letter-spacing:.12em; text-transform:uppercase; color:var(--muted); margin-bottom:.3rem; }
+.stat .v { font-size:1.28rem; font-weight:600; font-variant-numeric:tabular-nums; letter-spacing:-.02em; }
+.stat .s { display:block; font-size:.63rem; color:var(--faint); margin-top:.15rem; }
+
+.scroll { overflow-x:auto; margin:1.2rem 0; }
+table { border-collapse:collapse; width:100%; font-size:.75rem; font-variant-numeric:tabular-nums; }
+caption { caption-side:top; text-align:left; font-size:.66rem; letter-spacing:.13em; text-transform:uppercase;
+          color:var(--muted); padding-bottom:.5rem; }
+th,td { padding:.34rem .6rem; text-align:right; white-space:nowrap; border-bottom:1px solid var(--rule); }
+th:first-child, td:first-child { text-align:left; }
+thead th { font-weight:600; font-size:.63rem; letter-spacing:.07em; text-transform:uppercase; color:var(--muted);
+           border-bottom:1.5px solid var(--ink); }
+tbody tr:last-child td { border-bottom:1.5px solid var(--ink); }
+tr.hl td { background:var(--panel); font-weight:600; }
+.pos { color:var(--pos); } .neg { color:var(--neg); }
+
+.fig { margin:2rem 0; }
+.fig figcaption { font-size:.68rem; color:var(--muted); line-height:1.55; margin-top:.6rem; padding-top:.5rem; border-top:1px solid var(--rule); }
+.fig figcaption b { color:var(--ink); font-weight:600; letter-spacing:.08em; text-transform:uppercase; font-size:.63rem; }
+.legend { display:flex; flex-wrap:wrap; gap:.35rem 1.1rem; font-size:.67rem; color:var(--muted); margin-bottom:.5rem; }
+.legend span { display:flex; align-items:center; gap:.4rem; }
+.swatch { width:14px; height:3px; flex:none; }
+svg { display:block; width:100%; overflow:visible; }
+.tip { position:fixed; pointer-events:none; z-index:9; background:var(--ink); color:var(--paper);
+       font-family:var(--mono); font-size:.65rem; padding:.35rem .5rem; line-height:1.5;
+       opacity:0; transition:opacity .1s; max-width:15rem; }
+.tip.on { opacity:1; }
+.toggle { font-family:var(--mono); font-size:.6rem; letter-spacing:.1em; text-transform:uppercase;
+          background:none; border:1px solid var(--rule); color:var(--muted); padding:.25rem .55rem; cursor:pointer; }
+.toggle:hover { border-color:var(--accent); color:var(--accent); }
+
+.callout { border:1px solid var(--rule); border-left:2px solid var(--accent); background:var(--panel);
+           padding:1rem 1.2rem; margin:1.6rem 0; font-size:.94em; }
+.callout .label { display:block; font-size:.63rem; letter-spacing:.16em; text-transform:uppercase; color:var(--accent); margin-bottom:.45rem; }
+.callout p:last-child { margin-bottom:0; }
+
+ol.refs { font-size:.78rem; line-height:1.6; padding-left:0; list-style:none; counter-reset:r; }
+ol.refs li { counter-increment:r; padding-left:2.6rem; text-indent:-2.6rem; margin-bottom:.6rem; }
+ol.refs li::before { content:"[" counter(r) "]"; font-family:var(--mono); color:var(--accent); margin-right:.7rem; }
+sup.c { font-family:var(--mono); font-size:.64em; color:var(--accent); }
+
+pre { font-family:var(--mono); font-size:.68rem; background:var(--panel); border:1px solid var(--rule);
+      padding:.85rem 1rem; overflow-x:auto; line-height:1.65; margin:1rem 0; }
+code { font-size:.86em; background:var(--panel); padding:.08em .3em; }
+ul.tight { margin:0 0 1.05rem; padding-left:1.1rem; }
+ul.tight li { margin-bottom:.4rem; }
+.kv { font-size:.72rem; color:var(--muted); }
+hr.end { border:0; border-top:3px double var(--ink); margin:3.5rem 0 1rem; }
+@media print { body { font-size:11pt; } .toggle { display:none; } }
+@media (prefers-reduced-motion: reduce) { * { transition:none !important; } }
+</style>
+
+<div class="wrap">
+
+<header class="masthead">
+  <div class="kicker">Planetaria Research · Working Note PR-2026-01</div>
+  <h1>Gating Post-Earnings Announcement Drift with a Large Language Model</h1>
+  <div class="byline">
+    <b>A five-year replication with direct training-contamination controls.</b><br>
+    Universe <b id="bl-n"></b> after-close earnings events, <b id="bl-span"></b> · model <b>claude-opus-5</b>,
+    effort <b>medium</b> · <b id="bl-spend"></b> of inference · drafted 2026-08-06.
+  </div>
+</header>
+
+<div class="abstract">
+  <span class="label">Abstract</span>
+  <p id="abstract-1"></p>
+  <p id="abstract-2"></p>
+</div>
+
+<div class="keyfigs" id="keyfigs"></div>
+
+<h2><span class="n">1</span>Motivation</h2>
+
+<p>Post-earnings announcement drift — the tendency of prices to keep moving in the
+direction of an earnings surprise for weeks after the announcement — is among the
+oldest and most replicated anomalies in the literature.<sup class="c">[1][2][3]</sup>
+Its usual formulation is slow: sort on standardised unexpected earnings, hold for
+sixty days. The version tested here is the opposite end of the horizon. The
+release crosses after the close, the tape reprices within the minute, and the
+question is only whether the <em>first</em> move continues into the next session.</p>
+
+<p>The mechanical form of that trade is simple enough to state in one line: if the
+after-hours reaction exceeds a threshold, enter in its direction and exit at the
+next session's close. It is also, on its own, unreliable — it makes money in trending
+regimes and loses it in stressed ones. The hypothesis under test is that a language
+model reading the release text can tell those cases apart <em>at announcement time</em>,
+before the outcome is known: that the release itself contains information about
+whether the tape's initial verdict will hold.</p>
+
+<p>This is a natural extension of a long line of work showing that the textual content
+of financial disclosure predicts returns beyond the numbers,<sup class="c">[6][7][8]</sup>
+and of more recent findings that large language models extract return-relevant
+signal from news text.<sup class="c">[9]</sup> It also inherits that literature's
+central methodological hazard, which for an LLM is far more acute than for a
+dictionary method: <b>the model may simply remember what happened.</b><sup class="c">[10][11][12]</sup>
+Most of this note is about that hazard.</p>
+
+<h2><span class="n">2</span>Strategy under test</h2>
+
+<p>The specification below is not a research construct. It is the configuration the
+production instance runs, read out of the code, and every backtest choice here was
+made to match it rather than to flatter it.</p>
+
+<div class="scroll">
+<table>
+  <caption>Table 1 — Production configuration</caption>
+  <thead><tr><th>Stage</th><th>Rule</th></tr></thead>
+  <tbody id="spec-body"></tbody>
+</table>
+</div>
+
+<p>Two properties matter for what follows. First, the model never sees the tape
+reaction it is gating — it reads the release and the pre-announcement run-up, and
+nothing else. Second, the model never places an order: it returns a schema-constrained
+verdict, and the agreement gate, the vetoes, and the risk stack decide independently
+what happens to it.</p>
+
+<h2><span class="n">3</span>Data and universe</h2>
+
+<p>Events are 8-K Item 2.02 filings — the SEC form on which US issuers report results —
+accepted after 16:00 ET, drawn from the thousand most liquid tickers as ranked at the
+<em>start</em> of each annual window, so no name enters on liquidity it only acquired
+later. Prices are split- and dividend-adjusted SIP minute and daily bars. The
+anchor is the announce-day pre-release close, the reaction is the last after-hours
+print within fifteen minutes of acceptance, and the exit is the next session's
+15:55 close.</p>
+
+<figure class="fig wide">
+  <div class="legend"><span><i class="swatch" style="background:var(--s1)"></i>events surviving each filter</span></div>
+  <div id="fig-funnel"></div>
+  <figcaption><b>Figure 1 — Selection cascade.</b> The 5% reaction gate, not the
+  sampling, is what makes this a small-<i>n</i> strategy. The study scores 88% of what
+  the production watchlist would itself see.</figcaption>
+</figure>
+
+<div class="scroll">
+<table>
+  <caption>Table 2 — Selection cascade</caption>
+  <thead><tr><th>Filter</th><th>Events</th><th>Per year</th></tr></thead>
+  <tbody id="funnel-body"></tbody>
+</table>
+</div>
+
+<p>The distinction the cascade draws is worth stating plainly, because it is the
+answer to the obvious objection that a strategy scoring three hundred trades a year
+must be sampling thinly from a much larger pool. It is not. The pool is large — some
+1,800 after-close reporters a year in this universe — but the strategy's own 5% gate
+reduces it to roughly 416, and the watchlist cap to roughly 354. Scoring 312 a year
+covers 88% of that. The events not scored here are, overwhelmingly, events the
+production strategy would also never trade.</p>
+
+<h2><span class="n">4</span>Method</h2>
+
+<h3>4.1 Prompt construction</h3>
+
+<p>Each event is one independent API request. There is no conversation history, no
+shared session, and no cross-event state: every verdict is formed from the system
+prompt, the task, and one release. Requests declare no tools, so the model cannot
+retrieve anything. The task text mirrors the production prompt exactly, including
+its weakest feature — consensus estimates read <code>unknown</code>, because the free
+data tier the live system runs on keeps no estimate history.</p>
+
+<h3>4.2 Contamination controls</h3>
+
+<p>The knowledge boundary of <code>claude-opus-5</code> falls around May 2026. Four of
+the five years studied are therefore inside the training corpus by construction, and
+the standard defence — report only the post-cutoff slice<sup class="c">[11]</sup> —
+would discard the study. The controls must instead measure the contamination channel.
+Three are implemented; two have been run.</p>
+
+<div class="scroll">
+<table>
+  <caption>Table 3 — Contamination controls</caption>
+  <thead><tr><th>Control</th><th>Mechanism</th><th>Status</th></tr></thead>
+  <tbody>
+    <tr><td>Age gradient</td><td>Gated P&amp;L regressed on event age. Memorised edge should strengthen with corpus age.</td><td>run</td></tr>
+    <tr><td>Least-contaminated year</td><td>2026 is partly post-cutoff; if recall drives the result it should be weakest.</td><td>run</td></tr>
+    <tr><td>Permutation null</td><td>Verdicts shuffled within month, 1,000×; exact null for "verdicts carry no event-specific information".</td><td>run</td></tr>
+    <tr><td>No retrieval</td><td>Requests declare no tools; asserted in code.</td><td>run</td></tr>
+    <tr><td class="neg">Identity ablation (<i>blind</i>)</td><td>Ticker, company name, exchange tags, URLs and all dates scrubbed; figures untouched. Model also reports which company it believes it is reading, giving a measured re-identification rate.</td><td class="neg">not run</td></tr>
+    <tr><td class="neg">Memory probe (<i>notext</i>)</td><td>Ticker and date only, no release. Any edge is pure recall — a direct upper bound.</td><td class="neg">not run</td></tr>
+  </tbody>
+</table>
+</div>
+
+<p>The scrubber for the identity ablation is built and audited: across 1,620 cached
+releases it removes the ticker, the company name and every year reference on 100% of
+documents, with a median of 60 substitutions each. The audit is the reason it is
+trustworthy — an earlier version silently deleted entire documents, and the failure
+was invisible until the substitution count was checked. Both unrun arms are blocked
+on inference budget, not on method.</p>
+
+<h2><span class="n">5</span>Results</h2>
+
+<h3>5.1 The gate separates outcomes</h3>
+
+<p>Scoring the raw round trip — enter at the reaction, exit at the next session's
+close — the gate separates the population sharply. Trades the model agrees with
+return materially more than the ungated mechanical baseline; trades it vetoes return
+materially less.</p>
+
+<div class="keyfigs" id="gatestats"></div>
+
+<p>The permutation test shuffles verdict labels within each calendar month, preserving
+both the monthly mix of directional calls and the monthly return regime, and re-scores
+the gate a thousand times. The observed separation is not attained in any draw.</p>
+
+<figure class="fig wide">
+  <div class="legend" id="leg-years"></div>
+  <div id="fig-years"></div>
+  <figcaption><b>Figure 2 — Per-year decomposition.</b> Every year is positive, but
+  2022 is the informative one: the mechanical baseline lost money that year and the
+  gate did not. The edge is refusal, not selection.</figcaption>
+</figure>
+
+<div class="scroll">
+<table>
+  <caption>Table 4 — Annual breakdown (bp per trade, raw exits)</caption>
+  <thead><tr><th>Year</th><th>n</th><th>Mechanical</th><th>Gated</th><th>Vetoed</th><th>Spread</th></tr></thead>
+  <tbody id="years-body"></tbody>
+</table>
+</div>
+
+<p>The asymmetry across the columns is the substantive finding. The gated column is
+respectable; the vetoed column is where the money is. In 2022 the mechanical strategy
+lost 147bp per trade and the gate lifted that to roughly breakeven — not by finding
+winners, but by declining a set of trades that averaged −501bp. The model is
+functioning as a tail filter, which is consistent with the same conclusion reached
+independently on a six-month sample with a different model.</p>
+
+<h3>5.2 Reasoning effort</h3>
+
+<p>Both effort settings were run on the same 180 events so the comparison is paired.
+They agree on direction 86% of the time, and the disagreements matter.</p>
+
+<div class="scroll">
+<table>
+  <caption>Table 5 — Effort calibration, paired on identical events</caption>
+  <thead><tr><th>Effort</th><th>n</th><th>Mechanical</th><th>Gated</th><th>Vetoed</th><th>Spread</th><th>Output tok</th></tr></thead>
+  <tbody id="effort-body"></tbody>
+</table>
+</div>
+
+<p>Medium dominates low on every column that matters, for roughly 23% more cost per
+call. The production instance already runs medium; this confirms rather than changes
+it. The five-year study also runs at medium throughout, so that the annual comparison
+and the age gradient are not confounded by an effort change at the 2026 boundary.</p>
+
+<h3>5.3 Stability across the liquidity spectrum</h3>
+
+<p>If the edge lived only in the largest names it would not survive contact with the
+production watchlist, which fills eight slots a night and therefore reaches further
+down the liquidity ranking than this study does.</p>
+
+<figure class="fig wide">
+  <div class="legend" id="leg-liq"></div>
+  <div id="fig-liq"></div>
+  <figcaption><b>Figure 3 — Gate spread by prior-session dollar volume.</b> Positive
+  in every quintile. The decay by intraday rank (Table 6) is the honest caveat: the
+  marginal name is worth roughly half the headline.</figcaption>
+</figure>
+
+<div class="scroll">
+<table>
+  <caption>Table 6 — By daily liquidity rank (1 = most liquid reporter that day)</caption>
+  <thead><tr><th>Rank</th><th>n</th><th>Mechanical</th><th>Gated</th><th>Spread</th></tr></thead>
+  <tbody id="ranks-body"></tbody>
+</table>
+</div>
+
+<h3>5.4 Portfolio simulation and the index question</h3>
+
+<p>Per-trade basis points do not answer whether the strategy is worth running. The
+simulation below compounds the gated stream through the production sizing rules —
+0.5% of current equity at risk at the stop, conviction multipliers, a 20% per-name
+cap and 100% gross cap — on the actual NYSE session calendar, with each trade's
+return assigned to the session in which it is realised.</p>
+
+<figure class="fig wide">
+  <div class="legend" id="leg-curve"></div>
+  <div style="display:flex;justify-content:flex-end;margin-bottom:.4rem">
+    <button class="toggle" id="scale-btn" type="button">log scale</button>
+  </div>
+  <div id="fig-curve"></div>
+  <figcaption><b>Figure 4 — Growth of one unit, raw exits.</b> Dashed line: the
+  smallest daily-rebalanced multiple of SPY that reaches the same terminal wealth as
+  the vol-weighted policy. It arrives at the same place having lost a third of its
+  value on the way.</figcaption>
+</figure>
+
+<div class="scroll">
+<table>
+  <caption>Table 7 — Portfolio statistics, raw exits</caption>
+  <thead><tr><th>Series</th><th>Total</th><th>CAGR</th><th>α p.a.</th><th>β</th><th>Corr</th><th>Sharpe</th><th>Max DD</th></tr></thead>
+  <tbody id="curve-body"></tbody>
+</table>
+</div>
+
+<p>Beta against SPY is 0.005 and against QQQ 0.007; correlation with either is under
+0.03. Whatever this is, it is not index exposure in disguise. Earnings reactions are
+idiosyncratic by construction and the book runs both directions — 589 long and 483
+short — so a near-zero market loading is the expected result rather than a surprising
+one. Alpha in the sense of Jensen<sup class="c">[13]</sup> is then almost the entire
+return.</p>
+
+<div class="callout">
+  <span class="label">Could leverage have done this instead?</span>
+  <p id="iso-text"></p>
+</div>
+
+<div class="scroll">
+<table>
+  <caption>Table 8 — Iso-return leverage: matching terminal wealth from an index alone</caption>
+  <thead><tr><th>Target</th><th>Index</th><th>Exposure</th><th>Max DD</th><th>Vol p.a.</th></tr></thead>
+  <tbody id="iso-body"></tbody>
+</table>
+</div>
+
+<p>Terminal wealth is not monotone in leverage — volatility decay makes it
+hump-shaped, so past some exposure the index's own drawdowns compound faster than its
+gains.<sup class="c">[14][15]</sup> Solving by bisection returns the search ceiling and
+a spurious total loss; the figures above come from a scan, which is why some cells
+report that no exposure reaches the target at all.</p>
+
+<h3>5.5 What the brackets cost</h3>
+
+<p>Everything to this point measures the raw round trip, because that is what the
+cached event panel stores. The production strategy does not trade that way. It arms a
+stop at 2.5× the name's trailing average absolute daily return, floored at 5% and
+capped at 12%, and a take-profit at twice the stop, either of which the exit enforcer
+can fire after hours. Resolving all 1,072 gated events against per-event minute bars —
+stop-first on same-bar touches — gives a materially different answer.</p>
+
+<figure class="fig wide">
+  <div class="legend" id="leg-exit"></div>
+  <div id="fig-exit"></div>
+  <figcaption><b>Figure 5 — How the gated trades actually ended.</b> The stop fires on
+  41.5% of trades at an average of −626bp. It is the single largest term in the
+  strategy's realised P&amp;L, and it is a configuration choice, not a property of the
+  signal.</figcaption>
+</figure>
+
+<div class="callout">
+  <span class="label">The headline result of this study</span>
+  <p id="bracket-text"></p>
+</div>
+
+<figure class="fig wide">
+  <div class="legend" id="leg-curve2"></div>
+  <div id="fig-curve2"></div>
+  <figcaption><b>Figure 6 — Growth of one unit under the production brackets.</b> The
+  same signal, the same sizing, the real exit policy. Both allocation schemes now
+  trail SPY on total return while keeping roughly a third of its drawdown.</figcaption>
+</figure>
+
+<div class="scroll">
+<table>
+  <caption>Table 9 — Portfolio statistics under production brackets</caption>
+  <thead><tr><th>Series</th><th>Total</th><th>CAGR</th><th>α p.a.</th><th>β</th><th>Sharpe</th><th>Max DD</th></tr></thead>
+  <tbody id="curve2-body"></tbody>
+</table>
+</div>
+
+<p>A 5–12% stop is inside the ordinary whipsaw band of a stock that has just moved
+more than 5% on an earnings release. The stop is not protecting the position from an
+adverse thesis; it is being triggered by the noise the thesis has to survive. That
+the same signal produces a Sharpe of 2.71 without brackets and 1.00 with them
+localises the problem precisely: the gate is picking direction, and the exit policy
+is giving the direction back.</p>
+
+<h2><span class="n">6</span>Contamination analysis</h2>
+
+<p>The evidence available so far is indirect, and points consistently in one direction.</p>
+
+<ul class="tight">
+  <li><b>Age gradient.</b> Regressing gated per-trade P&amp;L on days since the event
+  gives a slope of <span id="grad-slope"></span> per year of age
+  (SE <span id="grad-se"></span>, t = <span id="grad-t"></span>). A memorised edge should
+  <em>strengthen</em> with corpus age, since older events are more discussed and more
+  repeated in training data. The slope is not significant and its sign is the opposite
+  of the memorisation prediction.</li>
+  <li><b>Least-contaminated year.</b> 2026 is the year least represented in the corpus
+  and partly beyond the cutoff entirely. It shows the second-highest spread of the six
+  (<span id="y2026"></span>). Under a recall mechanism it should be the weakest.</li>
+  <li><b>Permutation null.</b> The observed gate separation is not reached in any of
+  1,000 within-month verdict shuffles.</li>
+</ul>
+
+<p>None of these is a substitute for the two arms that have not been run. The identity
+ablation is the strong test — if the edge survives the removal of the issuer's name,
+it came from reading rather than remembering — and the memory probe bounds the channel
+directly by asking the model to predict with no release text at all. Until both are
+run, the correct statement is that the memorisation hypothesis is not supported by the
+available evidence, not that it has been excluded.</p>
+
+<h2><span class="n">7</span>Limitations</h2>
+
+<ul class="tight">
+  <li><b>Survivorship.</b> The universe is constructed from the current SEC ticker map,
+  so issuers fully delisted since the window are absent. This flatters the 2022 bear
+  regime more than any other period.</li>
+  <li><b>Execution.</b> Costs are a flat 13bp round trip, not a per-name spread model,
+  and entries assume a fill at the reaction print. The live system currently cannot
+  obtain a fresh after-hours quote at all on its data tier — measured on 2026-08-06,
+  the free feed returned an 8.3-hour-old book with a 10% quoted spread on one name —
+  so the fill assumption is the least-tested part of this note.</li>
+  <li><b>Consensus.</b> Every prompt reads <code>unknown</code> for estimates. Live has
+  real consensus for roughly two-thirds of names, so this understates the information
+  actually available at decision time.</li>
+  <li><b>Regime priors.</b> No scrubbing removes what the model knows about the kind of
+  company it is reading. Identity ablation bounds this; it does not eliminate it.</li>
+  <li><b>Single model, single window.</b> One model family, one five-year span, one
+  market. The 2021–2026 period contains exactly one severe bear market.</li>
+  <li><b>Paper fills.</b> Nothing here has traded real size.</li>
+</ul>
+
+<h2><span class="n">8</span>Conclusions</h2>
+
+<p>The language-model gate carries real, independently significant information about
+whether an after-hours earnings reaction will continue. It survives five years, six
+calendar years of regimes, both directions, and every liquidity quintile; it is
+uncorrelated with the market; and no leverage of a broad index reproduces its
+unbracketed path. The evidence available so far does not support the hypothesis that
+this is memorisation, though the two controls that would test it directly remain
+unrun.</p>
+
+<p>The strategy as currently configured, however, does not capture that information.
+Its own stop-loss removes roughly three-quarters of the signal's value and leaves total
+return below a passive index. The immediate implication is not to trade this as
+specified but to re-derive the exit policy — the bracket width, and whether a hard
+stop belongs on a one-session horizon at all — and to re-run the identity ablation
+before treating the result as established.</p>
+
+<h2><span class="n">9</span>References</h2>
+
+<ol class="refs">
+  <li>Ball, R., &amp; Brown, P. (1968). An empirical evaluation of accounting income numbers. <i>Journal of Accounting Research</i>, 6(2), 159–178.</li>
+  <li>Bernard, V. L., &amp; Thomas, J. K. (1989). Post-earnings-announcement drift: Delayed price response or risk premium? <i>Journal of Accounting Research</i>, 27, 1–36.</li>
+  <li>Bernard, V. L., &amp; Thomas, J. K. (1990). Evidence that stock prices do not fully reflect the implications of current earnings for future earnings. <i>Journal of Accounting and Economics</i>, 13(4), 305–340.</li>
+  <li>Foster, G., Olsen, C., &amp; Shevlin, T. (1984). Earnings releases, anomalies, and the behavior of security returns. <i>The Accounting Review</i>, 59(4), 574–603.</li>
+  <li>Chan, L. K. C., Jegadeesh, N., &amp; Lakonishok, J. (1996). Momentum strategies. <i>Journal of Finance</i>, 51(5), 1681–1713.</li>
+  <li>Tetlock, P. C. (2007). Giving content to investor sentiment: The role of media in the stock market. <i>Journal of Finance</i>, 62(3), 1139–1168.</li>
+  <li>Tetlock, P. C., Saar-Tsechansky, M., &amp; Macskassy, S. (2008). More than words: Quantifying language to measure firms' fundamentals. <i>Journal of Finance</i>, 63(3), 1437–1467.</li>
+  <li>Loughran, T., &amp; McDonald, B. (2011). When is a liability not a liability? Textual analysis, dictionaries, and 10-Ks. <i>Journal of Finance</i>, 66(1), 35–65.</li>
+  <li>Lopez-Lira, A., &amp; Tang, Y. (2023). Can ChatGPT forecast stock price movements? Return predictability and large language models. <i>Working paper</i>.</li>
+  <li>Glasserman, P., &amp; Lin, C. (2023). Assessing look-ahead bias in stock return predictions generated by GPT sentiment analysis. <i>Working paper</i>, arXiv:2309.17322.</li>
+  <li>Golchin, S., &amp; Surdeanu, M. (2024). Time travel in LLMs: Tracing data contamination in large language models. <i>ICLR</i>.</li>
+  <li>Sainz, O., Campos, J. A., García-Ferrero, I., Etxaniz, J., López de Lacalle, O., &amp; Agirre, E. (2023). NLP evaluation in trouble: On the need to measure LLM data contamination for each benchmark. <i>Findings of EMNLP</i>.</li>
+  <li>Jensen, M. C. (1968). The performance of mutual funds in the period 1945–1964. <i>Journal of Finance</i>, 23(2), 389–416.</li>
+  <li>Cheng, M., &amp; Madhavan, A. (2009). The dynamics of leveraged and inverse exchange-traded funds. <i>Journal of Investment Management</i>, 7(4).</li>
+  <li>Avellaneda, M., &amp; Zhang, S. (2010). Path-dependence of leveraged ETF returns. <i>SIAM Journal on Financial Mathematics</i>, 1(1), 586–603.</li>
+  <li>Hirshleifer, D., Lim, S. S., &amp; Teoh, S. H. (2009). Driven to distraction: Extraneous events and underreaction to earnings news. <i>Journal of Finance</i>, 64(5), 2289–2325.</li>
+  <li>Novy-Marx, R., &amp; Velikov, M. (2016). A taxonomy of anomalies and their trading costs. <i>Review of Financial Studies</i>, 29(1), 104–147.</li>
+  <li>Sharpe, W. F. (1966). Mutual fund performance. <i>Journal of Business</i>, 39(1), 119–138.</li>
+</ol>
+
+<h2><span class="n">10</span>Reproduction</h2>
+
+<p>Every figure in this note regenerates from the harness. Release texts are cached
+from EDGAR; verdicts are cached per event, so a re-run costs nothing unless the arm
+changes.</p>
+
+<pre>python scripts/research_llm_contamination.py texts       # EDGAR release corpus
+python scripts/research_llm_contamination.py scrub       # audit the anonymiser
+python scripts/research_llm_contamination.py calibrate   # low vs medium effort
+python scripts/research_llm_contamination.py submit --arm named --effort medium
+python scripts/research_llm_contamination.py watch       # poll + collect
+python scripts/research_llm_contamination.py brackets --effort medium
+python scripts/research_llm_contamination.py score  --effort medium
+python scripts/research_llm_contamination.py curve  --effort medium
+python scripts/research_llm_contamination.py curve  --effort medium --brackets
+python scripts/build_report_data.py</pre>
+
+<p class="kv" id="provenance"></p>
+
+<hr class="end">
+<p class="kv">Planetaria Research · paper-trading system, no capital deployed ·
+Prepared for internal decision-making. Not investment advice.</p>
+
+</div>
+
+<div class="tip" id="tip"></div>
+
+<script id="report-data" type="application/json">__DATA__</script>
+<script>
+const D = JSON.parse(document.getElementById("report-data").textContent);
+const NS = "http://www.w3.org/2000/svg";
+const tip = document.getElementById("tip");
+const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+
+const el = (tag, attrs = {}, text) => {
+  const n = document.createElementNS(NS, tag);
+  for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v);
+  if (text !== undefined) n.textContent = text;
+  return n;
+};
+const fmt = (n, d = 1) => (n >= 0 ? "+" : "") + n.toFixed(d);
+const signed = n => `<span class="${n >= 0 ? "pos" : "neg"}">${fmt(n)}</span>`;
+const pct = (n, d = 1) => `${n >= 0 ? "+" : ""}${n.toFixed(d)}%`;
+
+function showTip(e, html) {
+  tip.innerHTML = html;
+  tip.classList.add("on");
+  const x = Math.min(e.clientX + 14, innerWidth - tip.offsetWidth - 8);
+  tip.style.left = x + "px";
+  tip.style.top = (e.clientY - tip.offsetHeight - 10) + "px";
+}
+const hideTip = () => tip.classList.remove("on");
+
+function legend(id, items) {
+  const box = document.getElementById(id);
+  if (!box) return;
+  box.innerHTML = items.map(i =>
+    `<span><i class="swatch" style="background:${i.c}"></i>${i.l}</span>`).join("");
+}
+
+/* ---------------------------------------------------------------- header */
+document.getElementById("bl-n").textContent = D.universe_n.toLocaleString();
+document.getElementById("bl-span").textContent = `${D.span[0]} to ${D.span[1]}`;
+document.getElementById("bl-spend").textContent = `$${D.spend_usd.toFixed(2)}`;
+
+const H = D.headline, B = D.brackets;
+const rawVol = D.curve_raw.stats.vol, brVol = D.curve_bracketed.stats.vol;
+const spy = D.curve_raw.stats.spy;
+
+document.getElementById("abstract-1").innerHTML =
+  `We test whether a large language model, reading an earnings release at the moment it
+   crosses the wire, can distinguish after-hours price reactions that continue from those
+   that reverse. Over ${D.universe_n.toLocaleString()} after-close events spanning
+   ${D.span[0]} to ${D.span[1]}, a mechanical continuation rule returns
+   ${fmt(H.mech)}bp per trade. Filtering it on the model's directional verdict lifts the
+   retained ${H.gated_n.toLocaleString()} trades to <b>${fmt(H.gated)}bp</b> (t = ${H.t})
+   while the ${H.vetoed_n} rejected trades return ${fmt(H.vetoed)}bp — a separation of
+   ${fmt(H.spread)}bp that is not attained in any of 1,000 within-month permutations of
+   the verdict labels. The effect is positive in all six calendar years and all five
+   liquidity quintiles, and is uncorrelated with the market
+   (β = ${rawVol.vs.SPY.beta.toFixed(3)} against SPY,
+   ${rawVol.vs.QQQ.beta.toFixed(3)} against QQQ).`;
+
+document.getElementById("abstract-2").innerHTML =
+  `Two findings qualify this. First, resolving the same trades against the production
+   stop-loss and take-profit on minute bars reduces the per-trade result from
+   ${fmt(H.gated)}bp to <b>${fmt(B.mean_bp)}bp</b>: the stop fires on
+   ${B.by_reason.find(r => r.reason === "sl").pct}% of trades at
+   ${fmt(B.by_reason.find(r => r.reason === "sl").mean_bp)}bp, and the strategy as
+   configured trails a passive index on total return. The signal is real; the exit policy
+   discards most of it. Second, four of the five years studied fall inside the model's
+   training corpus. Indirect controls — an age gradient of
+   ${fmt(D.gradient.bp_per_year)}bp per year (t = ${D.gradient.t}), with the sign opposite
+   to the memorisation prediction, and the strongest results in the least-contaminated
+   year — do not support a recall explanation, but the two direct controls (identity
+   ablation and a no-text memory probe) remain unrun.`;
+
+const keyfigs = [
+  { k: "Events scored", v: D.universe_n.toLocaleString(), s: `${D.span[0].slice(0,4)}–${D.span[1].slice(0,4)}` },
+  { k: "Gated", v: fmt(H.gated) + "bp", s: `vs ${fmt(H.mech)}bp mechanical` },
+  { k: "Vetoed", v: fmt(H.vetoed) + "bp", s: `${H.vetoed_n} trades declined` },
+  { k: "Permutation p", v: "< 0.001", s: "1,000 shuffles" },
+  { k: "β vs SPY", v: rawVol.vs.SPY.beta.toFixed(3), s: `corr ${rawVol.vs.SPY.corr.toFixed(3)}` },
+  { k: "With brackets", v: fmt(B.mean_bp) + "bp", s: "as configured" },
+];
+document.getElementById("keyfigs").innerHTML = keyfigs.map(f =>
+  `<div class="stat"><span class="k">${f.k}</span><span class="v">${f.v}</span><span class="s">${f.s}</span></div>`).join("");
+
+document.getElementById("gatestats").innerHTML = [
+  { k: "Retained", v: `${H.keep_pct}%`, s: `${H.gated_n.toLocaleString()} of ${H.n.toLocaleString()}` },
+  { k: "Win rate", v: `${H.win_gated}%`, s: `${H.win_all}% ungated` },
+  { k: "t-statistic", v: H.t.toFixed(2), s: "on gated mean" },
+  { k: "Long side", v: fmt(H.long) + "bp", s: `n = ${H.long_n}` },
+  { k: "Short side", v: fmt(H.short) + "bp", s: `n = ${H.short_n}` },
+].map(f => `<div class="stat"><span class="k">${f.k}</span><span class="v">${f.v}</span><span class="s">${f.s}</span></div>`).join("");
+
+/* ------------------------------------------------------------ spec table */
+const SPEC = [
+  ["Watchlist", `15:30 ET: the ${D.top_per_day}–8 most liquid after-close reporters, price ≥ $5, pre-release price snapshotted`],
+  ["Re-anchor", "16:04 ET: reset the reference price to the post-auction tape for names that have not yet reported"],
+  ["Trigger", "First results-bearing source per name — 8-K full text or a single-symbol numbers headline"],
+  ["Delay", "Queue 10 minutes, then decide; the tape must still clear the gate"],
+  ["Analysis", "One structured call: release text plus 5-session run-up → {direction, confidence, guidance, quality flags}"],
+  ["Gate", `Trade only when the verdict direction agrees with the sign of the reaction AND |reaction| ≥ ${D.gate_pct}%`],
+  ["Vetoes", "Quoted spread > 2% of mid; short with a 5-session run-up ≤ −5%"],
+  ["Sizing", "0.5% of equity at risk at the stop, scaled by confidence, quality flags and move size"],
+  ["Bracket", "Stop = clamp(2.5 × trailing avg |daily return|, 5%, 12%); take-profit = 2 × stop"],
+  ["Exit", "Bracket, else time stop at 15:55 ET on T+1"],
+];
+document.getElementById("spec-body").innerHTML = SPEC.map(
+  ([a, b]) => `<tr><td>${a}</td><td style="text-align:left;white-space:normal">${b}</td></tr>`).join("");
+
+document.getElementById("funnel-body").innerHTML = D.funnel.map((f, i) =>
+  `<tr class="${i === D.funnel.length - 1 ? "hl" : ""}"><td style="white-space:normal">${f.stage}</td>
+   <td>${f.total.toLocaleString()}</td><td>${f.per_year.toLocaleString()}</td></tr>`).join("");
+
+document.getElementById("years-body").innerHTML = D.years.map(y =>
+  `<tr><td>${y.year}</td><td>${y.n}</td><td>${signed(y.mech)}</td><td>${signed(y.gated)}</td>
+   <td>${signed(y.vetoed)}</td><td>${signed(y.spread)}</td></tr>`).join("");
+
+document.getElementById("effort-body").innerHTML = ["low", "medium"].map(e => {
+  const r = D.effort[e];
+  return `<tr class="${e === "medium" ? "hl" : ""}"><td>${e}</td><td>${r.n}</td><td>${signed(r.mech)}</td>
+   <td>${signed(r.gated)}</td><td>${signed(r.vetoed)}</td><td>${signed(r.spread)}</td><td>${r.out_tokens}</td></tr>`;
+}).join("");
+
+document.getElementById("ranks-body").innerHTML = D.ranks.map(r =>
+  `<tr><td>${r.rank}</td><td>${r.n}</td><td>${signed(r.mech)}</td><td>${signed(r.gated)}</td>
+   <td>${signed(r.spread)}</td></tr>`).join("");
+
+/* ------------------------------------------------------- curve + iso text */
+const SERIES = [
+  { key: "vol", label: "Vol-weighted (production sizing)", c: () => css("--s1") },
+  { key: "flat", label: "Flat 10% per name", c: () => css("--s2") },
+  { key: "spy", label: "SPY buy & hold", c: () => css("--s3") },
+];
+
+function curveRows(stats, withCorr) {
+  const order = ["vol", "flat", "spy", "qqq", "tqqq"];
+  const names = { vol: "Vol-weighted", flat: "Flat 10%/name", spy: "SPY", qqq: "QQQ", tqqq: "TQQQ" };
+  return order.filter(k => stats[k]).map(k => {
+    const s = stats[k], isStrat = k === "vol" || k === "flat";
+    const v = s.vs && s.vs.SPY ? s.vs.SPY : { alpha_annual_pct: 0, beta: s.beta, corr: 1 };
+    return `<tr class="${isStrat ? "hl" : ""}"><td>${names[k]}</td>
+      <td>${pct(s.total_return_pct, 1)}</td><td>${pct(s.cagr_pct, 2)}</td>
+      <td>${isStrat ? signed(v.alpha_annual_pct) + "%" : "—"}</td>
+      <td>${(s.beta ?? 0).toFixed(3)}</td>
+      ${withCorr ? `<td>${isStrat ? v.corr.toFixed(3) : "1.000"}</td>` : ""}
+      <td>${s.sharpe.toFixed(2)}</td><td class="neg">−${s.max_drawdown_pct.toFixed(1)}%</td></tr>`;
+  }).join("");
+}
+document.getElementById("curve-body").innerHTML = curveRows(D.curve_raw.stats, true);
+document.getElementById("curve2-body").innerHTML = curveRows(D.curve_bracketed.stats, false);
+
+const isoRows = [];
+for (const policy of ["vol", "flat"]) {
+  const label = policy === "vol" ? "Vol-weighted" : "Flat 10%/name";
+  for (const [sym, iso] of Object.entries(D.curve_raw.stats[policy].iso)) {
+    isoRows.push(iso.reachable
+      ? `<tr><td>${label}</td><td>${sym}</td><td>${iso.k.toFixed(2)}×</td>
+         <td class="neg">−${iso.max_drawdown_pct.toFixed(1)}%</td><td>${iso.vol_annual_pct.toFixed(1)}%</td></tr>`
+      : `<tr><td>${label}</td><td>${sym}</td><td colspan="3" style="text-align:left;white-space:normal">
+         unreachable at any exposure — best ${iso.best_k.toFixed(2)}× ends at ${iso.best_terminal.toFixed(2)}×
+         (max DD −${iso.max_drawdown_pct.toFixed(1)}%)</td></tr>`);
+  }
+}
+document.getElementById("iso-body").innerHTML = isoRows.join("");
+
+const isoSpy = D.curve_raw.stats.vol.iso.SPY;
+document.getElementById("iso-text").innerHTML =
+  `The vol-weighted policy returns ${pct(rawVol.total_return_pct)} with a maximum drawdown
+   of ${rawVol.max_drawdown_pct}%. Reaching the same terminal wealth by holding
+   ${isoSpy.k.toFixed(2)}× SPY, rebalanced daily, would have cost a
+   <b>${isoSpy.max_drawdown_pct}% drawdown</b> — ${(isoSpy.max_drawdown_pct / rawVol.max_drawdown_pct).toFixed(1)}
+   times as deep — at ${isoSpy.vol_annual_pct}% annualised volatility. The flat-allocation
+   policy's ${pct(D.curve_raw.stats.flat.total_return_pct)} is not reachable at
+   <i>any</i> constant exposure to SPY, QQQ or TQQQ over this period: the best levered SPY
+   path ends at ${D.curve_raw.stats.flat.iso.SPY.best_terminal.toFixed(2)}× having lost
+   ${D.curve_raw.stats.flat.iso.SPY.max_drawdown_pct}% along the way.`;
+
+const sl = B.by_reason.find(r => r.reason === "sl");
+const tp = B.by_reason.find(r => r.reason === "tp");
+const ts = B.by_reason.find(r => r.reason === "time_stop");
+document.getElementById("bracket-text").innerHTML =
+  `Walking the production brackets takes the gated stream from <b>${fmt(H.gated)}bp</b> to
+   <b>${fmt(B.mean_bp)}bp</b> per trade and the win rate from ${H.win_gated}% to ${B.win_pct}%.
+   The stop fires on ${sl.n} of ${B.n} trades (${sl.pct}%) at an average of ${fmt(sl.mean_bp)}bp;
+   the take-profit fires on ${tp.n} (${tp.pct}%) at ${fmt(tp.mean_bp)}bp; the remaining
+   ${ts.n} run to the T+1 time stop at ${fmt(ts.mean_bp)}bp. Roughly three-quarters of the
+   measured edge is consumed by the exit policy. The median stop is
+   ${B.median_sl_pct}% wide — inside the ordinary post-earnings whipsaw band of a stock
+   that has just gapped more than ${D.gate_pct}%.`;
+
+document.getElementById("grad-slope").textContent = fmt(D.gradient.bp_per_year) + "bp";
+document.getElementById("grad-se").textContent = D.gradient.se.toFixed(1);
+document.getElementById("grad-t").textContent = D.gradient.t.toFixed(2);
+const y26 = D.years.find(y => y.year === "2026");
+document.getElementById("y2026").textContent = `${fmt(y26.spread)}bp spread, n = ${y26.n}`;
+
+document.getElementById("provenance").innerHTML =
+  `Inference: ${D.curve_raw.model}, effort ${D.curve_raw.effort}, Batch API, ${D.spend_usd.toFixed(2)} USD measured.
+   Prices: Alpaca SIP, split- and dividend-adjusted. Filings: SEC EDGAR full-text.
+   Costs ${D.costs_bp}bp round trip throughout.`;
+
+/* ------------------------------------------------------------- figures */
+function barChart(mount, rows, opts) {
+  const W = 1000, rowH = opts.rowH || 34, padL = opts.padL || 210, padR = 70;
+  const H = rows.length * rowH + 8;
+  const svg = el("svg", { viewBox: `0 0 ${W} ${H}`, style: `height:${H * 0.62}px` , role: "img" });
+  const max = Math.max(...rows.map(r => Math.abs(r.v))) || 1;
+  const zero = opts.signed ? padL + (W - padL - padR) * 0.32 : padL;
+  const scale = opts.signed ? (W - padL - padR) * 0.62 / max : (W - padL - padR) / max;
+  rows.forEach((r, i) => {
+    const y = i * rowH + 4;
+    const w = Math.abs(r.v) * scale;
+    const x = r.v >= 0 ? zero : zero - w;
+    svg.appendChild(el("text", { x: padL - 12, y: y + rowH / 2 + 4, "text-anchor": "end",
+      "font-size": 13, "font-family": "var(--mono)", fill: css("--muted") }, r.label));
+    const bar = el("rect", { x, y: y + 5, width: Math.max(w, 1.5), height: rowH - 16,
+      fill: r.c || css("--s1"), rx: 2 });
+    bar.addEventListener("mousemove", e => showTip(e, r.tip));
+    bar.addEventListener("mouseleave", hideTip);
+    svg.appendChild(bar);
+    svg.appendChild(el("text", { x: r.v >= 0 ? x + w + 8 : x - 8, y: y + rowH / 2 + 4,
+      "text-anchor": r.v >= 0 ? "start" : "end", "font-size": 13,
+      "font-family": "var(--mono)", fill: css("--ink") }, r.vLabel));
+  });
+  if (opts.signed) svg.appendChild(el("line", { x1: zero, x2: zero, y1: 0, y2: H,
+    stroke: css("--rule"), "stroke-width": 1 }));
+  mount.replaceChildren(svg);
+}
+
+function groupedBars(mount, groups, series) {
+  const W = 1000, H = 300, padL = 56, padB = 28, padT = 8;
+  const svg = el("svg", { viewBox: `0 0 ${W} ${H + padB}`, style: "height:300px", role: "img" });
+  const vals = groups.flatMap(g => series.map(s => g[s.key]));
+  const lo = Math.min(0, ...vals), hi = Math.max(0, ...vals);
+  const y = v => padT + (hi - v) / (hi - lo) * (H - padT);
+  const gw = (W - padL) / groups.length, bw = Math.min(26, (gw - 14) / series.length);
+  svg.appendChild(el("line", { x1: padL - 8, x2: W, y1: y(0), y2: y(0), stroke: css("--ink"), "stroke-width": 1 }));
+  [hi, (hi + lo) / 2, lo].forEach(v => {
+    svg.appendChild(el("text", { x: padL - 14, y: y(v) + 4, "text-anchor": "end", "font-size": 12,
+      "font-family": "var(--mono)", fill: css("--faint") }, Math.round(v)));
+  });
+  groups.forEach((g, i) => {
+    const x0 = padL + i * gw + (gw - bw * series.length) / 2;
+    series.forEach((s, j) => {
+      const v = g[s.key], yy = Math.min(y(v), y(0)), h = Math.abs(y(v) - y(0));
+      const bar = el("rect", { x: x0 + j * bw, y: yy, width: bw - 2, height: Math.max(h, 1.5),
+        fill: s.c(), rx: 2 });
+      bar.addEventListener("mousemove", e => showTip(e,
+        `<b>${g.label}</b><br>${s.label}: ${fmt(v)}bp<br>n = ${g.n}`));
+      bar.addEventListener("mouseleave", hideTip);
+      svg.appendChild(bar);
+    });
+    svg.appendChild(el("text", { x: padL + i * gw + gw / 2, y: H + 20, "text-anchor": "middle",
+      "font-size": 13, "font-family": "var(--mono)", fill: css("--muted") }, g.label));
+  });
+  mount.replaceChildren(svg);
+}
+
+let LOG = true;
+function lineChart(mount, payload, extra) {
+  const W = 1000, H = 330, padL = 8, padB = 22;
+  const svg = el("svg", { viewBox: `0 0 ${W} ${H + padB}`, style: "height:330px", role: "img" });
+  const keys = ["vol", "flat", "spy"].filter(k => payload.series[k]);
+  const all = keys.flatMap(k => payload.series[k]).concat(extra ? extra.curve : []);
+  const lo = Math.min(...all), hi = Math.max(...all);
+  const tx = v => LOG ? Math.log(Math.max(v, 1e-4)) : v;
+  const [yLo, yHi] = [tx(lo), tx(hi)];
+  const n = payload.dates.length;
+  const X = i => padL + i / (n - 1) * (W - padL);
+  const Y = v => H - (tx(v) - yLo) / (yHi - yLo || 1) * (H - 10);
+  let year = "";
+  payload.dates.forEach((d, i) => {
+    if (d.slice(0, 4) !== year) {
+      year = d.slice(0, 4);
+      svg.appendChild(el("line", { x1: X(i), x2: X(i), y1: 0, y2: H, stroke: css("--rule"), "stroke-width": 1 }));
+      svg.appendChild(el("text", { x: X(i) + 5, y: H + 16, "font-size": 12,
+        "font-family": "var(--mono)", fill: css("--faint") }, year));
+    }
+  });
+  svg.appendChild(el("line", { x1: padL, x2: W, y1: Y(1), y2: Y(1), stroke: css("--muted"),
+    "stroke-dasharray": "3 5", "stroke-width": 1 }));
+  if (extra) {
+    svg.appendChild(el("path", { d: extra.curve.map((v, i) => `${i ? "L" : "M"}${X(i)},${Y(v)}`).join(" "),
+      fill: "none", stroke: css("--muted"), "stroke-width": 1.4, "stroke-dasharray": "5 4",
+      "vector-effect": "non-scaling-stroke" }));
+  }
+  const colors = { vol: css("--s1"), flat: css("--s2"), spy: css("--s3") };
+  keys.forEach(k => {
+    svg.appendChild(el("path", { d: payload.series[k].map((v, i) => `${i ? "L" : "M"}${X(i)},${Y(v)}`).join(" "),
+      fill: "none", stroke: colors[k], "stroke-width": 2, "vector-effect": "non-scaling-stroke",
+      "stroke-linejoin": "round" }));
+  });
+  const cross = el("line", { y1: 0, y2: H, stroke: css("--ink"), "stroke-width": 1, opacity: 0 });
+  svg.appendChild(cross);
+  const hit = el("rect", { x: 0, y: 0, width: W, height: H, fill: "transparent" });
+  hit.addEventListener("mousemove", e => {
+    const box = svg.getBoundingClientRect();
+    const i = Math.max(0, Math.min(n - 1, Math.round((e.clientX - box.left) / box.width * (n - 1))));
+    cross.setAttribute("x1", X(i)); cross.setAttribute("x2", X(i)); cross.setAttribute("opacity", .35);
+    showTip(e, `<b>${payload.dates[i]}</b><br>` + keys.map(k =>
+      `${k}: ${payload.series[k][i].toFixed(2)}×`).join("<br>") +
+      (extra ? `<br>${extra.label}: ${extra.curve[i].toFixed(2)}×` : ""));
+  });
+  hit.addEventListener("mouseleave", () => { cross.setAttribute("opacity", 0); hideTip(); });
+  svg.appendChild(hit);
+  mount.replaceChildren(svg);
+}
+
+function drawAll() {
+  const s1 = css("--s1"), s2 = css("--s2"), s3 = css("--s3");
+
+  barChart(document.getElementById("fig-funnel"), D.funnel.map(f => ({
+    label: f.stage.length > 34 ? f.stage.slice(0, 33) + "…" : f.stage,
+    v: f.total, vLabel: f.total.toLocaleString(), c: s1,
+    tip: `<b>${f.stage}</b><br>${f.total.toLocaleString()} events<br>${f.per_year.toLocaleString()} per year`,
+  })), { rowH: 40, padL: 300 });
+
+  legend("leg-years", [
+    { c: s3, l: "Mechanical (all events)" },
+    { c: s1, l: "Gated (model agrees)" },
+    { c: s2, l: "Vetoed (model disagrees)" },
+  ]);
+  groupedBars(document.getElementById("fig-years"),
+    D.years.map(y => ({ label: y.year, n: y.n, mech: y.mech, gated: y.gated, vetoed: y.vetoed })),
+    [{ key: "mech", label: "Mechanical", c: () => s3 },
+     { key: "gated", label: "Gated", c: () => s1 },
+     { key: "vetoed", label: "Vetoed", c: () => s2 }]);
+
+  legend("leg-liq", [{ c: s1, l: "Gate spread, bp per trade" }]);
+  barChart(document.getElementById("fig-liq"), D.liquidity.map(q => ({
+    label: `${q.q}  $${q.lo}–${q.hi}M`,
+    v: q.spread, vLabel: fmt(q.spread) + "bp", c: s1,
+    tip: `<b>${q.q} · $${q.lo}–${q.hi}M</b><br>n = ${q.n}<br>mechanical ${fmt(q.mech)}bp<br>gated ${fmt(q.gated)}bp<br>spread ${fmt(q.spread)}bp`,
+  })), { rowH: 38, padL: 210 });
+
+  legend("leg-exit", [
+    { c: s2, l: "Take-profit" }, { c: s3, l: "T+1 time stop" }, { c: css("--neg"), l: "Stop-loss" },
+  ]);
+  const RC = { tp: s2, time_stop: s3, sl: css("--neg") };
+  const RL = { tp: "Take-profit", time_stop: "T+1 time stop", sl: "Stop-loss" };
+  barChart(document.getElementById("fig-exit"),
+    ["tp", "time_stop", "sl"].map(r => {
+      const row = D.brackets.by_reason.find(x => x.reason === r);
+      return { label: `${RL[r]}  (${row.n}, ${row.pct}%)`, v: row.mean_bp,
+        vLabel: fmt(row.mean_bp) + "bp", c: RC[r],
+        tip: `<b>${RL[r]}</b><br>${row.n} trades (${row.pct}%)<br>mean ${fmt(row.mean_bp)}bp` };
+    }), { rowH: 44, padL: 250, signed: true });
+
+  const legCurve = [
+    { c: s1, l: "Vol-weighted (production sizing)" },
+    { c: s2, l: "Flat 10% per name" },
+    { c: s3, l: "SPY buy & hold" },
+  ];
+  legend("leg-curve", legCurve.concat([{ c: css("--muted"), l: "1.43× SPY — same terminal wealth" }]));
+  legend("leg-curve2", legCurve);
+  lineChart(document.getElementById("fig-curve"), D.curve_raw,
+    { label: "1.43× SPY", curve: D.curve_raw.stats.vol.iso.SPY.curve });
+  lineChart(document.getElementById("fig-curve2"), D.curve_bracketed, null);
+}
+
+document.getElementById("scale-btn").addEventListener("click", e => {
+  LOG = !LOG;
+  e.target.textContent = LOG ? "log scale" : "linear scale";
+  drawAll();
+});
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", drawAll);
+new MutationObserver(drawAll).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+addEventListener("resize", () => clearTimeout(window._rt) || (window._rt = setTimeout(drawAll, 150)));
+drawAll();
+</script>
