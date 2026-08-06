@@ -598,6 +598,55 @@ def stage_best(args) -> None:
                 "corr": round(float(np.corrcoef(np.asarray(b["ret"]), daily)[0, 1]), 3)}
             stats_out[key]["iso"][sym] = _iso_return_leverage(
                 b["ret"], a["equity"][-1])
+    # THE TWO POLICIES THE PAPER ACTUALLY CONCLUDES FOR.
+    # `picks` is the bracket/horizon search, and every entry in it trades the
+    # GATED book — so the equity chart was showing four variations of the rule
+    # Section 5.4 argues against, and none of the two it argues for. Their
+    # account statistics existed, but only as rows in a mutations table twenty
+    # pages away from the chart a reader actually looks at. They are drawn on
+    # the same axes now, on the same sessions and the same sizing.
+    # stage_best's own panel is filtered to the GATED events and carries only
+    # the columns the bracket search needs, so it cannot express a policy that
+    # trades refusals. Rebuild the full panel here — all events, verdict fields
+    # included — rather than widening the search panel and changing what the
+    # bracket sweep runs on.
+    _meta = scored_events(args.effort, args.all_events, args.panel)[
+        ["symbol", "date", "edate", "year", "move_pct", "run5d", "direction",
+         "confidence", "eps_vs_consensus", "revenue_vs_consensus", "guidance",
+         "quality_flags", "gated"]]
+    p_mut = (pd.read_parquet(pf).drop(columns=["gated", "side"], errors="ignore")
+             .merge(_meta, on=["symbol", "date"], how="inner")
+             .reset_index(drop=True))
+    for key, label, mname in (
+            ("full", "never stand down (with the tape if the verdict agrees, "
+                     "against it otherwise)",
+             "FULL POLICY: with the tape if the verdict agrees, against it "
+             "otherwise"),
+            ("llmdir", "pure LLM direction (tape ignored, neutrals skipped)",
+             "pure LLM direction (gate + fade, tape ignored)")):
+        side = mutation_sides(p_mut).get(mname)
+        if side is None:
+            continue
+        live = side != 0
+        ret_m, _ = resolve(p_mut.assign(side=side), np.ones(len(p_mut), int),
+                           None, None)
+        a = account(p_mut[live].reset_index(drop=True), ret_m[live],
+                    np.ones(int(live.sum()), int), sessions, spy_close)
+        series[key] = [round(v, 5) for v in a["equity"]]
+        names[key] = label
+        stats_out[key] = {k: v for k, v in a.items()
+                          if k not in ("equity", "daily")}
+        daily = np.asarray(a["daily"])
+        stats_out[key]["vs"], stats_out[key]["iso"] = {}, {}
+        for sym, b in bench.items():
+            beta, alpha_d = np.polyfit(np.asarray(b["ret"]), daily, 1)
+            stats_out[key]["vs"][sym] = {
+                "alpha_annual_pct": round(float(alpha_d) * 252 * 100, 2),
+                "beta": round(float(beta), 3),
+                "corr": round(float(np.corrcoef(np.asarray(b["ret"]), daily)[0, 1]), 3)}
+            stats_out[key]["iso"][sym] = _iso_return_leverage(
+                b["ret"], a["equity"][-1])
+
     for sym, b in bench.items():
         if sym == "SPY":
             continue

@@ -683,22 +683,28 @@ same train/test split. Every row is reported, including the failures.</p>
 <h3>5.5 Account simulation and benchmarks</h3>
 
 <p>Per-trade basis points do not answer "what would this have done to an account".
-The simulation below compounds each configuration through the real session calendar
-at a constant 30% average deployed capital, with the per-name weight normalised by
-the average number of concurrent positions — so a longer holding period does not
-silently commit more capital and win by leverage.</p>
+The simulation below compounds each policy through the real session calendar at a
+constant 30% average deployed capital, with the per-name weight normalised by the
+average number of concurrent positions — so a longer holding period does not
+silently commit more capital and win by leverage. The two policies Section 5.4
+arrives at lead the chart; the gated configurations follow, so the cost of
+standing down is visible as a gap between curves rather than as a claim in
+prose.</p>
 
 <div class="fig">
   <div class="legend" id="curve-legend"></div>
   <div id="curve"></div>
   <figcaption><b>Figure 3:</b> Equity curves, log scale, <span id="curve-span"></span>.
-  Dashed series are baselines rather than search results.
+  The top two lines are the never-stand-down and pure-direction policies of
+  Section 5.4; the rest trade only what the gate approves. Grey is SPY.
   <span id="curve-note"></span></figcaption>
 </div>
 
 <div class="scroll"><table id="curve-table">
   <caption><b>Table 11:</b> Account simulation against SPY, QQQ and 3× QQQ</caption>
 </table></div>
+
+<p id="curve-rank"></p>
 
 <p id="iso-para"></p>
 
@@ -1564,12 +1570,19 @@ function svg(w, h, inner, extra = "") {
     `aria-label="Acceptance time histogram: ${b.map((x) => x.band + " " + x.n).join(", ")}"`);
 })();
 
-/* Figure 2 — equity curves */
+/* Figure 3 — equity curves.
+   The two policies Section 5.4 concludes for lead the list. An earlier version
+   drew four variations of the gated book and none of the two the paper
+   recommends, which left the chart arguing quietly against the text. */
 const CURVE_KEYS = [
-  { k: "best", i: 0, dash: "" }, { k: "alt", i: 1, dash: "" },
-  { k: "shipped", i: 2, dash: "7 4" }, { k: "t1plain", i: 3, dash: "2 3" },
-  { k: "spy", i: 4, dash: "" },
+  { k: "full", i: 0, dash: "" }, { k: "llmdir", i: 1, dash: "5 3" },
+  { k: "t1plain", i: 2, dash: "" }, { k: "best", i: 3, dash: "2 3" },
+  { k: "shipped", i: 4, dash: "7 4" },
+  // Only five series colours exist; the benchmark takes the neutral rule
+  // colour so it reads as the baseline rather than as a sixth strategy.
+  { k: "spy", i: null, dash: "" },
 ];
+const CURVE_COL = (s) => s.i === null ? cssv("--muted") : cssv(S[s.i]);
 function drawCurve() {
   if (!C.dates || !C.series) return;
   const keys = CURVE_KEYS.filter((s) => C.series[s.k]);
@@ -1593,7 +1606,7 @@ function drawCurve() {
       <text x="${L - 6}" y="${y(m) + 3}" text-anchor="end" font-size="10" fill="${cssv("--faint")}" font-family="${cssv("--mono")}">${m}×</text>`;
   }
   const lines = keys.map((s) => {
-    const col = cssv(S[s.i]);
+    const col = CURVE_COL(s);
     const d = C.series[s.k].map((v, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ");
     const last = C.series[s.k][N - 1];
     return `<path d="${d}" fill="none" stroke="${col}" stroke-width="2" stroke-dasharray="${s.dash}" stroke-linejoin="round"></path>
@@ -1602,18 +1615,18 @@ function drawCurve() {
   $("curve").innerHTML = svg(W, H, ticks + lines,
     `aria-label="Equity curves, log scale. ${keys.map((s) => (C.labels[s.k] || s.k) + " ends at " + C.series[s.k][N - 1].toFixed(2) + " times capital").join("; ")}"`);
   $("curve-legend").innerHTML = keys.map((s) =>
-    `<span><span class="swatch" style="background:${cssv(S[s.i])}${s.dash ? ";background:repeating-linear-gradient(90deg," + cssv(S[s.i]) + " 0 5px,transparent 5px 8px)" : ""}"></span>${C.labels[s.k] || s.k}</span>`).join("");
+    `<span><span class="swatch" style="background:${CURVE_COL(s)}${s.dash ? ";background:repeating-linear-gradient(90deg," + CURVE_COL(s) + " 0 5px,transparent 5px 8px)" : ""}"></span>${C.labels[s.k] || s.k}</span>`).join("");
   $("curve-span").textContent = (C.span || D.span).join(" – ");
   $("curve-note").textContent = C.note ? C.note.charAt(0).toUpperCase() + C.note.slice(1) + "." : "";
 }
 drawCurve();
 
-const ROWS = ["best", "alt", "t1plain", "shipped", "spy", "qqq", "tqqq"].filter((k) => (C.stats || {})[k]);
+const ROWS = ["full", "llmdir", "best", "alt", "t1plain", "shipped", "spy", "qqq", "tqqq"].filter((k) => (C.stats || {})[k]);
 table($("curve-table"), ["configuration", "trades", "total", "CAGR", "max DD", "Sharpe", "α vs SPY", "β vs SPY", "β vs QQQ"],
   ROWS.map((k) => {
     const s = st(k), vs = s.vs || {};
     const isB = ["spy", "qqq", "tqqq"].includes(k);
-    return { cls: k === "t1plain" ? "hl" : (isB ? "dim" : ""), cells: [
+    return { cls: (k === "full" || k === "llmdir") ? "hl" : (isB ? "dim" : ""), cells: [
       C.labels && C.labels[k] ? C.labels[k] : k.toUpperCase(), isB ? "—" : int(s.taken),
       { v: sgn(s.total_pct, 1) + "%", c: cls(s.total_pct) },
       { v: n1(s.cagr_pct, 2) + "%", c: cls(s.cagr_pct) },
@@ -1622,6 +1635,26 @@ table($("curve-table"), ["configuration", "trades", "total", "CAGR", "max DD", "
       n1(vs.SPY ? vs.SPY.beta : s.beta, 3),
       vs.QQQ ? n1(vs.QQQ.beta, 3) : "—"] };
   }));
+
+/* The top two rows of the table above are separated by 0.01% of CAGR, which
+   invites a reader to rank them. The data cannot: they differ only over the
+   neutral verdicts, and that row is not significant. Saying so here, next to
+   the table, rather than leaving the ranking to be inferred from rounding. */
+(() => {
+  const f = st("full"), l = st("llmdir"), neuA = mut("neutral verdicts, traded against");
+  if (!f.cagr_pct || !l.cagr_pct || !neuA.t1) return;
+  setHTML("curve-rank", `<b>The top two lines should not be ranked against each
+    other.</b> They compound to ${n1(f.cagr_pct, 2)}% and ${n1(l.cagr_pct, 2)}% —
+    a difference of ${n1(Math.abs(f.cagr_pct - l.cagr_pct), 2)} percentage points
+    — and, as Section 5.4 sets out, they are the same policy everywhere except
+    the ${int(neuA.n)} neutral verdicts. Choosing between them is therefore a bet
+    on one number: what neutrals earn when faded, which is
+    ${sgn(neuA.t1.all)}bp at t&nbsp;=&nbsp;${n1(neuA.t1.t, 2)}. That is not
+    significant, so the honest statement is that both beat the gate and neither
+    beats the other. Where they do differ is in what they cost to run: pure
+    direction takes ${int(l.taken)} trades against ${int(f.taken)}, and Section 6
+    shows those extra round trips are not free.`);
+})();
 
 const t1 = st("t1plain"), isoS = (t1.iso || {}).SPY || {}, isoQ = (t1.iso || {}).QQQ || {};
 $("iso-para").innerHTML = `Alpha near ${n1((t1.vs && t1.vs.SPY ? t1.vs.SPY.alpha_annual_pct : 0), 0)}% a year with a beta of
@@ -1637,11 +1670,11 @@ $("iso-para").innerHTML = `Alpha near ${n1((t1.vs && t1.vs.SPY ? t1.vs.SPY.alpha
   ${isoQ.reachable ? n1(isoQ.k, 2) + "×" : "unreachable at any leverage"}.`;
 
 const ISOROWS = [];
-for (const k of ["best", "alt", "t1plain", "shipped"]) {
+for (const k of ["full", "llmdir", "t1plain", "shipped"]) {
   const s = st(k); if (!s.iso) continue;
   for (const sym of ["SPY", "QQQ", "TQQQ"]) {
     const iso = s.iso[sym]; if (!iso) continue;
-    ISOROWS.push({ cls: k === "t1plain" ? "hl" : "", cells: [
+    ISOROWS.push({ cls: (k === "full" || k === "llmdir") ? "hl" : "", cells: [
       (C.labels[k] || k).split(" /")[0] + " vs " + sym,
       iso.reachable ? n1(iso.k, 2) + "×" : `unreachable (best ${n1(iso.best_k, 2)}×)`,
       iso.reachable ? { v: "−" + n1(iso.max_drawdown_pct) + "%", c: "neg" } : { v: "−" + n1(iso.max_drawdown_pct) + "%", c: "neg" },
