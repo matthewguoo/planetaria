@@ -366,9 +366,13 @@ controls built to detect that; Section 5.9 reports the one that settles it.</p>
   <dl class="terms">
     <dt>never stand down</dt><dd>an alternative to the gate that trades
     <em>every</em> event instead of skipping some: with the tape when the model's
-    verdict agrees with it, against the tape when it disagrees. The gate's
-    refusals become trades in the opposite direction rather than no trade at all
-    (Section 5.4).</dd>
+    verdict agrees with it, against the tape when it disagrees or is neutral. The
+    gate's refusals become trades in the opposite direction rather than no trade
+    at all (Section 5.4).</dd>
+    <dt>pure LLM direction</dt><dd>a third rule that ignores the tape entirely and
+    trades whichever way the model called, sitting out only the neutrals. It turns
+    out to be the same thing as never standing down on every event where the model
+    took a side — the two differ only over the neutrals (Section 5.4).</dd>
     <dt>holdout</dt><dd>the years 2016 to mid-2021, which were added to the study
     only after every design decision had already been made on the later years.
     Nothing about the strategy was chosen by looking at them, so performance
@@ -655,6 +659,11 @@ down otherwise. That discards roughly a third of the book — and the discarded 
 returns strongly negative, so a refusal was never an absence of information. The
 table below scores fifteen other ways of spending the same cached verdicts, on the
 same train/test split. Every row is reported, including the failures.</p>
+
+<div class="callout">
+  <span class="label">Three of these rows are quoted throughout the paper</span>
+  <p id="mut-policies"></p>
+</div>
 
 <div class="callout">
   <span class="label">The control that decides it</span>
@@ -1428,6 +1437,36 @@ table($("mut-table"), ["mutation", "trades", "T+1", "2021-23", "2024-26", "t", "
       { v: sgn(m.t1.train), c: cls(m.t1.train) }, { v: sgn(m.t1.test), c: cls(m.t1.test) },
       n1(m.t1.t, 2), { v: sgn(m.t3.all), c: cls(m.t3.all) },
       { v: sgn(m.t3.test), c: cls(m.t3.test) }] })));
+
+/* The table lists these three as separate rows and two of them come out with
+   nearly the same number, which reads as a coincidence unless the relationship
+   is stated. It is not a coincidence: they are the same policy apart from the
+   neutrals. Saying so is the difference between a reader trusting the table
+   and a reader wondering what they are missing. */
+(() => {
+  const gateM = mut("THE GATE"), fullM = mut("FULL POLICY"),
+        llmM = mut("pure LLM direction");
+  const neutralN = (fullM.n || 0) - (llmM.n || 0);
+  setHTML("mut-policies", `<b>The gate</b> trades only where the model's
+    direction agrees with the sign of the tape, and stands down otherwise —
+    ${int(gateM.n)} of ${int(D.paths_n)} events. <b>Never standing down</b>
+    trades all ${int(fullM.n)}: with the tape where the verdict agrees, against
+    it where the verdict disagrees <em>or is neutral</em>. <b>Pure LLM
+    direction</b> ignores the tape and simply trades the verdict, which leaves
+    the ${int(neutralN)} neutral verdicts untraded — ${int(llmM.n)} events.
+    <br><br>
+    The last two are closer than they look. For any verdict that takes a side,
+    "with the tape when you agree and against it when you disagree" and "just
+    trade the verdict" are the <em>same instruction</em>: if the verdict agrees
+    with the tape then the tape's direction <em>is</em> the verdict's, and if it
+    disagrees then the opposite of the tape is also the verdict's. The two
+    policies are therefore identical on all ${int(llmM.n)} directional events and
+    differ only on the ${int(neutralN)} neutrals, where never-standing-down
+    fades the tape and pure direction sits out. That single difference is the
+    whole gap between their rows, which is why the argument about neutrals above
+    is not a footnote — it is the only thing separating the two best policies in
+    the table.`);
+})();
 
 const neu = mut("neutral verdicts, traded against"), neuW = mut("neutral verdicts, traded with");
 const guid = mut("gate AND guidance"), eps = mut("gate AND eps agrees");
