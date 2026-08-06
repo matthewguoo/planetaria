@@ -132,7 +132,17 @@ def run(win_start: date, win_end: date, limit: int | None,
             if ah.empty:
                 continue
             react_px = float(ah["c"].iloc[-1])
-            nxt = bars[bars["ts"].dt.date > d]
+            # The NEXT session only. `bars` spans four calendar days, so
+            # filtering on "date > d" and taking iloc[-1] silently exited on
+            # the LAST session in the window — T+4 for a Monday reporter,
+            # T+2 for a Friday one (found 2026-08-06: PLTR 2026-02-02 exited
+            # at 134.68 on 02-06 instead of 157.96 on 02-03). Every result
+            # built on a panel cached before that date measures a 2-4 session
+            # hold, not the T+1 the docs claim. Rebuild affected panels.
+            later = sorted({t for t in bars["ts"].dt.date if t > d})
+            if not later:
+                continue
+            nxt = bars[bars["ts"].dt.date == later[0]]
             nxt_rth = nxt[(nxt["ts"].dt.hour * 60 + nxt["ts"].dt.minute)
                           .between(570, 955)]
             if nxt_rth.empty:
