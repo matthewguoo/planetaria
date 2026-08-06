@@ -680,8 +680,21 @@ applied.</p>
 
 <p id="year-para"></p>
 
+<div id="lf-block">
+<h4>The same years, split by when the release arrived</h4>
+
+<p id="lf-intro"></p>
+
+<div class="scroll"><table id="lf-table">
+  <caption><b>Table 10:</b> Gated return by year, split on whether a fixed
+  <code>[16:00, 16:20]</code> window could have measured the event</caption>
+</table></div>
+
+<p id="lf-para"></p>
+</div>
+
 <div class="scroll"><table id="liq-table">
-  <caption><b>Table 10:</b> By prior-session dollar-volume quintile</caption>
+  <caption><b>Table 11:</b> By prior-session dollar-volume quintile</caption>
 </table></div>
 
 <h3>5.3 The stop-loss is the problem</h3>
@@ -689,7 +702,7 @@ applied.</p>
 <p id="bracket-para"></p>
 
 <div class="scroll"><table id="bracket-table">
-  <caption><b>Table 11:</b> Bracket surface, gated trades, T+1 time stop</caption>
+  <caption><b>Table 12:</b> Bracket surface, gated trades, T+1 time stop</caption>
 </table></div>
 
 <h3>5.4 Gate mutations</h3>
@@ -710,7 +723,7 @@ same train/test split. Every row is reported, including the failures.</p>
 </div>
 
 <div class="scroll"><table id="mut-table">
-  <caption><b>Table 12:</b> Gate mutations. bp per trade; train 2021-23, test 2024-26</caption>
+  <caption><b>Table 13:</b> Gate mutations. bp per trade; train 2021-23, test 2024-26</caption>
 </table></div>
 
 <p id="mut-para"></p>
@@ -732,13 +745,13 @@ silently commit more capital and win by leverage.</p>
 </div>
 
 <div class="scroll"><table id="curve-table">
-  <caption><b>Table 13:</b> Account simulation against SPY, QQQ and 3× QQQ</caption>
+  <caption><b>Table 14:</b> Account simulation against SPY, QQQ and 3× QQQ</caption>
 </table></div>
 
 <p id="iso-para"></p>
 
 <div class="scroll"><table id="iso-table">
-  <caption><b>Table 14:</b> Iso-return leverage: the cheapest index exposure that ends where the strategy ends</caption>
+  <caption><b>Table 15:</b> Iso-return leverage: the cheapest index exposure that ends where the strategy ends</caption>
 </table></div>
 
 <h3 id="model-h3">5.6 Which model, and how much reasoning?</h3>
@@ -754,7 +767,7 @@ silently commit more capital and win by leverage.</p>
 </div>
 
 <div class="scroll"><table id="model-table">
-  <caption><b>Table 15:</b> Model and effort, identical events and identical entries</caption>
+  <caption><b>Table 16:</b> Model and effort, identical events and identical entries</caption>
 </table></div>
 
 <p id="model-para"></p>
@@ -768,7 +781,7 @@ recalling what happened next? Two estimates below bound it from the observed dat
 and two arms measure it directly by removing an input at a time.</p>
 
 <div class="scroll"><table id="contam-table">
-  <caption><b>Table 16:</b> The gate either side of the model's knowledge boundary</caption>
+  <caption><b>Table 17:</b> The gate either side of the model's knowledge boundary</caption>
 </table></div>
 
 <p id="contam-para"></p>
@@ -779,7 +792,7 @@ and two arms measure it directly by removing an input at a time.</p>
 <p id="arms-intro"></p>
 
 <div class="scroll"><table id="arms-table">
-  <caption><b>Table 17:</b> The same gate, the same events, one input removed at a time</caption>
+  <caption><b>Table 18:</b> The same gate, the same events, one input removed at a time</caption>
 </table></div>
 
 <div class="fig">
@@ -792,7 +805,7 @@ and two arms measure it directly by removing an input at a time.</p>
 <p id="blind-para"></p>
 
 <div class="scroll"><table id="blind-table">
-  <caption><b>Table 18:</b> Identity ablation: what the model thought it was reading</caption>
+  <caption><b>Table 19:</b> Identity ablation: what the model thought it was reading</caption>
 </table></div>
 
 <p id="notext-para"></p>
@@ -811,7 +824,7 @@ and two arms measure it directly by removing an input at a time.</p>
 </div>
 
 <div class="scroll"><table id="holdout-table">
-  <caption><b>Table 19:</b> Key mutations, holdout years against the years the study was designed on</caption>
+  <caption><b>Table 20:</b> Key mutations, holdout years against the years the study was designed on</caption>
 </table></div>
 
 <p id="decade-para"></p>
@@ -837,7 +850,7 @@ the model could have memorised it, and whatever difference remains is the
 memorisation effect.</p>
 
 <div class="scroll"><table id="xm-cutoff-table">
-  <caption><b>Table 20:</b> Training-data cutoffs, and how they split this window</caption>
+  <caption><b>Table 21:</b> Training-data cutoffs, and how they split this window</caption>
 </table></div>
 
 <p id="xm-design"></p>
@@ -852,7 +865,7 @@ memorisation effect.</p>
 </div>
 
 <div class="scroll"><table id="xm-cell-table">
-  <caption><b>Table 21:</b> Per-trade return by model and corpus status, identical events</caption>
+  <caption><b>Table 22:</b> Per-trade return by model and corpus status, identical events</caption>
 </table></div>
 
 <h4>The estimate</h4>
@@ -869,7 +882,7 @@ cutoff. Standard errors cluster by event, because four verdicts on one release a
 not four independent observations.</p>
 
 <div class="scroll"><table id="xm-did-table">
-  <caption><b>Table 22:</b> Memorisation effect, naive and with event and model intercepts</caption>
+  <caption><b>Table 23:</b> Memorisation effect, naive and with event and model intercepts</caption>
 </table></div>
 
 <p id="xm-naive"></p>
@@ -895,7 +908,7 @@ not four independent observations.</p>
 <p id="xm-mp-intro"></p>
 
 <div class="scroll"><table id="xm-mp-table">
-  <caption><b>Table 23:</b> The no-text memory probe, by model and corpus status</caption>
+  <caption><b>Table 24:</b> The no-text memory probe, by model and corpus status</caption>
 </table></div>
 
 <p id="xm-mp-para"></p>
@@ -917,7 +930,7 @@ event enters and again at the minute it exits. Nothing here is modelled; the quo
 spread is what the book actually showed.</p>
 
 <div class="scroll"><table id="fc-measure-table">
-  <caption><b>Table 24:</b> Measured quoted spreads, in basis points of the midpoint</caption>
+  <caption><b>Table 25:</b> Measured quoted spreads, in basis points of the midpoint</caption>
 </table></div>
 
 <p id="fc-measure-para"></p>
@@ -943,7 +956,7 @@ spread is what the book actually showed.</p>
 </div>
 
 <div class="scroll"><table id="fc-agg-table">
-  <caption><b>Table 25:</b> The edge charged each event its own measured spread</caption>
+  <caption><b>Table 26:</b> The edge charged each event its own measured spread</caption>
 </table></div>
 
 <h3>6.2 Randomised fills</h3>
@@ -957,7 +970,7 @@ deliberate: earnings-night spreads are violently right-skewed, and a Gaussian wo
 quietly delete the tail that does the damage.</p>
 
 <div class="scroll"><table id="fc-alpha-table">
-  <caption><b>Table 26:</b> Account simulation under each cost assumption, against SPY</caption>
+  <caption><b>Table 27:</b> Account simulation under each cost assumption, against SPY</caption>
 </table></div>
 
 <p id="fc-mc-para"></p>
@@ -973,7 +986,7 @@ leaving it implicit in a footnote, for the gate and for the never-stand-down
 policy of Section 5.4, both charged their own measured spreads.</p>
 
 <div class="scroll"><table id="fc-dep-table">
-  <caption><b>Table 27:</b> The same trades at different deployment, charged their measured spreads</caption>
+  <caption><b>Table 28:</b> The same trades at different deployment, charged their measured spreads</caption>
 </table></div>
 
 <p id="fc-dep-para"></p>
@@ -2280,6 +2293,45 @@ $("pg-prev").addEventListener("click", () => { page--; render(); window.scrollTo
 $("pg-next").addEventListener("click", () => { page++; render(); window.scrollTo({ top: $("trade-table").offsetTop - 80 }); });
 applyFilters();
 
+/* --------------------------------- 5.2 the two populations inside a year */
+const LF = D.late_filers || {};
+if (!LF.rows) {
+  absent("lf-block", "not computed", "The filing-time split");
+} else {
+  const y26 = LF.rows.find((r) => r.year === "2026") || {};
+  const y25 = LF.rows.find((r) => r.year === "2025") || {};
+  setHTML("lf-intro", `The rows above average over two populations that do not
+    behave alike, and until this revision the difference was invisible. A
+    company that files at 16:35 can only be measured on a panel keyed to its own
+    acceptance time; the fixed <code>[16:00, 16:20]</code> window every earlier
+    revision of this study used could not see it at all.
+    <b>${n1(LF.late_share_pct, 0)}% of releases are in that group.</b> Splitting
+    on it is the difference between "this year was worse" and "this year was
+    measured differently", and a reader comparing these figures against an
+    earlier draft is owed that distinction.`);
+
+  table($("lf-table"),
+    ["year", "events", "after 16:20", "gated, filed by 16:20", "gated, filed after 16:20"],
+    LF.rows.map((r) => ({ cls: r.year === "2026" ? "hl" : "", cells: [
+      r.year, int(r.n), n1(r.late_pct, 0) + "%",
+      r.early_bp === null ? "—" : { v: sgn(r.early_bp) + "bp", c: cls(r.early_bp) },
+      r.late_bp === null ? "—" : { v: sgn(r.late_bp) + "bp", c: cls(r.late_bp) }] })));
+
+  setHTML("lf-para", `Across the decade the two halves are both positive —
+    ${sgn(LF.early_bp)}bp on ${int(LF.early_n)} early-filed trades against
+    ${sgn(LF.late_bp)}bp on ${int(LF.late_n)} late-filed ones — so the fixed
+    window was not merely narrower, it was narrower <em>and</em> flattering.
+    <b>2026 is where the two diverge hardest.</b> Its early-filed trades return
+    ${sgn(y26.early_bp)}bp and its late-filed ones ${sgn(y26.late_bp)}bp, against
+    ${sgn(y25.early_bp)}bp and ${sgn(y25.late_bp)}bp the year before. Two things
+    follow, and they pull in opposite directions. The negative headline for 2026
+    is not an artefact of the repair — the year is weak on the early-filing half
+    too, which is the half every earlier revision measured. But it rests on
+    ${int(y26.late_n)} late-filed trades in a partial year, and a sample that
+    size cannot separate a regime from a run of bad luck. The honest reading is
+    that 2026 is weak on every basis available and conclusive on none of them.`);
+}
+
 /* ------------------------------------- 5.9 out-of-training, and 6 fill costs */
 
 /* A section whose data has not been computed says so, in place, instead of
@@ -2327,7 +2379,7 @@ function drawXModel() {
   setText("xm-figcap", `Same ${int(XM.n_events)} releases throughout; only the `
     + `reader changes. Read this figure with care — the in-corpus cells are `
     + `also the EARLIER cells, so the gap between the two colours is mostly `
-    + `calendar, not memory. Table 22 removes that; this figure is here to show `
+    + `calendar, not memory. Table 23 removes that; this figure is here to show `
     + `what the raw data looks like before it is removed.`);
 }
 
@@ -2357,7 +2409,7 @@ if (XM.unavailable || !XM.cells) {
   const AI = XM.accuracy_implied_bp || {};
   const didRows = [];
   // The naive row goes FIRST and is marked as wrong, because it is the number
-  // a reader would compute themselves from Table 21 and it is badly misleading.
+  // a reader would compute themselves from Table 22 and it is badly misleading.
   if (NV.diff_bp !== undefined) {
     didRows.push({ cls: "dim", cells: [
       "per-trade return, <b>no event effects</b>",

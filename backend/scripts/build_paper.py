@@ -46,7 +46,7 @@ KEEP = ("model", "effort", "universe_n", "scored_n", "paths_n", "gated_n",
         # out-of-training test. Listed here at the same time as the keys were
         # added to build_report_data — that ordering is the whole discipline,
         # because the failure mode is silent.
-        "spreads", "xmodel")
+        "spreads", "xmodel", "late_filers")
 
 TRADE_COLS = ["date", "sym", "dir", "conf", "guid", "move", "run5d", "dvM",
               "gated", "why", "t1", "t3", "shipped", "exit", "summary"]

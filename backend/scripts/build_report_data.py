@@ -231,6 +231,40 @@ SIX_MONTHS = "2026-02-01"
 CORPUS_CUT = "2026-05"      # Opus 5's stated knowledge boundary
 
 
+def late_filers(p: pd.DataFrame, ret: np.ndarray, gated: np.ndarray) -> dict:
+    """Split every year by whether a fixed [16:00, 16:20] window could see it.
+
+    WHY THIS EXISTS. The per-year table mixes two populations that behave
+    differently, and until this was broken out the mixing was invisible. A
+    company that files at 16:35 is measurable only on the acceptance-relative
+    panel; the fixed-window panel every earlier revision used could not see it
+    at all. Roughly a quarter of releases are in that group.
+
+    That matters for reading 2026 in particular. Its headline is negative, and
+    a reader who remembers the earlier revisions being strongly positive is
+    owed the reason: the earlier numbers were computed on the early-filing
+    half only. This table gives both halves on the same basis, so the question
+    "is 2026 worse, or measured differently?" has an answer on the page rather
+    than in a footnote.
+    """
+    late = (p["acc_min"].to_numpy() > 16 * 60 + 20)
+    rows = []
+    for year in sorted(p["year"].unique()):
+        y = (p["year"] == year).to_numpy()
+        cell = {"year": year, "n": int(y.sum()),
+                "late_pct": _f(late[y].mean() * 100)}
+        for tag, sel in (("early", y & ~late & gated), ("late", y & late & gated)):
+            cell[f"{tag}_n"] = int(sel.sum())
+            cell[f"{tag}_bp"] = _f(ret[sel].mean() * 1e4) if sel.sum() >= 8 else None
+        rows.append(cell)
+    return {"threshold_et": "16:20", "late_share_pct": _f(late.mean() * 100),
+            "rows": rows,
+            "early_bp": _f(ret[~late & gated].mean() * 1e4),
+            "late_bp": _f(ret[late & gated].mean() * 1e4),
+            "early_n": int((~late & gated).sum()),
+            "late_n": int((late & gated).sum())}
+
+
 def contamination_estimate(panel: str = "v1") -> dict:
     """How much of the edge could be memorisation? Two estimators, both with
     their uncertainty attached, because the honest answer here is an interval
@@ -649,6 +683,12 @@ def main() -> None:
             "gated": _f(r1[yg].mean() * 1e4) if yg.any() else None,
             "vetoed": _f(r1[yv].mean() * 1e4) if yv.any() else None,
             "spread": _f((r1[yg].mean() - r1[yv].mean()) * 1e4)})
+
+    # The same years, split by whether the pre-revision fixed window could see
+    # the event at all. Without this the per-year row is an average over two
+    # populations and a reader cannot tell a bad year from a differently
+    # measured one.
+    data["late_filers"] = late_filers(p, r1, g)
 
     q = pd.qcut(p["dv"] / 1e6, 5, labels=["Q1", "Q2", "Q3", "Q4", "Q5"])
     data["liquidity"] = []
