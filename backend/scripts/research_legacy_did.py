@@ -87,9 +87,20 @@ REGIMES = (("R1", "both in corpus", "2000-01-01", R1_HI),
 # disagree, R1-local is the one to believe.
 R1_LOCAL_LO = "2024-08-01"
 
+# NOT `gated_bp`. Conditional on a model agreeing with the tape, the gate's
+# return is sign(move) * fwd -- a function of the TAPE alone, with the model's
+# verdict appearing nowhere in it. So on every event where both models agree
+# with the tape, both are handed the identical number and the within-event
+# difference is mechanically zero. The first run printed 0.0 +- 0.0 in all
+# four regimes, which is what an outcome that cannot vary looks like.
+#
+# The models differ in WHICH events they gate, not in what a gated event
+# pays. `gate_pnl` therefore scores the strategy per EVENT, crediting zero
+# when a model declines to trade -- so declining to trade on a loser is a
+# win, and coverage and selectivity both enter the outcome.
 OUTCOMES = (("signed_bp", "following the model's own direction, bp"),
             ("correct", "directional accuracy, share"),
-            ("gated_bp", "the gate (verdict agrees with tape), bp"))
+            ("gate_pnl", "the gate, per event (0 when it stands down), bp"))
 
 
 def _regime(dates: pd.Series) -> pd.Series:
@@ -116,6 +127,10 @@ def paired(effort: str = "medium") -> pd.DataFrame:
     a = p[p["model"] == STUDY].set_index(keys)
     b = p[p["model"] == LEGACY].set_index(keys)
     m = a.join(b, how="inner", lsuffix="_o5", rsuffix="_h45")
+    # Standing down earns zero, it does not earn "missing" — see OUTCOMES.
+    for suf in ("_o5", "_h45"):
+        m[f"gate_pnl{suf}"] = np.where(m[f"agrees{suf}"],
+                                       m[f"gated_bp{suf}"], 0.0)
     for col, _ in OUTCOMES:
         m[f"d_{col}"] = m[f"{col}_o5"] - m[f"{col}_h45"]
     m = m.reset_index()
@@ -167,16 +182,27 @@ def skill_check(m: pd.DataFrame) -> dict:
 
 
 def _contrast(a: np.ndarray, b: np.ndarray) -> dict:
-    """mean(a) - mean(b), bootstrapped. Empty when either side is too thin."""
+    """mean(a) - mean(b), bootstrapped. Empty when either side is too thin.
+
+    DEGENERATE flags a sample with no variance at all. A bootstrap resamples
+    such a sample into itself every time, so the draw distribution collapses
+    onto a point, the interval shrinks to nothing, and a tiny p falls out of
+    a comparison that in fact rests on almost no information. The first run
+    produced exactly that: the both-out placebo on accuracy had n=14, zero
+    variance, and a "significant" p=0.012 that meant nothing whatever.
+    """
     ma, _, na = _mean_se(a)
     mb, _, nb = _mean_se(b)
+    fa = np.asarray(a, float)[np.isfinite(a)]
+    fb = np.asarray(b, float)[np.isfinite(b)]
+    degenerate = bool((len(fa) and fa.std() == 0) or (len(fb) and fb.std() == 0))
     if na < 2 or nb < 2:
         nan = float("nan")
         return {"estimate": nan, "lo90": nan, "hi90": nan, "p": nan,
-                "n_treat": na, "n_ctrl": nb}
+                "n_treat": na, "n_ctrl": nb, "degenerate": degenerate}
     lo, hi, p = _boot_diff(a, b)
     return {"estimate": ma - mb, "lo90": lo, "hi90": hi, "p": p,
-            "n_treat": na, "n_ctrl": nb}
+            "n_treat": na, "n_ctrl": nb, "degenerate": degenerate}
 
 
 def did(m: pd.DataFrame, col: str) -> dict:
@@ -283,9 +309,11 @@ def report(effort: str = "medium") -> None:
                          ("  same, vs local control   ", "did_local"),
                          ("PLACEBO       R3 - R1      ", "placebo")):
             d = o[key]
+            warn = "  [DEGENERATE - zero variance, p is meaningless]" \
+                if d.get("degenerate") else ""
             print(f"   {lab} {_fmt(d['estimate'], dp):>9}  "
                   f"90% CI [{_fmt(d['lo90'], dp)}, {_fmt(d['hi90'], dp)}]  "
-                  f"p={_fmt(d['p'], 3)}")
+                  f"p={_fmt(d['p'], 3)}{warn}")
 
     es = r["event_study"]
     print("\n-- the gap quarter by quarter (does it STEP at the cutoff?) ------")
