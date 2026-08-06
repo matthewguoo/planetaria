@@ -53,7 +53,6 @@ from research_llm_contamination import (  # noqa: E402
     ET,
     GATE,
     MIN_DV,
-    OUT,
     SEC_UA,
     TEXTS,
     TOP_PER_DAY,

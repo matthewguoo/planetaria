@@ -29,12 +29,28 @@ type Curve = {
 };
 
 /** Fixed order, fixed hues — a series never changes colour because another
- * one appeared or was filtered out. */
+ * one appeared or was filtered out.
+ *
+ * These are NOT the bb terminal tokens, and that is deliberate. The previous
+ * trio was bb-amber / bb-profit / bb-loss, which fails the dataviz palette
+ * validator: #FFB000 against #00C853 is protanope ΔE 2.9 (OKLab x100, floor
+ * 6, target 8) — an amber line and a green line are the same line to a
+ * red-blind reader. Adding a fifth series made it worse. These five are the
+ * validated dark-mode categorical steps, in the published order, and clear
+ * every gate on the #111111 panel: worst adjacent CVD ΔE 8.4, worst
+ * normal-vision ΔE 19.3, all >= 3:1 contrast.
+ *
+ *   node scripts/validate_palette.js \
+ *     "#3987e5,#d95926,#199e70,#c98500,#d55181" --mode dark --surface "#111111"
+ *
+ * The two baselines are dashed as well as hued: identity should not rest on
+ * colour alone, and "reference, not result" is exactly what a dash says. */
 const SERIES = [
-  { key: "best", color: "#FFB000" },
-  { key: "alt", color: "#00C853" },
-  { key: "shipped", color: "#FF1744" },
-  { key: "spy", color: "#2196F3" },
+  { key: "best", color: "#3987e5", dash: "" },
+  { key: "alt", color: "#d95926", dash: "" },
+  { key: "shipped", color: "#199e70", dash: "6 4" },
+  { key: "t1plain", color: "#c98500", dash: "2 3" },
+  { key: "spy", color: "#d55181", dash: "" },
 ] as const;
 
 export default function BenchmarkChart() {
@@ -116,16 +132,20 @@ export default function BenchmarkChart() {
           <line key={t.label} x1={t.x} x2={t.x} y1="0" y2={geom.H} stroke="#333" strokeWidth="1" />
         ))}
         <line x1="0" x2={geom.W} y1={geom.baseY} y2={geom.baseY} stroke="#555" strokeDasharray="4 6" />
-        {geom.paths.map((d, i) => (
-          <path
-            key={geom.keys[i]}
-            d={d}
-            fill="none"
-            stroke={SERIES.find((s) => s.key === geom.keys[i])!.color}
-            strokeWidth="1.6"
-            vectorEffect="non-scaling-stroke"
-          />
-        ))}
+        {geom.paths.map((d, i) => {
+          const s = SERIES.find((x) => x.key === geom.keys[i])!;
+          return (
+            <path
+              key={s.key}
+              d={d}
+              fill="none"
+              stroke={s.color}
+              strokeWidth="2"
+              strokeDasharray={s.dash || undefined}
+              vectorEffect="non-scaling-stroke"
+            />
+          );
+        })}
       </svg>
       <div className="flex justify-between px-3 text-[9px] text-bb-muted">
         {geom.ticks.map((t) => (
@@ -150,7 +170,19 @@ export default function BenchmarkChart() {
             return (
               <tr key={s.key} className="border-t border-bb-border/40">
                 <td className="px-2 py-0.5">
-                  <span className="mr-1.5 inline-block h-2 w-3 align-middle" style={{ background: s.color }} />
+                  {/* The swatch repeats the dash so the legend and the line
+                      agree — a solid chip next to a dashed line is a lie. */}
+                  <svg className="mr-1.5 inline-block align-middle" width="14" height="8" aria-hidden>
+                    <line
+                      x1="0"
+                      y1="4"
+                      x2="14"
+                      y2="4"
+                      stroke={s.color}
+                      strokeWidth="2"
+                      strokeDasharray={s.dash || undefined}
+                    />
+                  </svg>
                   <span className="text-white">{data.labels?.[s.key] ?? s.key}</span>
                 </td>
                 <td className="px-2 py-0.5 text-right text-white">{fmt(st.total_pct)}</td>

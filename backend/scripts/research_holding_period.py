@@ -1,6 +1,13 @@
-"""How long should an LLM-gated earnings-reaction trade be held?
+"""How long should an LLM-gated earnings-reaction trade be held, and what
+should the gate actually do with a verdict?
 
-Three jobs, in order.
+Four jobs, in order.
+
+0. FILTER THE MIS-TIMED EVENTS. scored_events() drops the 227 of 1,552 whose
+   8-K was accepted outside [16:00, 16:20] ET — 75 are not after-close
+   releases at all and 152 were not public at the price the study enters at.
+   Cause and evidence in research_llm_contamination.timing_ok(); found by
+   verify_no_lookahead.py. `--all-events` restores the old behaviour.
 
 1. CORRECT THE EXIT. Every panel cached before 2026-08-06 selected its exit
    with `bars[date > d]` and `iloc[-1]` over a four-calendar-day fetch, so it
@@ -26,6 +33,14 @@ Three jobs, in order.
    Each rule is scored on 2021-23 and 2024-26 separately. A rule that only
    works on the half it was designed against is a curve fit.
 
+4. MUTATE THE GATE. The shipped rule trades the tape when the verdict agrees
+   and stands down otherwise, which throws the disagreements away — and the
+   vetoed bucket returns -257bp, so a confident refusal is a signal, not an
+   absence of one. `mutations` scores fifteen ways of spending the same
+   verdicts, including the one that decides the question: fading EVERY event
+   with no model at all. That control loses 80bp, so the fade is the model
+   and not mean reversion.
+
 Caching: ONE Alpaca pass stores, per event, the per-session closes and the
 first-touch minute for every excursion level across the whole window. After
 that every horizon, every bracket and every conditional rule resolves
@@ -33,6 +48,9 @@ offline. No LLM calls — the cached verdicts are reused untouched.
 
 Run: .venv/Scripts/python.exe scripts/research_holding_period.py paths
      .venv/Scripts/python.exe scripts/research_holding_period.py sweep
+     .venv/Scripts/python.exe scripts/research_holding_period.py best
+     .venv/Scripts/python.exe scripts/research_holding_period.py mutations
+     .venv/Scripts/python.exe scripts/research_holding_period.py trades
 """
 
 from __future__ import annotations
@@ -57,6 +75,7 @@ from research_llm_contamination import (  # noqa: E402
     _gate,
     _load_results,
     load_universe,
+    timing_ok,
 )
 
 PATHS = CACHE / "event_paths_multi.parquet"
@@ -67,9 +86,16 @@ MAX_SESSIONS = 5
 FETCH_DAYS = 11          # calendar days: enough for 5 sessions over a holiday
 
 
-def scored_events(effort: str) -> pd.DataFrame:
+def scored_events(effort: str, all_events: bool = False) -> pd.DataFrame:
     """Every event the study scored — gated AND vetoed. The vetoed leg is
-    needed to restate the gate spread on a corrected exit."""
+    needed to restate the gate spread on a corrected exit.
+
+    By default the 227 events whose 8-K was accepted outside [16:00, 16:20]
+    ET are dropped: 75 are not after-close releases at all and 152 were not
+    public at the price the study enters at. See timing_ok() for how that was
+    found and what it does not repair. `--all-events` restores the old
+    1,552-event behaviour for side-by-side comparison.
+    """
     universe = load_universe().rename(columns={"date": "edate"})
     universe["date"] = universe["edate"].astype(str)
     res = _load_results()
@@ -77,6 +103,12 @@ def scored_events(effort: str) -> pd.DataFrame:
     m = res.merge(universe, on=["symbol", "date"], how="inner")
     m["side"] = np.sign(m["move_pct"]).astype(int)
     m["gated"] = _gate(m)
+    m["timing_ok"] = timing_ok(m)
+    if not all_events:
+        dropped = int((~m["timing_ok"]).sum())
+        m = m[m["timing_ok"]].reset_index(drop=True)
+        print(f"acceptance-time filter: dropped {dropped} events accepted "
+              f"outside [16:00, 16:20] ET, {len(m)} remain")
     return m
 
 
@@ -87,7 +119,7 @@ def stage_paths(args) -> None:
 
     from app.config import get_settings
 
-    m = scored_events(args.effort)
+    m = scored_events(args.effort, args.all_events)
     prior, have = pd.DataFrame(), set()
     if PATHS.exists():
         prior = pd.read_parquet(PATHS)
@@ -213,7 +245,7 @@ def stage_sweep(args) -> None:
     if not PATHS.exists():
         raise SystemExit("run the `paths` stage first")
     paths = pd.read_parquet(PATHS)
-    meta = scored_events(args.effort)[
+    meta = scored_events(args.effort, args.all_events)[
         ["symbol", "date", "year", "move_pct", "run5d", "confidence",
          "guidance", "quality_flags", "gated"]]
     p = paths.drop(columns=["gated"]).merge(meta, on=["symbol", "date"], how="inner")
@@ -385,7 +417,7 @@ def stage_best(args) -> None:
     if not PATHS.exists():
         raise SystemExit("run the `paths` stage first")
     paths = pd.read_parquet(PATHS)
-    meta = scored_events(args.effort)[
+    meta = scored_events(args.effort, args.all_events)[
         ["symbol", "date", "edate", "year", "move_pct", "run5d", "confidence",
          "guidance", "quality_flags", "gated"]]
     p = paths.drop(columns=["gated"]).merge(meta, on=["symbol", "date"], how="inner")
@@ -451,18 +483,34 @@ def stage_best(args) -> None:
         print(f"{'T+1 / 5% / 2x (SHIPPED SHAPE)':32s}{r['stop']:>7}{r['target']:>8}"
               f"{r['train']:>+9.1f}{r['test']:>+9.1f}{r['all']:>+9.1f}{r['win']:>7.1f}")
 
-    print("\n=== account simulation, 10% notional per name, 100% gross cap ===")
+    # The four series the paper compares. `best` and `alt` are whatever the
+    # search chose; `shipped` and `t1plain` are FIXED and drawn whether or
+    # not they place well — the point of a baseline is that it appears when
+    # it loses. The old code took df.head(3) + shipped and let a shipped
+    # config that landed in the top 3 overwrite its own row.
+    def config(horizon, stop, target):
+        hit = df[(df["horizon"] == horizon) & (df["stop"] == stop)
+                 & (df["target"] == target)]
+        return hit.iloc[0] if len(hit) else None
+
+    picks: list[tuple[str, pd.Series]] = [("best", df.iloc[0]),
+                                          ("alt", df.iloc[1])]
+    for key, cfg in (("shipped", config("T+1", "5%", "10%")),
+                     ("t1plain", config("T+1", "none", "none"))):
+        if cfg is not None:
+            picks.append((key, cfg))
+
+    print("\n=== account simulation, 30% average deployed capital ===")
     print(f"{'config':44s}{'total':>9}{'CAGR':>8}{'maxDD':>8}{'Sharpe':>8}"
           f"{'alpha':>8}{'beta':>7}{'conc':>6}{'wt%':>6}")
     print("-" * 104)
-    picks = list(df.head(3).index) + list(shipped.index[:1])
     results = {}
-    for i in picks:
-        r = df.loc[i]
+    for key, r in picks:
         acct = account(p, r["_ret"], r["_h"], sessions, spy_close)
         label = f"{r['horizon']} / {r['stop']} / {r['target']}"
-        results[label] = (r, acct)
-        print(f"{label:44s}{acct['total_pct']:>+8.1f}%{acct['cagr_pct']:>7.2f}%"
+        results[key] = (r, acct)
+        print(f"{label:38s}{key:>6}{acct['total_pct']:>+8.1f}%"
+              f"{acct['cagr_pct']:>7.2f}%"
               f"{acct['max_dd_pct']:>7.1f}%{acct['sharpe']:>8.2f}"
               f"{acct['alpha_pct']:>+7.2f}%{acct['beta']:>7.3f}"
               f"{acct['avg_concurrent']:>6.1f}{acct['weight_pct']:>6.1f}")
@@ -479,12 +527,8 @@ def stage_best(args) -> None:
     spy_curve = (spy_close / spy_close[0]).tolist()
     series, stats_out = {"spy": [round(v, 5) for v in spy_curve]}, {}
     names = {}
-    for rank, i in enumerate(picks):
-        r = df.loc[i]
-        key = "best" if rank == 0 else ("alt" if rank < 3 else "shipped")
-        if key in series:
-            continue
-        _, a = results[f"{r['horizon']} / {r['stop']} / {r['target']}"]
+    for key, r in picks:
+        _, a = results[key]
         series[key] = [round(v, 5) for v in a["equity"]]
         names[key] = f"{r['horizon']} / stop {r['stop']} / target {r['target']}"
         stats_out[key] = {k: v for k, v in a.items() if k != "equity"}
@@ -536,6 +580,277 @@ def stage_best(args) -> None:
     print(f"\nwrote {DOC / f'best_config_{stamp}.md'}")
 
 
+# --------------------------------------------------------------- mutations
+
+def _verdict_side(direction: str) -> int:
+    return {"bullish": 1, "bearish": -1}.get(str(direction), 0)
+
+
+def _field_side(value: str, kind: str) -> int:
+    """The direction a schema field points, or 0 for 'no opinion'.
+
+    `inline`, `not_stated`, `maintained` and `none_given` are genuinely
+    silent, not neutral-leaning: requiring agreement with a silent field
+    would veto on absence of evidence.
+    """
+    if kind == "guidance":
+        return {"raised": 1, "lowered": -1}.get(str(value), 0)
+    return {"beat": 1, "miss": -1}.get(str(value), 0)
+
+
+def mutation_sides(p: pd.DataFrame) -> dict[str, np.ndarray]:
+    """Per-event side vectors, +1 long / -1 short / 0 stand down.
+
+    The live gate is one point in this space: trade the tape when the verdict
+    agrees, otherwise nothing. That throws away the disagreements, and the
+    study says the vetoed bucket returns -196 to -283bp — a confident
+    disagreement is a signal, not an absence of one. These mutations spend
+    that information different ways so the table can say which part of the
+    edge is the model, which is the tape, and which is the refusal.
+    """
+    tape = np.sign(p["move_pct"].to_numpy()).astype(int)
+    llm = np.array([_verdict_side(d) for d in p["direction"]])
+    conf = p["confidence"].to_numpy()
+    flags = np.array([bool(x is not None and len(x)) for x in p["quality_flags"]])
+    agree = (llm != 0) & (llm == tape)          # the shipped gate
+    disagree = (llm != 0) & (llm != tape)       # the vetoed-with-a-view bucket
+    neutral = llm == 0
+    eps = np.array([_field_side(v, "eps") for v in p["eps_vs_consensus"]])
+    rev = np.array([_field_side(v, "rev") for v in p["revenue_vs_consensus"]])
+    guid = np.array([_field_side(v, "guidance") for v in p["guidance"]])
+    hi = conf == "high"
+    himed = np.isin(conf, ["high", "medium"])
+
+    def only(mask, side):
+        return np.where(mask, side, 0)
+
+    return {
+        # --- the three baselines every mutation has to beat ---------------
+        "SHIPPED gate (verdict agrees with tape)": only(agree, tape),
+        "pure tape (mechanical, ungated)": tape,
+        # THE CONTROL THAT DECIDES THE FADE. Every fade mutation bets against
+        # the tape, so "reversal works on 5% earnings moves" would produce the
+        # same result with no model at all. This row is that null. If fading
+        # everything loses and fading the model's refusals wins, the
+        # difference is the model.
+        "anti-tape baseline (fade EVERY event, no model)": -tape,
+        # --- spend the refusals ------------------------------------------
+        "fade only: trade every disagreement": only(disagree, llm),
+        "fade only: high confidence": only(disagree & hi, llm),
+        "fade only: high|medium confidence": only(disagree & himed, llm),
+        "pure LLM direction (gate + fade, tape ignored)": llm,
+        "gate + fade on high confidence": only(agree | (disagree & hi), llm),
+        # --- the abstentions ---------------------------------------------
+        "neutral verdicts, traded with the tape": only(neutral, tape),
+        "neutral verdicts, traded against the tape": only(neutral, -tape),
+        # --- the maximal mutation: never stand down -----------------------
+        "fade every non-agreement (disagree OR neutral)": only(~agree, -tape),
+        "FULL POLICY: with the tape if the verdict agrees, against it "
+        "otherwise": np.where(agree, tape, -tape),
+        # --- which schema field carries the edge? -------------------------
+        "gate AND eps agrees": only(agree & (eps == llm), tape),
+        "gate AND revenue agrees": only(agree & (rev == llm), tape),
+        "gate AND eps AND revenue agree": only(agree & (eps == llm) & (rev == llm), tape),
+        "gate AND guidance agrees": only(agree & (guid == llm), tape),
+        # --- quality flags: live shrinks size 0.75x; try harder uses ------
+        "gate AND no quality flags (hard veto)": only(agree & ~flags, tape),
+        "gate, quality flags INVERT the side": np.where(
+            agree, np.where(flags, -tape, tape), 0),
+    }
+
+
+def _split_stats(ret: np.ndarray, side: np.ndarray, early: np.ndarray) -> dict:
+    live = side != 0
+    r = ret[live]
+    e = early[live]
+    if not len(r):
+        return {"n": 0, "all": 0.0, "train": 0.0, "test": 0.0, "win": 0.0,
+                "t": 0.0}
+    t = (r.mean() / (r.std(ddof=1) / np.sqrt(len(r)))) if len(r) > 1 else 0.0
+    return {"n": int(live.sum()),
+            "all": r.mean() * 1e4,
+            "train": (r[e].mean() * 1e4) if e.any() else float("nan"),
+            "test": (r[~e].mean() * 1e4) if (~e).any() else float("nan"),
+            "win": float((r > 0).mean()) * 100,
+            "t": float(t)}
+
+
+def stage_mutations(args) -> None:
+    """Score every gate mutation on the 2021-23 / 2024-26 split, at two
+    horizons, with the account model. Most of these are expected to fail;
+    they are reported anyway, because a table of only the winners is a
+    selection effect with a bibliography."""
+    from research_llm_contamination import _spy_daily
+
+    if not PATHS.exists():
+        raise SystemExit("run the `paths` stage first")
+    paths = pd.read_parquet(PATHS)
+    meta = scored_events(args.effort, args.all_events)[
+        ["symbol", "date", "edate", "year", "move_pct", "run5d", "direction",
+         "confidence", "eps_vs_consensus", "revenue_vs_consensus", "guidance",
+         "quality_flags", "gated"]]
+    p = paths.drop(columns=["gated", "side"]).merge(
+        meta, on=["symbol", "date"], how="inner").reset_index(drop=True)
+    n = len(p)
+    early = p["year"].isin(["2021", "2022", "2023"]).to_numpy()
+    lo, hi = min(p["edate"]), max(p["edate"])
+    spy = _spy_daily(lo, hi + pd.Timedelta(days=14).to_pytimedelta()).sort_values("date")
+    sessions = spy["date"].to_list()
+    spy_close = spy["close"].to_numpy()
+
+    sides = mutation_sides(p)
+    lines: list[str] = []
+
+    def emit(text=""):
+        print(text)
+        lines.append(text)
+
+    emit(f"{n} scored events, {int(early.sum())} in 2021-23 / "
+         f"{int((~early).sum())} in 2024-26. Costs {COSTS_BP:.0f}bp round "
+         f"trip. No bracket unless stated.")
+    emit()
+    emit("## Every mutation, unbracketed, at two horizons")
+    emit()
+    emit("| mutation | trades | % of book | T+1 all | 21-23 | 24-26 | win% | t "
+         "| T+3 all | 21-23 | 24-26 |")
+    emit("|---|---|---|---|---|---|---|---|---|---|---|")
+    scored_rows = {}
+    for label, side in sides.items():
+        row = {}
+        for k in (1, 3):
+            ret, _ = resolve(p.assign(side=side), np.full(n, k), None, None)
+            row[k] = _split_stats(ret, side, early)
+            row[f"ret{k}"] = ret
+        scored_rows[label] = (side, row)
+        a, b = row[1], row[3]
+        emit(f"| {label} | {a['n']} | {a['n'] / n * 100:.0f} | {a['all']:+.1f} "
+             f"| {a['train']:+.1f} | {a['test']:+.1f} | {a['win']:.1f} "
+             f"| {a['t']:+.2f} | {b['all']:+.1f} | {b['train']:+.1f} "
+             f"| {b['test']:+.1f} |")
+    emit()
+    emit("Read the two horizon blocks against each other. The vetoed bucket "
+         "gets monotonically worse with holding period while the gated one is "
+         "flat, so if the refusals really contain a tradeable signal the fade "
+         "must IMPROVE from T+1 to T+3. That is the single prediction this "
+         "table exists to test.")
+    emit()
+
+    # ------------------------------------------------------ the fade, in depth
+    emit("## The fade, under scrutiny")
+    emit()
+    emit("This is the mutation that would change the strategy, so it gets the "
+         "hostile treatment: does it survive a wider spread, does it hold in "
+         "both halves, and is it one side of the book or both?")
+    emit()
+    fade_side = sides["fade only: trade every disagreement"]
+    live = fade_side != 0
+    emit("| holding period | trades | mean bp | 2021-23 | 2024-26 | win% | t |")
+    emit("|---|---|---|---|---|---|---|")
+    for k in (1, 2, 3, 4, 5):
+        ret, _ = resolve(p.assign(side=fade_side), np.full(n, k), None, None)
+        s = _split_stats(ret, fade_side, early)
+        emit(f"| T+{k} | {s['n']} | {s['all']:+.1f} | {s['train']:+.1f} "
+             f"| {s['test']:+.1f} | {s['win']:.1f} | {s['t']:+.2f} |")
+    emit()
+    emit("### Cost sensitivity")
+    emit()
+    emit("Fading a 5%+ after-hours move means crossing the book in the "
+         f"direction nobody wants. The study's flat {COSTS_BP:.0f}bp is the "
+         "friendliest assumption available; these are the same trades priced "
+         "progressively worse.")
+    emit()
+    emit("| round-trip cost | T+1 | T+3 | T+3 2024-26 |")
+    emit("|---|---|---|---|")
+    r1, _ = resolve(p.assign(side=fade_side), np.ones(n, int), None, None)
+    r3, _ = resolve(p.assign(side=fade_side), np.full(n, 3), None, None)
+    for cost in (13.0, 25.0, 40.0, 60.0, 100.0):
+        adj = (COSTS_BP - cost) / 1e4
+        a = _split_stats(r1 + adj, fade_side, early)
+        b = _split_stats(r3 + adj, fade_side, early)
+        emit(f"| {cost:.0f}bp | {a['all']:+.1f} | {b['all']:+.1f} "
+             f"| {b['test']:+.1f} |")
+    emit()
+    emit("### By confidence, by side, by year")
+    emit()
+    emit("| slice | trades | T+1 | T+3 | win% (T+3) |")
+    emit("|---|---|---|---|---|")
+    tape = np.sign(p["move_pct"].to_numpy()).astype(int)
+    slices = {
+        "high confidence": live & (p["confidence"] == "high").to_numpy(),
+        "medium confidence": live & (p["confidence"] == "medium").to_numpy(),
+        "low confidence": live & (p["confidence"] == "low").to_numpy(),
+        "fading an UP tape (short)": live & (tape > 0),
+        "fading a DOWN tape (long)": live & (tape < 0),
+        "|reaction| >= 10%": live & (np.abs(p["move_pct"].to_numpy()) >= 10),
+    }
+    for year in sorted(p["year"].unique()):
+        slices[f"year {year}"] = live & (p["year"] == year).to_numpy()
+    for label, mask in slices.items():
+        sub = np.where(mask, fade_side, 0)
+        a = _split_stats(r1, sub, early)
+        b = _split_stats(r3, sub, early)
+        emit(f"| {label} | {a['n']} | {a['all']:+.1f} | {b['all']:+.1f} "
+             f"| {b['win']:.1f} |")
+    emit()
+
+    # ------------------------------------------------------ account model
+    emit("## Account model")
+    emit()
+    emit("Every mutation compounded through the real calendar at 30% average "
+         "deployed capital, per-name weight normalised by the average number "
+         "of concurrent positions so a longer hold does not silently commit "
+         "more capital. T+1, unbracketed.")
+    emit()
+    emit("| mutation | trades | total | CAGR | maxDD | Sharpe | alpha | beta |")
+    emit("|---|---|---|---|---|---|---|---|")
+    acct_rows = {}
+    for label, (side, row) in scored_rows.items():
+        live_m = side != 0
+        if live_m.sum() < 30:
+            continue
+        sub = p[live_m].reset_index(drop=True)
+        a = account(sub, row["ret1"][live_m], np.ones(int(live_m.sum()), int),
+                    sessions, spy_close)
+        acct_rows[label] = a
+        emit(f"| {label} | {a['taken']} | {a['total_pct']:+.1f}% "
+             f"| {a['cagr_pct']:.2f}% | {a['max_dd_pct']:.1f}% "
+             f"| {a['sharpe']:.2f} | {a['alpha_pct']:+.2f}% | {a['beta']:.3f} |")
+    emit()
+    spy_curve = spy_close / spy_close[0]
+    peak = np.maximum.accumulate(spy_curve)
+    emit(f"SPY buy & hold over the same span: {(spy_curve[-1] - 1) * 100:+.1f}% "
+         f"total, {(spy_curve[-1] ** (252 / len(sessions)) - 1) * 100:.2f}% "
+         f"CAGR, {(1 - spy_curve / peak).max() * 100:.1f}% max drawdown.")
+    emit()
+    emit("Quality flags fire on "
+         f"{np.mean([bool(x is not None and len(x)) for x in p['quality_flags']]) * 100:.0f}% "
+         "of releases, so the live 0.75x size shrink is very nearly a constant "
+         "and cannot be doing discriminating work.")
+
+    stamp = datetime.now(ET).strftime("%Y%m%d_%H%M")
+    DOC.mkdir(parents=True, exist_ok=True)
+    header = [f"# Gate mutations — {stamp}", "",
+              "The shipped gate trades the tape when the verdict agrees and "
+              "stands down otherwise. Each mutation below spends the same "
+              "verdicts differently. Chosen on nothing — every row is "
+              "reported, including the failures.", ""]
+    doc = DOC / f"gate_mutations_{stamp}.md"
+    doc.write_text("\n".join(header + lines) + "\n", encoding="utf-8")
+    print(f"\nwrote {doc}")
+
+    out = pd.DataFrame([
+        {"mutation": k, "trades": v[1][1]["n"],
+         "t1_all": v[1][1]["all"], "t1_train": v[1][1]["train"],
+         "t1_test": v[1][1]["test"], "t1_win": v[1][1]["win"],
+         "t3_all": v[1][3]["all"], "t3_train": v[1][3]["train"],
+         "t3_test": v[1][3]["test"],
+         **{f"acct_{kk}": vv for kk, vv in acct_rows.get(k, {}).items()
+            if kk != "equity"}}
+        for k, v in scored_rows.items()])
+    out.to_parquet(CACHE / "gate_mutations.parquet")
+    print(f"wrote {CACHE / 'gate_mutations.parquet'}")
+
+
 TRADES_FILE = (Path(__file__).resolve().parents[2] / "frontend" / "public"
                / "study-trades.json")
 
@@ -552,7 +867,7 @@ def stage_trades(args) -> None:
     if not PATHS.exists():
         raise SystemExit("run the `paths` stage first")
     paths = pd.read_parquet(PATHS)
-    meta = scored_events(args.effort)
+    meta = scored_events(args.effort, args.all_events)
     p = paths.drop(columns=["gated"]).merge(
         meta[["symbol", "date", "edate", "year", "move_pct", "run5d", "dv",
               "direction", "confidence", "guidance", "quality_flags",
@@ -609,11 +924,15 @@ def stage_trades(args) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("stage", choices=["paths", "sweep", "best", "trades"])
+    ap.add_argument("stage", choices=["paths", "sweep", "best", "trades",
+                                      "mutations"])
     ap.add_argument("--effort", default="medium")
+    ap.add_argument("--all-events", action="store_true",
+                    help="keep events whose 8-K was accepted outside "
+                         "[16:00, 16:20] ET (the pre-2026-08-06 behaviour)")
     args = ap.parse_args()
-    {"paths": stage_paths, "sweep": stage_sweep,
-     "best": stage_best, "trades": stage_trades}[args.stage](args)
+    {"paths": stage_paths, "sweep": stage_sweep, "best": stage_best,
+     "trades": stage_trades, "mutations": stage_mutations}[args.stage](args)
 
 
 if __name__ == "__main__":
