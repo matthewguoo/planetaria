@@ -95,8 +95,12 @@ N_PERM = 1000
 
 # Batch API list price, USD per million tokens (50% of standard).
 PRICE_IN, PRICE_OUT = 2.50, 12.50
-EST_OUT_TOKENS = {"low": 700, "medium": 1400}   # incl. thinking; refined by
-                                                # measured usage after run 1
+# MEASURED on the 359-request calibration (2026-08-06), not guessed: input
+# runs ~5,120 tok for a 12k-char release (3.6 chars/token underestimated it,
+# so the char model below is corrected too), and output including thinking
+# is 453 tok at low, 797 at medium.
+EST_OUT_TOKENS = {"low": 460, "medium": 800, "high": 1600}
+CHARS_PER_TOKEN = 2.45
 
 
 # --------------------------------------------------------------- selection
@@ -424,7 +428,7 @@ def estimate_cost(requests: list[dict], effort: str) -> tuple[float, int]:
     the budget guard should trip early, not late."""
     chars = sum(len(r["params"]["system"])
                 + len(r["params"]["messages"][0]["content"]) for r in requests)
-    tok_in = chars / 3.6
+    tok_in = chars / CHARS_PER_TOKEN
     tok_out = len(requests) * EST_OUT_TOKENS.get(effort, 1000)
     usd = tok_in / 1e6 * PRICE_IN + tok_out / 1e6 * PRICE_OUT
     return usd, int(tok_in)
@@ -540,13 +544,15 @@ def stage_submit(args) -> None:
     if args.dry_run:
         print("dry run — nothing submitted")
         return
-    batch = client().messages.batches.create(requests=requests)
+    api = client()
+    batch = api.messages.batches.create(requests=requests)
     OUT.mkdir(parents=True, exist_ok=True)
     (OUT / "batches.jsonl").open("a", encoding="utf-8").write(json.dumps({
         "id": batch.id, "arm": args.arm, "effort": args.effort,
         "n": len(requests), "est_usd": round(usd, 2),
         "submitted": datetime.now(timezone.utc).isoformat()}) + "\n")
     print(f"submitted {batch.id} ({batch.processing_status})")
+    write_status(api, args.budget)
 
 
 def _batches() -> list[dict]:
@@ -756,6 +762,67 @@ def stage_score(args) -> None:
     print(f"\nwrote {doc}")
 
 
+STATUS_FILE = (Path(__file__).resolve().parents[2] / "frontend" / "public"
+               / "study-status.json")
+
+
+def write_status(api=None, budget: float = 50.0) -> dict:
+    """Publish study progress as a STATIC asset the LAB deck can poll.
+
+    Deliberately a file, not an API route: the study lives in scripts/ and
+    docs/notes, and app/ must not grow a reader for research artefacts just
+    to make them visible. vite serves public/ at the root, so the deck
+    fetches /study-status.json and app/ never learns this exists.
+    """
+    batches = []
+    for meta in _batches():
+        row = {k: meta.get(k) for k in ("id", "arm", "effort", "n", "est_usd",
+                                        "submitted")}
+        row["status"] = "unknown"
+        if api is not None:
+            try:
+                b = api.messages.batches.retrieve(meta["id"])
+                counts = b.request_counts
+                row.update(status=b.processing_status,
+                           succeeded=counts.succeeded, errored=counts.errored,
+                           processing=counts.processing)
+            except Exception as exc:
+                row["status"] = f"error: {str(exc)[:60]}"
+        batches.append(row)
+    done = sum(b.get("succeeded") or 0 for b in batches)
+    total = sum(b.get("n") or 0 for b in batches)
+    status = {
+        "updated": datetime.now(timezone.utc).isoformat(),
+        "model": MODEL,
+        "spent_usd": round(_spent_so_far(), 2),
+        "budget_usd": budget,
+        "requests_done": done,
+        "requests_total": total,
+        "results_rows": len(_completed_ids()),
+        "batches": batches[::-1],
+    }
+    STATUS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    STATUS_FILE.write_text(json.dumps(status, indent=2), encoding="utf-8")
+    return status
+
+
+def stage_watch(args) -> None:
+    """Poll the Batch API and refresh the status file so the LAB deck shows
+    the study progressing live. Exits when every batch has ended."""
+    api = client()
+    while True:
+        status = write_status(api, args.budget)
+        pending = [b for b in status["batches"] if b["status"] != "ended"]
+        print(f"{status['requests_done']}/{status['requests_total']} done · "
+              f"${status['spent_usd']:.2f} · {len(pending)} batch(es) running")
+        if not pending:
+            stage_collect(args)
+            write_status(api, args.budget)
+            print("all batches ended")
+            return
+        _time.sleep(args.poll_s)
+
+
 def stage_scrub(args) -> None:
     """Audit the anonymiser BEFORE spending anything on the blind arm: how
     much identity survives the scrub, measured over every cached release.
@@ -832,6 +899,7 @@ def stage_calibrate(args) -> None:
             "n": len(requests), "est_usd": round(usd, 2),
             "submitted": datetime.now(timezone.utc).isoformat()}) + "\n")
         print(f"submitted {batch.id} effort={effort} n={len(requests)}")
+    write_status(api, args.budget)
     print("poll with `collect`, then `score` and compare the two efforts "
           "before committing the 5-year budget.")
 
@@ -839,17 +907,18 @@ def stage_calibrate(args) -> None:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("stage", choices=["texts", "scrub", "calibrate", "submit",
-                                      "collect", "score"])
+                                      "collect", "watch", "score"])
     ap.add_argument("--arm", default="named", choices=["named", "blind", "notext"])
     ap.add_argument("--effort", default="low", choices=["low", "medium", "high"])
     ap.add_argument("--window", default="", help="comma-separated years")
     ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--since", default="2026-02-01")
     ap.add_argument("--budget", type=float, default=50.0)
+    ap.add_argument("--poll-s", type=float, default=30.0)
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
     {"texts": stage_texts, "scrub": stage_scrub, "calibrate": stage_calibrate,
-     "submit": stage_submit, "collect": stage_collect,
+     "submit": stage_submit, "collect": stage_collect, "watch": stage_watch,
      "score": stage_score}[args.stage](args)
 
 

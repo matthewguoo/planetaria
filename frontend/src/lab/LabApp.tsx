@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import CallsPanel from "./CallsPanel";
 import DecisionTape from "./DecisionTape";
 import EquityCurves from "./EquityCurves";
+import StudyPanel from "./StudyPanel";
 import TradesPanel from "./TradesPanel";
 import { fetchSim, fetchStream, type Analysis, type Decision, type Sim, type Stream } from "./api";
 
@@ -176,8 +177,14 @@ export default function LabApp() {
           <div className="min-h-0 flex-[3] bg-bb-panel">
             <DecisionTape decisions={decisions} instances={stream?.instances ?? []} />
           </div>
-          <div className="min-h-0 flex-[2] bg-bb-panel">
+          {/* Three siblings with explicit weights, each scrolling its own
+              overflow. Nesting the study panel inside the calls panel's box
+              starved one or the other of height at every viewport. */}
+          <div className="min-h-[120px] flex-[2] bg-bb-panel">
             <CallsPanel analyses={analyses} />
+          </div>
+          <div className="min-h-[150px] flex-[2] overflow-auto bg-bb-panel">
+            <StudyPanel />
           </div>
         </div>
 
