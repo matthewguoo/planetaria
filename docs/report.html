@@ -298,8 +298,8 @@ th.sortable[aria-sort="descending"]::after { content:"\2193"; opacity:1; }
   <h1>Gating Post-Earnings Announcement Drift with a Large Language Model</h1>
   <div class="byline">
     <b id="bl-sub">Can a language model tell which earnings reactions continue — and is it reading, or remembering?</b><br>
-    <b id="bl-n"></b> after-close earnings events, <b id="bl-span"></b> · <b id="bl-model"></b>
-    and three earlier models · <b id="bl-spend"></b> of inference · revised 2026-08-06.
+    <b id="bl-n"></b> after-close earnings events, <b id="bl-span"></b> ·
+    <b id="bl-model"></b> and three earlier models · revised 2026-08-06.
   </div>
 </header>
 
@@ -1139,7 +1139,9 @@ setText("bl-n", int(D.paths_n));
 setText("bl-span", D.span.join(" – "));
 setText("bl-model", MODEL_NAME(D.model));
 setText("bl-effort", D.effort);
-setText("bl-spend", "$" + D.spend_usd.toFixed(2));
+/* Inference cost is a fact about how the study was run, not a result, so it
+   is off the masthead and out of the key figures. It still appears where it
+   belongs — in Section 4's account of the budget. */
 setText("ch-n", int(D.paths_n));
 setText("ch-span", D.span.join(" to "));
 
@@ -1248,7 +1250,6 @@ const KEY = [
   ["refused, T+1", sgn(H.vetoed) + "bp", `spread ${sgn(H.spread)}bp`],
   ["never stand down", sgn(full.t1 && full.t1.all) + "bp", `t = ${n1(full.t1 && full.t1.t, 2)} · all events`],
   ["5% stop / 2× target", sgn(D.shipped_bracket.mean_bp) + "bp", `${n1(D.shipped_bracket.stopped_pct)}% stopped out`],
-  ["inference cost", "$" + D.spend_usd.toFixed(2), "batch API, no re-runs"],
 ];
 /* Measured fill costs and the out-of-training test are the two things a
    sceptical reader checks first, so they go in the key figures the moment the
