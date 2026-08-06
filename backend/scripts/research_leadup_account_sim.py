@@ -112,7 +112,28 @@ def build_universe_window(win_start: date, refresh: bool) -> dict[str, int]:
 def fetch_calendar_window(win_start: date, win_end: date,
                           refresh: bool) -> pd.DataFrame:
     """EDGAR 2.02 events inside [win_start, win_end] for the start-ranked
-    universe. acceptanceDateTime is ET-mislabeled-Z (verified 2026-08-04)."""
+    universe.
+
+    WRONG AND NOT YET REPAIRED (found 2026-08-06 by verify_no_lookahead.py):
+    the `hour` classification below slices acceptanceDateTime as text and
+    compares to 16:00, on the 2026-08-04 belief that the value is ET wearing
+    a spurious `Z`. It is not — it is real UTC. The median post-15:00
+    acceptance shifts 58 minutes between Apr-Oct and Nov-Feb, which is a DST
+    boundary and not something issuers do; and read as ET the histogram of
+    68,394 cached 8-Ks puts filings at midnight and 02:00, when EDGAR is
+    shut. So "amc" here means "accepted after 16:00 UTC" — after noon ET in
+    summer, 11:00 ET in winter — and the bucket contains midday filers.
+
+    Rebuilding the calendars would change the universe and force the whole
+    LLM study to be re-scored, so the cached calendars are left as they are
+    and the contamination is filtered downstream instead:
+    research_llm_contamination.timing_ok() drops the 227 of 1,552 scored
+    events accepted outside [16:00, 16:20] ET. That fixes the events; it does
+    NOT fix selection, because the per-day top-5 was ranked over a candidate
+    pool that included the mis-timed names. Any NEW window built from here
+    should convert to ET first:
+        datetime.fromisoformat(acc.replace("Z", "+00:00")).astimezone(ET)
+    """
     import httpx
 
     cache = CACHE / f"edgar_cal_{win_start}_{win_end}.parquet"

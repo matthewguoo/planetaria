@@ -159,6 +159,54 @@ def load_universe() -> pd.DataFrame:
     return out.drop_duplicates(subset=["symbol", "date"]).sort_values("date")
 
 
+# ------------------------------------------------------- acceptance timing
+
+PROVENANCE = CACHE / "lookahead_provenance.parquet"
+ENTRY_MIN = 16 * 60 + 20    # the entry print, ET
+CLOSE_MIN = 16 * 60         # the closing bell, ET
+
+
+def timing_ok(df: pd.DataFrame) -> pd.Series:
+    """True where the 8-K behind the event was accepted by EDGAR between the
+    16:00 bell and the 16:20 entry print.
+
+    FOUND 2026-08-06 by verify_no_lookahead.py, and it invalidates part of
+    every panel built before that date. `fetch_calendar_window` classifies a
+    filing's hour by slicing acceptanceDateTime as text and comparing to
+    16:00, on the belief — written into its docstring — that the timestamp is
+    ET wearing a spurious `Z`. It is not: it is real UTC. Two things prove it,
+    both from the cached submissions: the median post-15:00 acceptance moves
+    58 minutes between Apr-Oct and Nov-Feb (a DST shift, which issuer
+    behaviour cannot produce), and read as ET the histogram puts filings at
+    midnight and 02:00 when EDGAR is shut.
+
+    So the calendar's "amc" bucket really means "after 16:00 UTC" — after
+    noon ET in summer. Of the 1,552 scored events, 75 (4.8%) were accepted
+    BEFORE the close and are not after-hours releases at all, and 152 (9.8%)
+    were accepted AFTER 16:20, so the release was not public at the price the
+    study enters at. Both are excluded by this filter. The remaining 1,325
+    are clean, and score BETTER than the full set (+210.3bp gated vs +185.7),
+    so the mis-timed events were diluting the result rather than creating it.
+
+    What this filter does NOT repair: selection. The per-day top-5 was ranked
+    over a candidate pool that included the mis-timed names, so on affected
+    days the shipped watchlist is not the one a corrected calendar would
+    produce. Fixing that needs the EDGAR calendars rebuilt, which changes the
+    universe and would require re-running the study.
+    """
+    if not PROVENANCE.exists():
+        raise SystemExit(
+            "no lookahead_provenance.parquet — run "
+            "`python scripts/verify_no_lookahead.py --only provenance` first "
+            "(it fetches EDGAR acceptance times; free, ~3 min cold)")
+    prov = pd.read_parquet(PROVENANCE)
+    prov = prov[prov["status"] == "ok"][["symbol", "date", "acc_min"]]
+    key = df["symbol"].astype(str) + "|" + df["date"].astype(str)
+    lookup = dict(zip(prov["symbol"] + "|" + prov["date"], prov["acc_min"]))
+    mins = key.map(lookup)
+    return (mins >= CLOSE_MIN) & (mins <= ENTRY_MIN)
+
+
 # ------------------------------------------------------------------ texts
 
 def _accessions(cik: int, http: httpx.Client) -> list[dict]:
