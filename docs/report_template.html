@@ -1,260 +1,254 @@
 <title>Gating Post-Earnings Drift with an LLM — A Ten-Year Replication</title>
 <style>
 /* ============================================================================
-   Working-paper typography, in the register the finance literature actually
-   uses: a single measured column, an old-style serif throughout, section
-   heads in small caps with roman numerals, and booktabs rules — horizontal
-   only, never vertical. Colour is reserved almost entirely for the figures;
-   the text is ink on paper.
+   arXiv / LaTeX article class, as closely as a browser gets there.
 
-   No webfonts: the artifact CSP blocks font CDNs, so a linked face would fall
-   back silently. Charter is the target — it was cut for exactly this kind of
-   text and ships with macOS and most TeX installs — and the stack degrades
-   through the usual academic serifs to Times.
+   Times New Roman, justified measure, arabic section numbers set bold and
+   flush left, "Table 1:" above and "Figure 1:" below, booktabs rules, and a
+   centred title block over a narrowed abstract. Colour appears only inside
+   the plates; the text is black on white in light mode.
+
+   No webfont is linked — the artifact CSP blocks font CDNs and a linked face
+   would fall back silently — so the stack names the faces that actually ship:
+   Times New Roman on Windows, Liberation/Nimbus Roman on Linux, Times on
+   macOS.
    ============================================================================ */
 :root {
   color-scheme: light;
-  --paper:#FCFBF8; --ink:#1A1A18; --muted:#5C5A54; --faint:#8A877F;
-  --rule:#C9C5BA; --panel:#F3F1EA; --accent:#1F3A5F;
+  --paper:#FFFFFF; --ink:#000000; --muted:#4A4A4A; --faint:#767676;
+  --rule:#000000; --panel:#F2F2F2; --accent:#0B3C8C;
   --s1:#2A78D6; --s2:#EB6834; --s3:#1BAF7A; --s4:#EDA100; --s5:#E87BA4;
-  --pos:#1B6B3A; --neg:#A8261C;
-  --mono: ui-monospace,"SF Mono","Cascadia Mono",Menlo,Consolas,monospace;
-  --serif: Charter,"Bitstream Charter","Source Serif 4","Iowan Old Style",
-           "Palatino Linotype",Palatino,Georgia,"Times New Roman",serif;
-  --measure: 34rem;
+  --pos:#15662F; --neg:#9E1B14;
+  --mono: "Courier New", ui-monospace, Consolas, monospace;
+  --serif: "Times New Roman", "Nimbus Roman", "Liberation Serif", Times,
+           "Tinos", serif;
+  --measure: 36.5rem;
 }
 @media (prefers-color-scheme: dark) {
   :root:where(:not([data-theme="light"])) {
     color-scheme: dark;
-    --paper:#14140F; --ink:#E8E5DA; --muted:#9A968A; --faint:#77736A;
-    --rule:#33322A; --panel:#1C1B16; --accent:#9DC0EA;
+    --paper:#111111; --ink:#EDEDED; --muted:#A6A6A6; --faint:#7E7E7E;
+    --rule:#EDEDED; --panel:#1C1C1C; --accent:#8FB6F0;
     --s1:#3987E5; --s2:#D95926; --s3:#199E70; --s4:#C98500; --s5:#D55181;
     --pos:#35C46A; --neg:#FF6B5A;
   }
 }
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --paper:#14140F; --ink:#E8E5DA; --muted:#9A968A; --faint:#77736A;
-  --rule:#33322A; --panel:#1C1B16; --accent:#9DC0EA;
+  --paper:#111111; --ink:#EDEDED; --muted:#A6A6A6; --faint:#7E7E7E;
+  --rule:#EDEDED; --panel:#1C1C1C; --accent:#8FB6F0;
   --s1:#3987E5; --s2:#D95926; --s3:#199E70; --s4:#C98500; --s5:#D55181;
   --pos:#35C46A; --neg:#FF6B5A;
 }
 :root[data-theme="light"] {
   color-scheme: light;
-  --paper:#FCFBF8; --ink:#1A1A18; --muted:#5C5A54; --faint:#8A877F;
-  --rule:#C9C5BA; --panel:#F3F1EA; --accent:#1F3A5F;
+  --paper:#FFFFFF; --ink:#000000; --muted:#4A4A4A; --faint:#767676;
+  --rule:#000000; --panel:#F2F2F2; --accent:#0B3C8C;
   --s1:#2A78D6; --s2:#EB6834; --s3:#1BAF7A; --s4:#EDA100; --s5:#E87BA4;
-  --pos:#1B6B3A; --neg:#A8261C;
+  --pos:#15662F; --neg:#9E1B14;
 }
 
 * { box-sizing: border-box; }
 body {
   margin:0; background:var(--paper); color:var(--ink);
-  font-family:var(--serif); font-size:17.5px; line-height:1.66;
-  -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility;
+  font-family:var(--serif); font-size:18px; line-height:1.45;
+  -webkit-font-smoothing:antialiased;
 }
 .wrap {
-  display:grid; gap:0 2.2rem; padding:0 1.5rem 6rem;
+  display:grid; gap:0 1.8rem; padding:0 1.5rem 6rem;
   grid-template-columns:
     [full-start] minmax(0,1fr)
-    [wide-start] minmax(0,9rem)
+    [wide-start] minmax(0,7rem)
     [text-start] minmax(0,var(--measure)) [text-end]
-    minmax(0,9rem) [wide-end]
+    minmax(0,7rem) [wide-end]
     minmax(0,1fr) [full-end];
 }
 .wrap > * { grid-column: text; }
 .wide { grid-column: wide; }
-@media (max-width: 62rem) {
+@media (max-width: 60rem) {
   .wrap { grid-template-columns:[full-start][wide-start][text-start] minmax(0,1fr) [text-end][wide-end][full-end]; }
-  body { font-size:16px; }
+  body { font-size:16.5px; }
 }
 
-/* --- title block: centred, the way a working paper opens ---------------- */
-.masthead { text-align:center; padding:3.2rem 0 0; margin-bottom:1.4rem; }
+/* --- title block ------------------------------------------------------- */
+.masthead { text-align:center; padding:3.4rem 0 0; margin-bottom:.4rem; }
 .masthead .kicker {
-  font-size:.7rem; letter-spacing:.18em; text-transform:uppercase;
-  color:var(--muted);
+  font-size:.72rem; letter-spacing:.04em; color:var(--muted);
+  font-variant:small-caps; text-transform:none;
 }
 h1 {
-  font-size:1.86rem; line-height:1.24; font-weight:600; letter-spacing:-.005em;
-  margin:1.1rem auto .9rem; max-width:30rem; text-wrap:balance;
+  font-size:1.72rem; line-height:1.22; font-weight:700; letter-spacing:0;
+  margin:1.15rem auto .8rem; max-width:31rem; text-wrap:balance;
 }
-.byline { font-size:.83rem; color:var(--muted); line-height:1.75; margin-top:.7rem; }
-.byline b { color:var(--ink); font-weight:600; }
-.masthead::after {
-  content:""; display:block; width:4.5rem; height:1px;
-  background:var(--rule); margin:1.9rem auto 0;
-}
+.byline { font-size:.83rem; color:var(--muted); line-height:1.6; margin-top:.55rem; }
+.byline b { color:var(--ink); font-weight:400; }
+.masthead::after { content:none; }
 
-/* --- abstract: indented, smaller, the standard opening block ------------ */
-.abstract { margin:1.9rem auto 0; padding:0 1.6rem; font-size:.95em; line-height:1.62; }
+/* --- abstract: narrowed, centred heading, LaTeX-style ------------------ */
+.abstract {
+  margin:2rem auto 2.2rem; padding:0 2.4rem; font-size:.9em; line-height:1.5;
+  text-align:justify; hyphens:auto;
+}
 .abstract .label {
-  display:block; text-align:center; font-size:.7rem; letter-spacing:.2em;
-  text-transform:uppercase; color:var(--muted); margin-bottom:.85rem;
+  display:block; text-align:center; font-size:.95rem; font-weight:700;
+  letter-spacing:0; text-transform:none; color:var(--ink);
+  margin-bottom:.6rem; font-variant:normal;
 }
 .abstract p:last-child { margin-bottom:0; }
 
-/* --- sections: small caps, roman numerals, centred ---------------------- */
+/* --- sections: bold, flush left, arabic --------------------------------- */
 h2 {
-  font-size:.94rem; font-weight:600; text-align:center;
-  font-variant:small-caps; letter-spacing:.06em;
-  margin:3.6rem 0 1.2rem; text-wrap:balance;
+  font-size:1.06rem; font-weight:700; text-align:left;
+  font-variant:normal; letter-spacing:0; text-transform:none;
+  margin:2.1rem 0 .55rem; text-wrap:balance;
 }
-h2 .n { font-variant:normal; margin-right:.45em; }
+h2 .n { margin-right:.55em; font-weight:700; }
 h3 {
-  font-size:1rem; font-weight:600; font-style:italic;
-  color:var(--ink); margin:2.2rem 0 .6rem; text-wrap:balance;
-  text-transform:none; letter-spacing:0;
+  font-size:.99rem; font-weight:700; font-style:normal; color:var(--ink);
+  margin:1.5rem 0 .4rem; text-transform:none; letter-spacing:0;
 }
-h4 { font-size:.92rem; font-weight:600; font-style:italic; margin:1.6rem 0 .4rem; }
-p { margin:0 0 1.05rem; }
-p + p { text-indent:1.4em; }
+h4 { font-size:.94rem; font-weight:700; font-style:italic; margin:1.15rem 0 .3rem; }
+p { margin:0 0 .35rem; text-align:justify; hyphens:auto; }
+p + p { text-indent:1.6em; }
 .abstract p + p, .callout p + p, li p + p, figcaption p + p { text-indent:0; }
-a { color:var(--accent); text-decoration:none;
-    border-bottom:1px solid color-mix(in srgb, var(--accent) 30%, transparent); }
-a:hover, a:focus-visible { border-bottom-color:var(--accent); }
+a { color:var(--accent); text-decoration:none; border-bottom:0; }
+a:hover, a:focus-visible { text-decoration:underline; }
 :focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
-strong, b { font-weight:600; }
+strong, b { font-weight:700; }
 em.term { font-style:italic; color:var(--ink); }
 code, pre { font-family:var(--mono); }
-code { font-size:.84em; background:var(--panel); padding:.06em .28em; }
-pre { font-size:.7rem; background:var(--panel); border:1px solid var(--rule);
-      padding:.85rem 1rem; overflow-x:auto; line-height:1.6; margin:1rem 0; }
+code { font-size:.82em; background:none; padding:0; }
+pre { font-size:.72rem; background:var(--panel); border:0;
+      padding:.7rem .9rem; overflow-x:auto; line-height:1.4; margin:.8rem 0; }
 
-/* --- key figures: a ruled stat strip, not a dashboard ------------------- */
+/* --- key figures ------------------------------------------------------- */
 .keyfigs {
-  display:grid; grid-template-columns:repeat(auto-fit,minmax(8rem,1fr));
-  gap:0 1.4rem; margin:2rem 0 2.2rem;
-  border-top:1px solid var(--ink); border-bottom:1px solid var(--ink);
-  padding:.85rem 0; background:none;
+  display:grid; grid-template-columns:repeat(auto-fit,minmax(7.6rem,1fr));
+  gap:.2rem 1.3rem; margin:1.4rem 0 1.6rem;
+  border-top:1px solid var(--rule); border-bottom:1px solid var(--rule);
+  padding:.6rem 0; background:none;
 }
-.stat { background:none; padding:.15rem 0; }
-.stat .k { display:block; font-size:.68rem; letter-spacing:.03em; color:var(--muted); margin-bottom:.15rem; }
-.stat .v { font-size:1.12rem; font-weight:600; font-variant-numeric:tabular-nums; }
-.stat .s { display:block; font-size:.68rem; color:var(--faint); margin-top:.1rem; }
+.stat { background:none; padding:.1rem 0; }
+.stat .k { display:block; font-size:.7rem; color:var(--muted); margin-bottom:.05rem;
+           font-variant:small-caps; letter-spacing:.02em; }
+.stat .v { font-size:1.06rem; font-weight:700; font-variant-numeric:tabular-nums; }
+.stat .s { display:block; font-size:.7rem; color:var(--faint); margin-top:.02rem; }
 
-/* --- tables: booktabs. horizontal rules only, notes beneath ------------- */
-/* Tables take the wider grid column: prose stays at a readable measure while
-   a nine-column table gets the room it needs instead of a scrollbar. */
-.scroll { overflow-x:auto; margin:1.7rem 0; grid-column: wide; }
-/* Prose columns wrap; number columns never do. A note column left on nowrap
-   is what pushes a table past its container in the first place. */
+/* --- tables: booktabs, LaTeX caption --------------------------------- */
+.scroll { overflow-x:auto; margin:1.25rem 0; grid-column: wide; }
+table {
+  border-collapse:collapse; width:100%; font-size:.76rem; line-height:1.35;
+  font-variant-numeric:tabular-nums; border-bottom:1.2px solid var(--rule);
+}
+caption {
+  caption-side:top; text-align:left; font-size:.8rem; color:var(--ink);
+  padding-bottom:.45rem; line-height:1.4;
+}
+th, td { padding:.24rem .5rem; text-align:right; white-space:nowrap; border:0; }
+th:first-child, td:first-child { text-align:left; padding-left:0; }
+th:last-child, td:last-child { padding-right:0; }
+thead { border-top:1.2px solid var(--rule); }
+thead th {
+  font-weight:400; font-style:normal; color:var(--ink);
+  border-bottom:.6px solid var(--rule); padding-bottom:.26rem;
+  text-transform:none; letter-spacing:0;
+}
+tbody tr:first-child td { padding-top:.34rem; }
+tbody tr:last-child td { padding-bottom:.34rem; border-bottom:0; }
+tfoot td {
+  border-top:.6px solid var(--rule); padding-top:.4rem;
+  font-size:.72rem; color:var(--muted); font-style:normal; white-space:normal;
+}
+tr.hl td { font-weight:700; background:none; }
+tr.dim td { color:var(--faint); }
+.pos { color:var(--pos); } .neg { color:var(--neg); }
+td.wrap-cell, th.wrap-cell { white-space:normal; min-width:11rem; }
 #spec-table td:last-child, #audit-table td:last-child,
 #arms-table td:first-child, #mut-table td:first-child,
 #model-table td:first-child, #holdout-table td:first-child,
 #blind-table td:first-child, #panel-table td:first-child,
 #timing-table td:first-child, #funnel-table td:first-child,
 #funnel2-table td:first-child, #contam-table td:first-child { white-space:normal; }
-/* Prose reads left-aligned; only numbers belong on the right rail. */
 #spec-table td:last-child, #audit-table td:last-child,
 #spec-table th:last-child, #audit-table th:last-child {
-  min-width:15rem; color:var(--muted); text-align:left; padding-left:1.4rem;
+  min-width:15rem; color:var(--muted); text-align:left; padding-left:1.2rem;
 }
-table {
-  border-collapse:collapse; width:100%; font-size:.78rem; line-height:1.45;
-  font-variant-numeric:tabular-nums; border-bottom:1.1px solid var(--ink);
-}
-caption {
-  caption-side:top; text-align:left; font-size:.8rem; color:var(--ink);
-  padding-bottom:.6rem; line-height:1.5;
-}
-th, td { padding:.3rem .55rem; text-align:right; white-space:nowrap; border:0; }
-th:first-child, td:first-child { text-align:left; padding-left:0; }
-th:last-child, td:last-child { padding-right:0; }
-thead { border-top:1.1px solid var(--ink); }
-thead th {
-  font-weight:400; font-style:italic; color:var(--ink);
-  border-bottom:.5px solid var(--ink); padding-bottom:.32rem;
-  text-transform:none; letter-spacing:0;
-}
-thead th:first-child { font-style:normal; }
-tbody tr:first-child td { padding-top:.42rem; }
-tbody tr:last-child td { padding-bottom:.42rem; border-bottom:0; }
-tfoot td {
-  border-top:.5px solid var(--rule); padding-top:.5rem;
-  font-size:.72rem; color:var(--muted); font-style:italic; white-space:normal;
-}
-tr.hl td { font-weight:600; background:none; }
-tr.dim td { color:var(--faint); }
-.pos { color:var(--pos); } .neg { color:var(--neg); }
-td.wrap-cell, th.wrap-cell { white-space:normal; min-width:12rem; }
 
-/* --- figures: caption beneath the plate --------------------------------- */
-.fig { margin:2.3rem 0; }
+/* --- figures: caption beneath ------------------------------------------ */
+.fig { margin:1.5rem 0; }
 .fig figcaption {
-  font-size:.78rem; color:var(--ink); line-height:1.55; margin-top:.9rem;
-  padding-top:0; border-top:0;
+  font-size:.78rem; color:var(--ink); line-height:1.4; margin-top:.55rem;
+  padding-top:0; border-top:0; text-align:justify;
 }
-.fig figcaption b { font-weight:600; }
+.fig figcaption b { font-weight:700; }
 .legend {
-  display:flex; flex-wrap:wrap; gap:.3rem 1.2rem; font-size:.72rem;
-  color:var(--muted); margin-bottom:.6rem; justify-content:center;
+  display:flex; flex-wrap:wrap; gap:.25rem 1.1rem; font-size:.72rem;
+  color:var(--muted); margin-bottom:.45rem; justify-content:center;
 }
-.legend span { display:flex; align-items:center; gap:.42rem; }
-.swatch { width:16px; height:3px; flex:none; }
+.legend span { display:flex; align-items:center; gap:.4rem; }
+.swatch { width:15px; height:3px; flex:none; }
 svg { display:block; width:100%; overflow:visible; }
 .tip { position:fixed; pointer-events:none; z-index:9; background:var(--ink);
        color:var(--paper); font-family:var(--mono); font-size:.66rem;
-       padding:.35rem .5rem; line-height:1.5; opacity:0; transition:opacity .1s;
+       padding:.3rem .45rem; line-height:1.4; opacity:0; transition:opacity .1s;
        max-width:17rem; }
 .tip.on { opacity:1; }
 
-/* --- callouts: a ruled aside, not a coloured card ----------------------- */
+/* --- callouts: LaTeX-ish ruled block ----------------------------------- */
 .callout {
-  border:0; border-top:1px solid var(--rule); border-bottom:1px solid var(--rule);
-  padding:1rem 0; margin:1.9rem 0; font-size:.93em; background:none;
+  border:0; border-top:.6px solid var(--rule); border-bottom:.6px solid var(--rule);
+  padding:.7rem 0; margin:1.2rem 0; font-size:.92em; background:none;
 }
 .callout .label {
-  display:block; font-size:.7rem; letter-spacing:.14em; text-transform:uppercase;
-  color:var(--muted); margin-bottom:.5rem;
+  display:block; font-size:.82rem; font-weight:700; letter-spacing:0;
+  text-transform:none; color:var(--ink); margin-bottom:.35rem;
 }
 .callout p:last-child { margin-bottom:0; }
-.callout.thesis { border-top-width:2px; border-bottom-width:2px; font-size:1em; }
+.callout.thesis { border-top-width:1.2px; border-bottom-width:1.2px; font-size:.97em; }
 .callout.fail { border-left:0; }
 .callout.fail .label { color:var(--neg); }
 
-ol.steps { counter-reset:s; list-style:none; padding-left:0; margin:1.3rem 0 1.7rem; }
-ol.steps li { counter-increment:s; position:relative; padding-left:2.2rem;
-              margin-bottom:.8rem; font-size:.97em; }
+ol.steps { counter-reset:s; list-style:none; padding-left:0; margin:.9rem 0 1.2rem; }
+ol.steps li { counter-increment:s; position:relative; padding-left:2rem;
+              margin-bottom:.45rem; font-size:.97em; text-align:justify; }
 ol.steps li::before {
-  content:counter(s) "."; position:absolute; left:0; top:0;
-  font-weight:600; color:var(--muted); border:0; width:auto; height:auto;
+  content:"(" counter(s) ")"; position:absolute; left:0; top:0;
+  font-weight:400; color:var(--ink); border:0; width:auto; height:auto;
   display:inline; font-family:var(--serif); font-size:1em; letter-spacing:0;
 }
-ol.steps li b { font-weight:600; font-family:var(--serif); font-size:1em; letter-spacing:0; }
-ul.tight { margin:0 0 1.05rem; padding-left:1.2rem; }
-ul.tight li { margin-bottom:.5rem; }
+ol.steps li b { font-weight:700; font-family:var(--serif); font-size:1em; letter-spacing:0; }
+ul.tight { margin:0 0 .8rem; padding-left:1.3rem; }
+ul.tight li { margin-bottom:.35rem; text-align:justify; }
 
-ol.refs { font-size:.82rem; line-height:1.55; padding-left:0; list-style:none; counter-reset:r; }
-ol.refs li { counter-increment:r; padding-left:1.9rem; text-indent:-1.9rem; margin-bottom:.55rem; }
-ol.refs li::before { content:"[" counter(r) "]"; color:var(--muted); margin-right:.6rem; font-family:var(--serif); }
-sup.c { font-size:.66em; color:var(--accent); font-family:var(--serif); }
-.kv { font-size:.76rem; color:var(--muted); font-family:var(--serif); }
-hr.end { border:0; border-top:1px solid var(--ink); margin:3.5rem 0 1rem; }
+ol.refs { font-size:.8rem; line-height:1.4; padding-left:0; list-style:none; counter-reset:r; }
+ol.refs li { counter-increment:r; padding-left:2rem; text-indent:-2rem; margin-bottom:.35rem; }
+ol.refs li::before { content:"[" counter(r) "]"; margin-right:.7rem; font-family:var(--serif); }
+sup.c { font-size:.72em; color:var(--accent); font-family:var(--serif); vertical-align:super; }
+.kv { font-size:.76rem; color:var(--muted); font-family:var(--serif); text-align:left; }
+hr.end { border:0; border-top:1.2px solid var(--rule); margin:2.4rem 0 .8rem; }
 
 /* --- appendix controls -------------------------------------------------- */
-.filters { display:flex; flex-wrap:wrap; gap:.5rem; align-items:center; margin:1.1rem 0 .6rem; }
+.filters { display:flex; flex-wrap:wrap; gap:.45rem; align-items:center; margin:.9rem 0 .5rem; }
 .filters input, .filters select {
-  font-family:var(--serif); font-size:.78rem; padding:.28rem .45rem;
-  background:var(--paper); color:var(--ink); border:1px solid var(--rule);
+  font-family:var(--serif); font-size:.78rem; padding:.24rem .4rem;
+  background:var(--paper); color:var(--ink); border:1px solid var(--muted);
 }
 .filters input:focus, .filters select:focus { border-color:var(--accent); }
 .ctrl {
-  font-family:var(--serif); font-size:.74rem; background:none; text-transform:none;
-  border:1px solid var(--rule); color:var(--muted); padding:.24rem .6rem;
+  font-family:var(--serif); font-size:.76rem; background:none; text-transform:none;
+  border:1px solid var(--muted); color:var(--ink); padding:.2rem .55rem;
   cursor:pointer; letter-spacing:0;
 }
 .ctrl:hover { border-color:var(--accent); color:var(--accent); }
-.ctrl[aria-pressed="true"] { border-color:var(--accent); color:var(--accent); }
-.pager { display:flex; gap:.5rem; align-items:center; justify-content:space-between;
-         font-size:.74rem; color:var(--muted); margin-top:.7rem; flex-wrap:wrap;
+.pager { display:flex; gap:.45rem; align-items:center; justify-content:space-between;
+         font-size:.76rem; color:var(--muted); margin-top:.55rem; flex-wrap:wrap;
          font-family:var(--serif); }
 th.sortable { cursor:pointer; user-select:none; }
 th.sortable:hover { color:var(--accent); }
-th.sortable::after { content:"\2195"; opacity:.28; margin-left:.28em; }
+th.sortable::after { content:"\2195"; opacity:.3; margin-left:.25em; }
 th.sortable[aria-sort="ascending"]::after { content:"\2191"; opacity:1; }
 th.sortable[aria-sort="descending"]::after { content:"\2193"; opacity:1; }
-.tag { font-size:.68rem; font-style:italic; border:0; padding:0;
+.tag { font-size:.72rem; font-style:italic; border:0; padding:0;
        text-transform:none; letter-spacing:0; font-family:var(--serif); }
 .tag.took { color:var(--pos); }
 .tag.dec { color:var(--faint); }
@@ -263,14 +257,14 @@ th.sortable[aria-sort="descending"]::after { content:"\2193"; opacity:1; }
 
 /* ----------------------------------------------------------------- print */
 @media print {
-  @page { margin:20mm 18mm; }
-  body { font-size:10pt; line-height:1.45; background:#fff; }
+  @page { margin:25mm 22mm; }
+  body { font-size:10pt; line-height:1.3; background:#fff; color:#000; }
   .wrap { display:block; padding:0; max-width:none; }
   .wrap > *, .wide { max-width:none; }
   .ctrl, .filters, .pager, .tip { display:none !important; }
   .scroll { overflow:visible; }
-  h1 { font-size:17pt; }
-  h2 { font-size:11pt; break-after:avoid; margin-top:1.5rem; }
+  h1 { font-size:16pt; }
+  h2 { font-size:11.5pt; break-after:avoid; margin-top:1.1rem; }
   h3, h4 { break-after:avoid; }
   p, li { orphans:3; widows:3; }
   .fig, .callout, .keyfigs { break-inside:avoid; }
@@ -280,9 +274,8 @@ th.sortable[aria-sort="descending"]::after { content:"\2193"; opacity:1; }
   #trade-table tr { break-inside:avoid; }
   td.wrap-cell, th.wrap-cell { min-width:0; }
   svg { max-width:100%; }
-  a { color:inherit; border-bottom:none; }
+  a { color:#000; }
 }
-
 </style>
 
 <script id="report-data" type="application/json">/*DATA*/</script>
@@ -306,7 +299,7 @@ th.sortable[aria-sort="descending"]::after { content:"\2193"; opacity:1; }
 
 <div class="keyfigs" id="keyfigs"></div>
 
-<h2><span class="n">I.</span> Motivation</h2>
+<h2><span class="n">1</span> Motivation</h2>
 
 <p>Post-earnings announcement drift — the tendency of prices to keep moving in the
 direction of an earnings surprise for weeks after the announcement — is among the
@@ -329,8 +322,8 @@ disclosure predicts returns beyond the numbers,<sup class="c">[6][7][8]</sup> an
 newer line applying instruction-tuned language models to the same
 question.<sup class="c">[9]</sup> It also inherits that newer line's central
 difficulty. A model trained on text written after these events may recall them, and
-a recalled outcome is not a prediction.<sup class="c">[10][11][12]</sup> Section IV
-describes what was done about it; Section VII describes what could not be.</p>
+a recalled outcome is not a prediction.<sup class="c">[10][11][12]</sup> Section 4
+describes what was done about it; Section 7 describes what could not be.</p>
 
 <div class="callout">
   <span class="label">What changed in this revision</span>
@@ -339,9 +332,9 @@ describes what was done about it; Section VII describes what could not be.</p>
   window rather than the next one, so every figure labelled <em class="term">T+1</em>
   in the first draft was really a two-to-four session hold. An EDGAR timestamp was
   read as Eastern when it is UTC, admitting midday filers into an after-close sample
-  and mistiming the rest (Section IV.D). And the reaction window itself was a fixed
+  and mistiming the rest (Section 4.4). And the reaction window itself was a fixed
   clock slice rather than being keyed to each release, which selected the issuers
-  that file earliest (Section IV.E).</p>
+  that file earliest (Section 4.5).</p>
   <p>Every number here is rebuilt on per-session exits and on reaction windows
   measured from each event's own EDGAR acceptance, over
   <b id="ch-n"></b> events spanning <b id="ch-span"></b>. Nothing in this paper is
@@ -350,7 +343,7 @@ describes what was done about it; Section VII describes what could not be.</p>
   than silently applied.</p>
 </div>
 
-<h2><span class="n">II.</span> The strategy, stated exactly</h2>
+<h2><span class="n">2</span> The strategy, stated exactly</h2>
 
 <div class="callout thesis">
   <span class="label">The thesis in one paragraph</span>
@@ -364,7 +357,7 @@ describes what was done about it; Section VII describes what could not be.</p>
   continuations from the reversals.</p>
 </div>
 
-<h3>II.A. The rule, step by step</h3>
+<h3>2.1 The rule, step by step</h3>
 
 <ol class="steps">
   <li><b>15:30 ET — freeze the watchlist.</b> Of the companies reporting after
@@ -402,25 +395,25 @@ describes what was done about it; Section VII describes what could not be.</p>
 
 <div class="fig">
   <div id="timeline"></div>
-  <figcaption><b>Figure 1.</b> One night, in order. Everything left of the entry
+  <figcaption><b>Figure 1:</b> One night, in order. Everything left of the entry
   is information available at decision time; everything right of it is outcome.
-  The release can cross anywhere in the shaded band — Section IV.E shows that where
+  The release can cross anywhere in the shaded band — Section 4.5 shows that where
   it lands turned out to matter a great deal.</figcaption>
 </div>
 
-<h3>II.B. What is deliberately <em>not</em> traded</h3>
+<h3>2.2 What is deliberately <em>not</em> traded</h3>
 
 <p>The gate is an <em>agreement</em> rule, and the refusals are most of what it
 does: a bullish read against a falling tape is a no-trade, and so is a neutral
 read against any tape. Roughly a third of qualifying events are declined on
-these grounds. Section V.D asks whether that refusal is the right use of the
+these grounds. Section 5.4 asks whether that refusal is the right use of the
 information, and finds it is not.</p>
 
 <p>Two further vetoes fire after the gate passes: an after-hours spread cap, and a
 guard against shorting a name that has already been crushed into the print. Both
 are listed in the table below.</p>
 
-<h3>II.C. The production configuration</h3>
+<h3>2.3 The production configuration</h3>
 
 <p>The specification below is read out of the production strategy class, not
 paraphrased from it. This is the configuration the live engine runs today, in
@@ -431,10 +424,10 @@ whether the gate picks direction, and what the strategy as configured would have
 returned.</p>
 
 <div class="scroll"><table id="spec-table">
-  <caption><b>Table 1.</b> Production configuration, <code>app/strategies/earnings_reaction.py</code></caption>
+  <caption><b>Table 1:</b> Production configuration, <code>app/strategies/earnings_reaction.py</code></caption>
 </table></div>
 
-<h2><span class="n">III.</span> Data and universe</h2>
+<h2><span class="n">3</span> Data and universe</h2>
 
 <p>The universe is built from EDGAR item 2.02 filings for the thousand most liquid
 US issuers, ranked on the first sessions of each window so that ranking never sees
@@ -443,14 +436,14 @@ last after-hours print in the fifteen minutes following 16:05 ET; the exit is
 re-derived per session from minute bars.</p>
 
 <div class="scroll"><table id="funnel-table">
-  <caption><b>Table 2.</b> Selection cascade, per year and in total</caption>
+  <caption><b>Table 2:</b> Selection cascade, per year and in total</caption>
 </table></div>
 
 <p id="funnel-note"></p>
 
-<h2><span class="n">IV.</span> Method</h2>
+<h2><span class="n">4</span> Method</h2>
 
-<h3>IV.A. One request per event</h3>
+<h3>4.1 One request per event</h3>
 
 <p>Each event is a single self-contained request: no conversation history, no shared
 session, no cross-event state. The task line names the ticker, states that consensus
@@ -465,16 +458,16 @@ the live path sees for roughly a third of names — the free data tier keeps no
 history. This is a disclosed deviation from live, and it understates rather than
 flatters: live has real consensus for the other two thirds.</p>
 
-<h3>IV.B. Effort calibration</h3>
+<h3>4.2 Effort calibration</h3>
 
 <p>Reasoning effort was calibrated on the most recent slice before committing the
 budget, running the same events at two settings.</p>
 
 <div class="scroll"><table id="effort-table">
-  <caption><b>Table 3.</b> Effort A/B on the calibration slice</caption>
+  <caption><b>Table 3:</b> Effort A/B on the calibration slice</caption>
 </table></div>
 
-<h3>IV.C. Contamination controls</h3>
+<h3>4.3 Contamination controls</h3>
 
 <p id="cc-intro">The model's corpus runs to roughly 2026-05, so almost all of
 this sample is in-corpus by construction and cutoff-slicing would discard the
@@ -495,7 +488,7 @@ since the event.</p>
 returned messages back off the Batch API finds no non-text content block and no
 tool-use stop reason across every response. The model could not look the answer up.</p>
 
-<h3>IV.D. The lookahead audit</h3>
+<h3>4.4 The lookahead audit</h3>
 
 <p>The load-bearing claim of a study like this is that every input was available at
 decision time. Reading the code and concluding that it looks right is not evidence,
@@ -505,7 +498,7 @@ tested that way, because a perturbation proof cannot be fooled by a variable tha
 merely looks innocuous.</p>
 
 <div class="scroll"><table id="audit-table">
-  <caption><b>Table 4.</b> Lookahead audit, <code>scripts/verify_no_lookahead.py</code></caption>
+  <caption><b>Table 4:</b> Lookahead audit, <code>scripts/verify_no_lookahead.py</code></caption>
 </table></div>
 
 <div class="callout fail">
@@ -528,7 +521,7 @@ merely looks innocuous.</p>
 <div class="fig">
   <div class="legend"><span>EDGAR acceptance time, converted to Eastern</span></div>
   <div id="acc-hist"></div>
-  <figcaption><b>Figure 2.</b> Acceptance time of the 8-K behind each scored event.
+  <figcaption><b>Figure 2:</b> Acceptance time of the 8-K behind each scored event.
   The two bands outside 16:00–16:20 are the contaminated ones.</figcaption>
 </div>
 
@@ -538,7 +531,7 @@ diluting it, not creating it. The gate is anti-predictive on the pre-close bucke
 exactly as it should be when the measured "reaction" is not a reaction to anything.</p>
 
 <div class="scroll"><table id="timing-table">
-  <caption><b>Table 5.</b> What the timing correction changed (raw round trip, T+1 as originally cached)</caption>
+  <caption><b>Table 5:</b> What the timing correction changed (raw round trip, T+1 as originally cached)</caption>
 </table></div>
 
 <p>The correction is a filter, not a repair, and it is worth being precise about what
@@ -558,7 +551,7 @@ per-day top-five was ranked over a candidate pool that still contained the mis-t
 names, so selection on affected days is not what a corrected calendar would produce.
 Fixing that would change the universe and force the study to be re-scored.</p>
 
-<h3>IV.E. The repair: acceptance-relative reaction windows</h3>
+<h3>4.5 The repair: acceptance-relative reaction windows</h3>
 
 <p>Dropping the mis-timed events was a workaround. The repair is to stop
 measuring every reaction in the same fixed slice and measure each one in the
@@ -569,7 +562,7 @@ and it removes the need for a timing filter at all: an event cannot be
 mis-classified as after-close when its classification is its own timestamp.</p>
 
 <div class="scroll"><table id="panel-table">
-  <caption><b>Table 6.</b> The same gate on three panels, T+1, no bracket</caption>
+  <caption><b>Table 6:</b> The same gate on three panels, T+1, no bracket</caption>
 </table></div>
 
 <p id="panel-para"></p>
@@ -577,42 +570,42 @@ mis-classified as after-close when its classification is its own timestamp.</p>
 <p id="shape-para"></p>
 
 <div class="scroll"><table id="funnel2-table">
-  <caption><b>Table 7.</b> Selection cascade on the acceptance-relative panel</caption>
+  <caption><b>Table 7:</b> Selection cascade on the acceptance-relative panel</caption>
 </table></div>
 
-<h2><span class="n">V.</span> Results</h2>
+<h2><span class="n">5</span> Results</h2>
 
-<h3>V.A. The gate</h3>
+<h3>5.1 The gate</h3>
 
 <p id="head-para"></p>
 
 <div class="scroll"><table id="horizon-table">
-  <caption><b>Table 8.</b> Holding period, basis points per trade, no bracket</caption>
+  <caption><b>Table 8:</b> Holding period, basis points per trade, no bracket</caption>
 </table></div>
 
 <p id="horizon-para"></p>
 
-<h3>V.B. By year and by liquidity</h3>
+<h3>5.2 By year and by liquidity</h3>
 
 <div class="scroll"><table id="year-table">
-  <caption><b>Table 9.</b> Per calendar year</caption>
+  <caption><b>Table 9:</b> Per calendar year</caption>
 </table></div>
 
 <p id="year-para"></p>
 
 <div class="scroll"><table id="liq-table">
-  <caption><b>Table 10.</b> By prior-session dollar-volume quintile</caption>
+  <caption><b>Table 10:</b> By prior-session dollar-volume quintile</caption>
 </table></div>
 
-<h3>V.C. The bracket is the problem</h3>
+<h3>5.3 The bracket is the problem</h3>
 
 <p id="bracket-para"></p>
 
 <div class="scroll"><table id="bracket-table">
-  <caption><b>Table 11.</b> Bracket surface, gated trades, T+1 time stop</caption>
+  <caption><b>Table 11:</b> Bracket surface, gated trades, T+1 time stop</caption>
 </table></div>
 
-<h3>V.D. Gate mutations</h3>
+<h3>5.4 Gate mutations</h3>
 
 <p>The shipped rule spends the verdict one way: trade the tape when the model agrees,
 stand down otherwise. That discards roughly a third of the book, and the discarded
@@ -630,12 +623,12 @@ the same train/test split. Every row is reported, including the failures.</p>
 </div>
 
 <div class="scroll"><table id="mut-table">
-  <caption><b>Table 12.</b> Gate mutations. bp per trade; train 2021-23, test 2024-26</caption>
+  <caption><b>Table 12:</b> Gate mutations. bp per trade; train 2021-23, test 2024-26</caption>
 </table></div>
 
 <p id="mut-para"></p>
 
-<h3>V.E. Account simulation and benchmarks</h3>
+<h3>5.5 Account simulation and benchmarks</h3>
 
 <p>Per-trade basis points do not answer "what would this have done to an account".
 The simulation below compounds each configuration through the real session calendar
@@ -646,22 +639,22 @@ silently commit more capital and win by leverage.</p>
 <div class="fig">
   <div class="legend" id="curve-legend"></div>
   <div id="curve"></div>
-  <figcaption><b>Figure 3.</b> Equity curves, log scale, <span id="curve-span"></span>.
+  <figcaption><b>Figure 3:</b> Equity curves, log scale, <span id="curve-span"></span>.
   Dashed series are baselines rather than search results.
   <span id="curve-note"></span></figcaption>
 </div>
 
 <div class="scroll"><table id="curve-table">
-  <caption><b>Table 13.</b> Account simulation against SPY, QQQ and 3× QQQ</caption>
+  <caption><b>Table 13:</b> Account simulation against SPY, QQQ and 3× QQQ</caption>
 </table></div>
 
 <p id="iso-para"></p>
 
 <div class="scroll"><table id="iso-table">
-  <caption><b>Table 14.</b> Iso-return leverage: the cheapest index exposure that ends where the strategy ends</caption>
+  <caption><b>Table 14:</b> Iso-return leverage: the cheapest index exposure that ends where the strategy ends</caption>
 </table></div>
 
-<h3 id="model-h3">V.F. Which model, and how much reasoning?</h3>
+<h3 id="model-h3">5.6 Which model, and how much reasoning?</h3>
 
 <div id="model-block">
 <p id="model-intro"></p>
@@ -669,18 +662,18 @@ silently commit more capital and win by leverage.</p>
 <div class="fig">
   <div class="legend" id="model-legend"></div>
   <div id="model-chart"></div>
-  <figcaption><b>Figure 4.</b> Gated and refused returns by model arm on the
+  <figcaption><b>Figure 4:</b> Gated and refused returns by model arm on the
   shared six-month slice. <span id="model-figcap"></span></figcaption>
 </div>
 
 <div class="scroll"><table id="model-table">
-  <caption><b>Table 15.</b> Model and effort, identical events and identical entries</caption>
+  <caption><b>Table 15:</b> Model and effort, identical events and identical entries</caption>
 </table></div>
 
 <p id="model-para"></p>
 </div>
 
-<h3 id="arms-h3">V.G. Contamination: how much of this could be memorisation?</h3>
+<h3 id="arms-h3">5.7 Contamination: how much of this could be memorisation?</h3>
 
 <p id="contam-lead">Almost all of this sample sits inside the model's training
 corpus, so the question is unavoidable: is the gate reading these releases, or
@@ -688,7 +681,7 @@ recalling what happened next? Two estimates below bound it from the observed dat
 and two arms measure it directly by removing an input at a time.</p>
 
 <div class="scroll"><table id="contam-table">
-  <caption><b>Table 16.</b> The gate either side of the model's knowledge boundary</caption>
+  <caption><b>Table 16:</b> The gate either side of the model's knowledge boundary</caption>
 </table></div>
 
 <p id="contam-para"></p>
@@ -699,26 +692,26 @@ and two arms measure it directly by removing an input at a time.</p>
 <p id="arms-intro"></p>
 
 <div class="scroll"><table id="arms-table">
-  <caption><b>Table 17.</b> The same gate, the same events, one input removed at a time</caption>
+  <caption><b>Table 17:</b> The same gate, the same events, one input removed at a time</caption>
 </table></div>
 
 <div class="fig">
   <div class="legend" id="arms-legend"></div>
   <div id="arms-chart"></div>
-  <figcaption><b>Figure 5.</b> Gate spread by arm on the paired event set.
+  <figcaption><b>Figure 5:</b> Gate spread by arm on the paired event set.
   <span id="arms-figcap"></span></figcaption>
 </div>
 
 <p id="blind-para"></p>
 
 <div class="scroll"><table id="blind-table">
-  <caption><b>Table 18.</b> Identity ablation: what the model thought it was reading</caption>
+  <caption><b>Table 18:</b> Identity ablation: what the model thought it was reading</caption>
 </table></div>
 
 <p id="notext-para"></p>
 </div>
 
-<h3 id="decade-h3">V.H. Ten years: a genuine holdout</h3>
+<h3 id="decade-h3">5.8 Ten years: a genuine holdout</h3>
 
 <div id="decade-block">
 <p id="decade-intro"></p>
@@ -726,22 +719,22 @@ and two arms measure it directly by removing an input at a time.</p>
 <div class="fig">
   <div class="legend"><span><span class="swatch" style="background:var(--s1)"></span>gate spread, bp per trade</span><span><span class="swatch" style="background:var(--muted)"></span>events scored</span></div>
   <div id="decade-chart"></div>
-  <figcaption><b>Figure 6.</b> Gate spread by calendar year across the decade.
+  <figcaption><b>Figure 6:</b> Gate spread by calendar year across the decade.
   <span id="decade-figcap"></span></figcaption>
 </div>
 
 <div class="scroll"><table id="holdout-table">
-  <caption><b>Table 19.</b> Key mutations, holdout years against the years the study was designed on</caption>
+  <caption><b>Table 19:</b> Key mutations, holdout years against the years the study was designed on</caption>
 </table></div>
 
 <p id="decade-para"></p>
 </div>
 
-<h2><span class="n">VI.</span> What the evidence supports</h2>
+<h2><span class="n">6</span> What the evidence supports</h2>
 
 <p id="conc-para"></p>
 
-<h2><span class="n">VII.</span> Limitations</h2>
+<h2><span class="n">7</span> Limitations</h2>
 
 <ul class="tight">
   <li id="lim-arms"><b>Two contamination arms were designed and not run.</b> An
@@ -775,11 +768,11 @@ and two arms measure it directly by removing an input at a time.</p>
   16:05–16:20 slice, so a release that crosses at 16:22 is dropped rather than
   measured from its own timestamp — NVIDIA's three qualifying events are excluded by
   one and two minutes. The timing filter also removes contaminated events without
-  undoing their effect on the per-day liquidity ranking (Section IV.D).</li>
+  undoing their effect on the per-day liquidity ranking (Section 4.4).</li>
   <li><b>Every fill is paper.</b> No result here has been traded.</li>
 </ul>
 
-<h2><span class="n">VIII.</span> References</h2>
+<h2><span class="n">8</span> References</h2>
 
 <ol class="refs">
 <li>Ball, R., &amp; Brown, P. (1968). An empirical evaluation of accounting income numbers. <i>Journal of Accounting Research</i>, 6(2), 159–178.</li>
@@ -802,7 +795,7 @@ and two arms measure it directly by removing an input at a time.</p>
 <li>Sharpe, W. F. (1966). Mutual fund performance. <i>Journal of Business</i>, 39(1), 119–138.</li>
 </ol>
 
-<h2><span class="n">Appendix A.</span> Every trade decision</h2>
+<h2><span class="n">A</span> Every trade decision</h2>
 
 <p id="appendix-para"></p>
 
@@ -990,7 +983,7 @@ $("effort-table").insertAdjacentHTML("beforeend",
    it disagrees on one event in seven, and those are the marginal reads.</td></tr></tfoot>`);
 
 // The audit ran BEFORE the timing filter, so it covers every event the study
-// scored (audit.resolved), not the smaller set that survives Section IV.D.
+// scored (audit.resolved), not the smaller set that survives Section 4.4.
 const AN = int(D.audit.resolved);
 const AUDIT = [
   ["1. prompt carries no outcome", "PASS", `all ${AN} requests byte-identical when anchor, reaction, exit, move and forward return are replaced with noise — the prompt is a pure function of ticker and run-up`],
@@ -1040,7 +1033,7 @@ $("horizon-para").innerHTML = `The two legs behave differently in the holding pe
   roughly flat from T+1 to T+5 (${sgn(HZ[0].gated)} to ${sgn(HZ[4].gated)}bp) while
   the refused leg gets monotonically worse (${sgn(HZ[0].vetoed)} to
   ${sgn(HZ[2].vetoed)}bp by T+3). Whatever the model is detecting in a release it
-  refuses, that thing keeps working against the tape for days. Section V.D takes the
+  refuses, that thing keeps working against the tape for days. Section 5.4 takes the
   obvious next step.`;
 
 table($("year-table"), ["year", "events", "ungated", "gated", "refused", "spread"],
@@ -1060,7 +1053,7 @@ $("year-para").innerHTML = `2022 is the clearest single case for the gate: the
        more than ${n1(REG.threshold_pct, 0)}% — ${stressed.join(", ")} — so the
        claim no longer rests on a single bear market.`
     : `That is the only year in the sample where the index drew down more than
-       ${n1(REG.threshold_pct, 0)}%, and Section VII says so.`}
+       ${n1(REG.threshold_pct, 0)}%, and Section 7 says so.`}
   The spread is positive in ${posYears} of ${D.years.length} calendar years, which
   is a weaker but more honest claim than any single-year number.`;
 if ($("lim-regime")) {
@@ -1513,7 +1506,7 @@ if (A.per_arm && A.per_arm.length > 1) {
   const bl = A.blind || {}, nt = A.notext || {};
   const byArm = Object.fromEntries(A.per_arm.map((r) => [r.arm, r]));
   $("lim-arms").innerHTML = `<b>The contamination arms bound memorisation; they do
-    not eliminate it.</b> Both now run (Section V.G), and neither is clean. The
+    not eliminate it.</b> Both now run (Section 5.7), and neither is clean. The
     identity scrub still leaves the issuer recognisable
     ${bl.ident_pct !== undefined ? `${n1(bl.ident_pct)}% of the time` : ""} — a
     large company is identifiable from its own segment names and revenue scale,
@@ -1536,10 +1529,10 @@ if (A.per_arm && A.per_arm.length > 1) {
   e.innerHTML += ` Three indirect controls are reported below — a permutation
     null, a contamination gradient, and the absence of any retrieval channel —
     ${extra.length
-      ? `and the two direct ablation arms ran on this panel; Section V.G reports
+      ? `and the two direct ablation arms ran on this panel; Section 5.7 reports
          what they found.`
       : `and two direct ablation arms were designed but have not run on this
-         panel, which Section VII states as a limitation.`}`;
+         panel, which Section 7 states as a limitation.`}`;
 })();
 
 /* -------------------------------------------------------- 5.7 the decade */
