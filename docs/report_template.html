@@ -298,7 +298,8 @@ th.sortable[aria-sort="descending"]::after { content:"\2193"; opacity:1; }
   <div class="byline">
     <b id="bl-sub">Can a language model tell which earnings reactions continue — and is it reading, or remembering?</b><br>
     <b id="bl-n"></b> after-close earnings events, <b id="bl-span"></b> ·
-    <b id="bl-model"></b> and three earlier models · revised 2026-08-06.
+    <b id="bl-model"></b> and <b id="bl-others"></b> earlier models ·
+    revised 2026-08-06.
   </div>
 </header>
 
@@ -908,6 +909,17 @@ not four independent observations.</p>
 </div>
 
 <p id="xm-para"></p>
+
+<p><b>One further attempt on this bound is reported in Appendix B.</b> The
+limitation of the test just described is that the memorisation effect and the
+skill gap are identified from the same straddle window, so the natural repair is a
+model whose corpus closes far earlier — giving a long pre-period in which neither
+model has an informational advantage and the skill gap can be measured on its own.
+That experiment was run. It did not tighten the bound, and the reason it could not
+is worth more than the result: the constraint is the <em>number of straddle
+events</em>, which is fixed by the calendar and cannot be bought. Its point
+estimates agree with this section's on sign, and its quarter-by-quarter series
+shows no discontinuity at the cutoff.</p>
 </div>
 
 <h2><span class="n">6</span> What the fills actually cost</h2>
@@ -1098,11 +1110,59 @@ policy of Section 5.4, both charged their own measured spreads.</p>
   </span>
 </div>
 
+<h2><span class="n">B</span> Addendum: buying an earlier training cutoff</h2>
+
+<div id="legacy-block">
+<p>Section 5.9 identifies the memorisation effect and the skill gap from the
+<em>same</em> <span id="lg-straddle"></span> events — the ones falling between the
+earliest and latest Opus cutoff. One window, two parameters, which is the arithmetic
+reason its bound came out as wide as it did. The obvious repair is a model whose
+corpus closes much earlier, so that a long stretch of the panel sits inside
+<em>both</em> models' training data and the skill gap can be measured on its own.</p>
+
+<p id="lg-avail"></p>
+
+<div class="scroll"><table id="lg-regime-table">
+  <caption><b>Table 28:</b> The three regimes an earlier cutoff creates</caption>
+</table></div>
+
+<p id="lg-design">The estimator is a difference of means, not a regression. Both
+models score the same events, so the within-event difference removes the event
+effect exactly — no fixed effects to estimate and no clustering assumption to
+defend. Memorisation is then how much the gap <em>widens</em> in the middle regime,
+where only the newer model could have read the outcome. The bottom regime is a free
+falsification: with both models outside their corpus the gap must return to its
+baseline, and if it does not, whatever moved was the market rather than memory.</p>
+
+<div class="callout">
+  <span class="label">The result is that this does not work, and why is the useful part</span>
+  <p id="lg-verdict"></p>
+</div>
+
+<div class="scroll"><table id="lg-did-table">
+  <caption><b>Table 29:</b> Memorisation effect against two controls, by outcome</caption>
+</table></div>
+
+<p id="lg-controls"></p>
+
+<div class="fig">
+  <div id="lg-chart"></div>
+  <figcaption><b>Figure 12:</b> The newer-minus-earlier model gap, quarter by
+  quarter. A memorisation effect must appear as a step at the earlier model's
+  cutoff, marked. <span id="lg-figcap"></span></figcaption>
+</div>
+
+<p id="lg-eventstudy"></p>
+
+<p id="lg-caveat"></p>
+</div>
+
 <hr class="end">
 <p class="kv">Generated from <code>docs/report_data.json</code> by
 <code>scripts/build_paper.py</code>. Harness:
 <code>research_llm_contamination.py</code>, <code>research_holding_period.py</code>,
-<code>verify_no_lookahead.py</code>. Paper fills only; nothing here has been traded.</p>
+<code>research_legacy_did.py</code>, <code>verify_no_lookahead.py</code>. Paper fills
+only; nothing here has been traded.</p>
 
 </div>
 <div class="tip" id="tip" role="status" aria-live="polite"></div>
@@ -1157,6 +1217,7 @@ const MODEL_NAME = (m) => MODELS[m] || m;
    — the same failure that once shipped a paper with an empty appendix. */
 const XM = D.xmodel || {};
 const FC = D.spreads || {};
+const LG = D.legacy || {};
 
 /** Build a table from a header row and an array of cell-spec rows.
  *  A cell is a string, or {v, c} for a value with a class. */
@@ -1199,6 +1260,17 @@ document.querySelectorAll(".pv-cost").forEach((e) => {
 setText("bl-n", int(D.paths_n));
 setText("bl-span", D.span.join(" – "));
 setText("bl-model", MODEL_NAME(D.model));
+/* Counted, not typed. This read "three earlier models" until Appendix B
+   added a fourth, and a hand-typed count is a claim that goes stale the
+   moment a model is added anywhere in the study. */
+{
+  const others = new Set();
+  ((XM.models) || []).forEach((r) => { if (r.model !== D.model) others.add(r.model); });
+  const lgm = (LG.models) || {};
+  if (lgm.legacy && lgm.legacy !== D.model) others.add(lgm.legacy);
+  const WORD = ["no", "one", "two", "three", "four", "five", "six", "seven"];
+  setText("bl-others", WORD[others.size] || String(others.size));
+}
 setText("bl-effort", D.effort);
 /* Inference cost is a fact about how the study was run, not a result, so it
    is off the masthead and out of the key figures. It still appears where it
@@ -2127,7 +2199,19 @@ if (A.per_arm && A.per_arm.length > 1) {
            ${int(XM.power.events_needed)} events against
            ${int(XM.power.events_have)} here` : ""}. And it rests on published
       training-cutoff dates being accurate, which is an assumption about the
-      model provider that this study cannot independently verify.`;
+      model provider that this study cannot independently verify.
+      ${(LG.outcomes && !LG.unavailable)
+        ? `<b>The obvious way to buy more power does not work</b>, and Appendix B
+           reports the attempt: a model with a much earlier corpus adds
+           ${int((LG.regime_n || {}).R1)} pre-period events in which neither
+           model has an advantage, which should pin the skill gap and leave
+           memorisation as the residual. It widens the bound instead, to
+           ±${n1(LG.bound_bp, 0)}bp, because the limit is the
+           ${int((LG.regime_n || {}).R2)} straddle events rather than the
+           control — and no purchase changes a count the calendar sets. Every
+           model with a pre-2025 cutoff has since been retired, so this
+           limitation is now supply-constrained and permanent.`
+        : ""}`;
   }
 }
 
@@ -3180,6 +3264,152 @@ function accHistRedraw() {
       <text x="${L + Math.max(w, 1) + 6}" y="${y + bh / 2 + 3}" font-size="10" fill="${cssv("--ink")}" font-family="${cssv("--mono")}">${x.n}</text>`;
   }).join("") + `<text x="${L}" y="${H - 8}" font-size="10" fill="${cssv("--muted")}" font-family="${cssv("--mono")}">green = public before the 16:20 entry · red = not</text>`);
 }
+/* ------------------------------------------------- Appendix B: earlier cutoff */
+function drawLegacy() {
+  const es = LG.event_study || [];
+  if (!es.length) return;
+  const W = 760, H = 250, L = 46, R = 14, T = 12, B = 42;
+  const vals = es.map((r) => r.gap);
+  const hi = Math.max(...vals, 0), lo = Math.min(...vals, 0);
+  const span = (hi - lo) || 1;
+  const y0 = T + (H - T - B) * (hi / span);
+  const bw = (W - L - R) / es.length;
+  let inner = `<line x1="${L}" x2="${W - R}" y1="${y0}" y2="${y0}"
+    stroke="${cssv("--rule")}"></line>`;
+  es.forEach((r, i) => {
+    const x = L + i * bw;
+    const h = Math.abs(r.gap) / span * (H - T - B);
+    const y = r.gap >= 0 ? y0 - h : y0;
+    // Regime colour, not sign colour. The question this figure answers is
+    // whether the bars change character at the boundary, so the boundary is
+    // what the palette has to encode.
+    const col = r.regime === "R2" ? cssv("--s1")
+      : (r.regime === "R3" ? cssv("--muted") : cssv("--s4") || cssv("--ink"));
+    inner += `<rect x="${x + 1}" y="${y}" width="${Math.max(bw - 2, 1)}"
+      height="${Math.max(h, 1)}" fill="${col}" opacity=".8"></rect>`;
+    if (r.quarter.endsWith("Q1")) {
+      inner += `<text x="${x + bw / 2}" y="${H - 24}" text-anchor="middle"
+        font-size="9" fill="${cssv("--muted")}"
+        font-family="${cssv("--mono")}">${r.quarter.slice(0, 4)}</text>`;
+    }
+  });
+  // The cutoff line: drawn at the first quarter that is out of the earlier
+  // model's corpus, which is the only place a memorisation step could be.
+  const k = es.findIndex((r) => r.regime === "R2");
+  if (k > 0) {
+    const x = L + k * bw;
+    inner += `<line x1="${x}" x2="${x}" y1="${T}" y2="${H - B + 8}"
+        stroke="${cssv("--neg")}" stroke-width="1.5" stroke-dasharray="4 3"></line>
+      <text x="${x + 5}" y="${T + 11}" font-size="10" fill="${cssv("--neg")}"
+        font-family="${cssv("--mono")}">earlier model's corpus closes</text>`;
+  }
+  inner += `<text x="${L - 8}" y="${y0 + 3}" text-anchor="end" font-size="10"
+    fill="${cssv("--muted")}" font-family="${cssv("--mono")}">0</text>`;
+  setHTML("lg-chart", svg(W, H, inner,
+    `aria-label="Gap between the newer and earlier model, by quarter"`));
+}
+
+if (LG.unavailable || !LG.outcomes) {
+  absent("legacy-block", LG.unavailable || "not computed",
+         "The earlier-cutoff addendum");
+} else {
+  const SB = LG.outcomes.signed_bp, SK = LG.skill || {};
+  const RN = LG.regime_n || {};
+  setText("lg-straddle", int((RN.R2 !== undefined) ? RN.R2 : null));
+
+  setHTML("lg-avail", `No such model can be bought. Every Anthropic model with a
+    training cutoff before 2025 — Claude 3 Opus, Claude 3.5 and 3.7 Sonnet,
+    Claude 4 and 4.1 Opus — returns a 404 as of this build, verified by calling
+    them rather than by reading the deprecation schedule. The earliest corpus
+    still reachable is <b>Claude Haiku 4.5</b>, which closes ten months before
+    Claude Opus 5's. <b>The width of the out-of-corpus window is therefore
+    supply-constrained, not budget-constrained</b> — a finding in its own right,
+    since it means the bound in Section 5.9 cannot be narrowed by spending more.`);
+
+  table($("lg-regime-table"),
+    ["regime", "dates", "newer model", "earlier model", "events"],
+    [["R1 — the pre-period", `to ${LG.r1_hi || "2025-07"}`, "in corpus", "in corpus", int(RN.R1)],
+     ["R2 — the straddle", `${LG.r2_lo || "2025-08"} – ${LG.r2_hi || "2026-05"}`,
+      "in corpus", { v: "OUT", c: "neg" }, int(RN.R2)],
+     ["R3 — the placebo", `after ${LG.r2_hi || "2026-05"}`,
+      { v: "OUT", c: "neg" }, { v: "OUT", c: "neg" }, int(RN.R3)]]);
+
+  const bd = LG.bound_bp, bl = LG.bound_bp_local;
+  const worse = (bd > 85.9);
+  setHTML("lg-verdict", `The pre-period does not rescue the estimate. The bound
+    comes out at <b>±${n1(bd, 0)}bp</b> against the decade-wide control and
+    <b>±${n1(bl, 0)}bp</b> against the local one — ${worse ? "<b>wider</b>"
+    : "narrower"} than the ±85.9bp Section 5.9 reports, not narrower. The
+    arithmetic says why. The pre-period's standard error is
+    ${n1((SB.by_regime.R1 || {}).se, 1)}bp on ${int((SB.by_regime.R1 || {}).n)}
+    events, while the straddle's is ${n1((SB.by_regime.R2 || {}).se, 1)}bp on
+    ${int((SB.by_regime.R2 || {}).n)}; the difference of two means inherits
+    essentially all of the larger one. <b>The binding constraint was never the
+    control period — it is the number of straddle events, and the calendar
+    fixes that number.</b> This is the same wall Section 5.9 reaches, arrived at
+    from the opposite direction, which makes it a firmer conclusion rather than
+    a new one.`);
+
+  const OUTS = [["signed_bp", "following the model's own direction", 1, "bp"],
+                ["gate_pnl", "the gate, scored per event", 1, "bp"],
+                ["correct", "directional accuracy", 4, ""]];
+  const didRows = [];
+  OUTS.forEach(([k, label, dp, unit]) => {
+    const o = LG.outcomes[k]; if (!o) return;
+    const f = (x) => (x === null || x === undefined || Number.isNaN(x))
+      ? "—" : sgn(x, dp) + unit;
+    didRows.push({ cls: k === "signed_bp" ? "hl" : "", cells: [
+      label,
+      { v: f(o.did.estimate), c: cls(-o.did.estimate) },
+      `[${n1(o.did.lo90, dp)}, ${n1(o.did.hi90, dp)}]`,
+      { v: f(o.did_local.estimate), c: cls(-o.did_local.estimate) },
+      o.placebo.degenerate ? "degenerate" : f(o.placebo.estimate)] });
+  });
+  table($("lg-did-table"), ["outcome", "R2 − R1", "90% CI", "vs local control",
+    "placebo (R3 − R1)"], didRows);
+
+  setHTML("lg-controls", `<b>Every point estimate carries the wrong sign.</b>
+    Memorisation would make the newer model relatively <em>better</em> on the
+    events only it could have read; instead the gap ${
+    SB.did.estimate < 0 ? "narrows" : "widens"} there, by
+    ${n1(Math.abs(SB.did.estimate), 0)}bp. Three outcomes and two controls agree
+    on the direction, and none is significant. The placebo column is reported for
+    completeness and should not be read: the both-out regime holds
+    ${int(RN.R3)} events, and on accuracy it has no variance at all, so a
+    bootstrap over it returns an interval of zero width and a p-value that rests
+    on nothing.`);
+
+  const q = (LG.event_study || []).filter((r) => r.regime !== "R3");
+  const last1 = [...q].filter((r) => r.regime === "R1").slice(-1)[0] || {};
+  const first2 = q.find((r) => r.regime === "R2") || {};
+  setHTML("lg-eventstudy", `<b>There is no step at the cutoff.</b> The last
+    quarter inside the earlier model's corpus reads
+    ${sgn(last1.gap, 0)}bp; the first quarter outside it reads
+    ${sgn(first2.gap, 0)}bp. A corpus effect has to be a discontinuity at that
+    line and there is not one. What the figure does show is a decline — from
+    roughly 150–250bp across 2016–2024 to double and then single digits — that
+    begins <em>well before</em> the boundary and is the same 2026 weakness
+    Section 5.2 documents. A test that read the level rather than the step
+    would have called that decline contamination and been wrong about it.`);
+
+  const hasSignal = (SK.legacy_has_signal === true);
+  setHTML("lg-caveat", `<b>One caveat, and it cuts in a specific direction.</b>
+    The earlier model is much the weaker: ${n1(100 * (SK.haiku45 || {}).accuracy, 1)}%
+    directional accuracy against ${n1(100 * (SK.opus5 || {}).accuracy, 1)}%, and its
+    own edge over the pre-period is ${hasSignal ? "" : "<b>not</b> "}separable
+    from zero (t = ${n1((SK.haiku45 || {}).t, 2)}). ${hasSignal ? ""
+    : `A noisy control inflates the variance of the contrast — which is visible
+    in the width of the bound above — but it does <em>not</em> bias the point
+    estimate. So the wrong signs still count as evidence, and the interval is
+    honestly wide rather than falsely tight. `}The design is deliberately robust
+    to the earlier model being bad in every other respect: its weakness, its
+    shallower reasoning budget and its different request shape are constants
+    that the within-event differencing removes. It would break only if that
+    handicap varied across the regimes, which is what the placebo tests.`);
+
+  drawLegacy();
+}
+
 matchMedia("(prefers-color-scheme: dark)").addEventListener("change", repaint);
 new MutationObserver(repaint).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
 </script>

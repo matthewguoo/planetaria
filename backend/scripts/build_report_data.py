@@ -1020,7 +1020,8 @@ def main() -> None:
     # payload so the page can say WHY a section is absent rather than
     # rendering an unexplained gap.
     for key, mod, fn in (("spreads", "research_spread_sim", "compute"),
-                         ("xmodel", "research_out_of_training", "compute")):
+                         ("xmodel", "research_out_of_training", "compute"),
+                         ("legacy", "research_legacy_did", "compute")):
         try:
             data[key] = getattr(__import__(mod), fn)(args)
         except SystemExit as exc:

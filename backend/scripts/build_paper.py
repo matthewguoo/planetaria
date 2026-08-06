@@ -46,7 +46,11 @@ KEEP = ("model", "effort", "universe_n", "scored_n", "paths_n", "gated_n",
         # out-of-training test. Listed here at the same time as the keys were
         # added to build_report_data — that ordering is the whole discipline,
         # because the failure mode is silent.
-        "spreads", "xmodel", "late_filers", "liquidity_study")
+        "spreads", "xmodel", "late_filers", "liquidity_study",
+        # Added 2026-08-06 with Appendix B. The warning above is accurate:
+        # omitting this rendered "the earlier-cutoff addendum is not in this
+        # build: not computed" over a fully computed result.
+        "legacy")
 
 TRADE_COLS = ["date", "sym", "dir", "conf", "guid", "move", "run5d", "dvM",
               "gated", "why", "t1", "t3", "shipped", "exit", "summary"]

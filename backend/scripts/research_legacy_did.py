@@ -116,8 +116,9 @@ def paired(effort: str = "medium") -> pd.DataFrame:
     models scored it; a left join would silently let Opus-only events into
     R1 and reintroduce the composition problem the pairing exists to remove.
     """
-    p = panel(effort=effort)
-    p = p[p["model"].isin([STUDY, LEGACY])]
+    # Our own cohort, passed explicitly. panel() defaults to Section 5.9's
+    # four Opus models and must keep doing so.
+    p = panel(effort=effort, models=(STUDY, LEGACY))
     have = set(p["model"].unique())
     missing = {STUDY, LEGACY} - have
     if missing:
@@ -239,10 +240,19 @@ def event_study(m: pd.DataFrame, col: str = "signed_bp") -> list[dict]:
     return rows
 
 
-def compute(effort: str = "medium") -> dict:
+def compute(args=None, effort: str = "medium") -> dict:
+    """`args` is accepted positionally so the report builder can call this
+    the same way it calls every other research module; the effort it carries
+    wins when it has one."""
+    effort = getattr(args, "effort", None) or effort
     m = paired(effort=effort)
     res = {"n_events": int(len(m)),
            "regime_n": {r: int((m["regime"] == r).sum()) for r, *_ in REGIMES},
+           # Boundaries travel WITH the numbers. A page that types "2025-07"
+           # into a caption keeps printing it after someone edits R1_HI.
+           "r1_hi": R1_HI, "r2_lo": "2025-08-01", "r2_hi": R2_HI,
+           "r1_local_lo": R1_LOCAL_LO,
+           "models": {"study": STUDY, "legacy": LEGACY},
            "skill": skill_check(m),
            "outcomes": {c: did(m, c) for c, _ in OUTCOMES}}
     # The edge the bound is a fraction OF: the study model's own gated result

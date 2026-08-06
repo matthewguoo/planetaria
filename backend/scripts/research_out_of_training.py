@@ -82,11 +82,38 @@ def _cutoff_end(yyyymm: str) -> str:
         f"{y}-{m:02d}-30" if m != 2 else f"{y}-02-29")
 
 
-def panel(effort: str = "medium") -> pd.DataFrame:
-    """One row per (event, model), with the outcome and corpus status."""
+# THE COHORT THIS SECTION TESTS, PINNED. MODELS is a shared registry, and a
+# study that reads "every model in the registry" silently re-runs itself the
+# moment anything is added to it. Registering Haiku 4.5 for the Appendix B
+# addendum did exactly that: this test quietly became a five-model one, its
+# bound moved from 85.9bp to 69.6bp and its point estimate doubled, while the
+# prose around it still said "four models".
+#
+# The tighter bound was not a better measurement. Haiku's cutoff precedes this
+# window entirely, so it is out-of-corpus for every event in it and carries no
+# within-model variation at all — its model intercept and its corpus indicator
+# are the same column. The design of this test is four models sitting on BOTH
+# sides of a cutoff; a model on one side only buys apparent precision by
+# leaning on functional form. Adding a model here is a decision to be made
+# deliberately, in this tuple, not a side effect of registering one elsewhere.
+COHORT = ("claude-opus-5", "claude-opus-4-8",
+          "claude-opus-4-7", "claude-opus-4-6")
+
+
+def panel(effort: str = "medium",
+          models: tuple[str, ...] = COHORT) -> pd.DataFrame:
+    """One row per (event, model), with the outcome and corpus status.
+
+    `models` defaults to this section's own cohort. Callers studying a
+    different set — Appendix B pairs the study model against an earlier
+    cutoff — pass their own and do not disturb this one.
+    """
     res = _load_results(model=None)
     if res.empty:
         raise SystemExit("no verdicts on disk")
+    res = res[res["model"].isin(models)]
+    if res.empty:
+        raise SystemExit(f"no verdicts on disk for any of {', '.join(models)}")
     res = res[(res["effort"] == effort) & (res["arm"] == "named")]
 
     universe = load_universe_v2()
@@ -225,6 +252,9 @@ def memory_probe(effort: str = "medium") -> dict:
     res = _load_results(model=None)
     if res.empty:
         return {}
+    # Same cohort as the panel above, and for the same reason: this table is
+    # reported as a four-model probe, so it must not silently acquire a fifth.
+    res = res[res["model"].isin(COHORT)]
     res = res[(res["effort"] == effort) & (res["arm"] == "notext")]
     if res.empty or res["model"].nunique() < 2:
         return {}
