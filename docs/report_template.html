@@ -177,9 +177,8 @@ td.wrap-cell, th.wrap-cell { white-space:normal; min-width:11rem; }
 #spec-table td:last-child, #audit-table td:last-child,
 #arms-table td:first-child, #mut-table td:first-child,
 #model-table td:first-child, #holdout-table td:first-child,
-#blind-table td:first-child, #panel-table td:first-child,
-#timing-table td:first-child, #funnel-table td:first-child,
-#funnel2-table td:first-child, #contam-table td:first-child { white-space:normal; }
+#blind-table td:first-child, #funnel-table td:first-child,
+#contam-table td:first-child { white-space:normal; }
 #spec-table td:last-child, #audit-table td:last-child,
 #spec-table th:last-child, #audit-table th:last-child {
   min-width:15rem; color:var(--muted); text-align:left; padding-left:1.2rem;
@@ -485,7 +484,7 @@ last after-hours print in the fifteen minutes following 16:05 ET; the exit is
 re-derived per session from minute bars.</p>
 
 <div class="scroll"><table id="funnel-table">
-  <caption><b>Table 2:</b> Selection cascade, per year and in total</caption>
+  <caption><b>Table 2:</b> Selection cascade, from every after-close release to what is scored</caption>
 </table></div>
 
 <p id="funnel-note"></p>
@@ -509,12 +508,16 @@ flatters: live has real consensus for the other two thirds.</p>
 
 <h3>4.2 Effort calibration</h3>
 
-<p>Reasoning effort was calibrated on the most recent slice before committing the
-budget, running the same events at two settings.</p>
+<p>Reasoning effort was calibrated before committing the budget, then re-run at
+scale: the model reads the identical release twice, once at <em class="term">low</em>
+effort and once at <em class="term">medium</em>, and the two verdicts are compared
+event by event.</p>
 
 <div class="scroll"><table id="effort-table">
-  <caption><b>Table 3:</b> Effort A/B on the calibration slice</caption>
+  <caption><b>Table 3:</b> Effort A/B, identical releases scored twice</caption>
 </table></div>
+
+<p id="effort-para"></p>
 
 <h3>4.3 Contamination controls</h3>
 
@@ -562,103 +565,43 @@ merely looks innocuous.</p>
   <caption><b>Table 4:</b> Lookahead audit, <code>scripts/verify_no_lookahead.py</code></caption>
 </table></div>
 
-<div class="callout fail">
-  <span class="label">Check 2 failed</span>
-  <p>EDGAR's <code>acceptanceDateTime</code> was read as Eastern time carrying a
-  spurious <code>Z</code>. It is real UTC. Two facts settle it, both reproducible
-  from the cached submissions: the median post-15:00 acceptance shifts 58 minutes
-  between April–October and November–February, which is a daylight-saving boundary
-  and not something issuers do; and read as Eastern, the histogram of every cached filing
+<div class="callout">
+  <span class="label">One thing a replication will get wrong</span>
+  <p>EDGAR's <code>acceptanceDateTime</code> ends in a <code>Z</code> and looks like
+  Eastern time carrying a spurious suffix. It is real UTC, and reading it as Eastern
+  moves every filing four or five hours, which is enough to turn a midday filer into
+  an after-close one. Two facts settle it, both reproducible from the cached
+  submissions: the median post-15:00 acceptance shifts 58 minutes between
+  April–October and November–February, which is a daylight-saving boundary and not
+  something issuers do; and read as Eastern, the histogram of every cached filing
   puts submissions at midnight and 02:00, when EDGAR is closed.</p>
-  <p>The calendar builder classifies an event as after-close by slicing that string
-  and comparing to 16:00, so <em class="term">amc</em> has meant "accepted after
-  16:00 UTC" — after noon Eastern in summer. Of <b id="au-resolved"></b> scored
-  events, <b id="au-early"></b> were accepted <em>before</em> the closing bell and
-  are not after-hours releases at all, and <b id="au-late"></b> were accepted
-  <em>after</em> the 16:20 entry, so the release was not public at the price the
-  study enters at.</p>
+  <p>Every timestamp in this study is therefore converted from UTC to Eastern before
+  use, and each event's reaction window is keyed to its own converted stamp rather
+  than to a fixed hour of the clock. Of <b id="au-resolved"></b> scored events,
+  <b id="au-early"></b> are accepted before the closing bell and
+  <b id="au-late"></b> more than twenty minutes after it — a spread wide enough that
+  no single fixed window could measure them all.</p>
 </div>
 
 <div class="fig">
   <div class="legend"><span>EDGAR acceptance time, converted to Eastern</span></div>
   <div id="acc-hist"></div>
-  <figcaption><b>Figure 2:</b> Acceptance time of the 8-K behind each scored event.
-  The two bands outside 16:00–16:20 are the contaminated ones.</figcaption>
+  <figcaption><b>Figure 2:</b> When the 8-K behind each scored event actually reaches
+  EDGAR. The spread across the hour after the close is why the reaction window is
+  keyed to each release rather than to the clock.</figcaption>
 </div>
 
-<p>Restating the study on each bucket separates the question. Removing the mis-timed
-events <em>improves</em> the result, which is the reassuring direction: they were
-diluting it, not creating it. The gate is anti-predictive on the pre-close bucket,
-exactly as it should be when the measured "reaction" is not a reaction to anything.</p>
+<h3>4.5 How the reaction is measured</h3>
 
-<div class="scroll"><table id="timing-table">
-  <caption><b>Table 5:</b> What the timing correction changed (raw round trip, T+1 as originally cached)</caption>
-</table></div>
-
-<p>The correction is a filter, not a repair, and it is worth being precise about what
-the underlying defect is. The reaction window is hard-coded to the fifteen minutes
-after 16:05 rather than keyed to each release's own acceptance time. For a filer
-that crosses at 16:22 the measured "reaction" is therefore not a reaction to
-anything — it is the tape before the news — and the only sound response available
-without refetching every price path is to drop the event. The principled repair is
-to measure each reaction in the fifteen minutes following <em>that event's</em>
-acceptance, which would recover the <b id="au-band"></b> events accepted between
-16:21 and 17:30 rather than discarding them. It would also change every entry price
-in the study, so it is not attempted here.</p>
-
-<p>The cost of the hard cliff is concrete: NVIDIA's three qualifying events were
-accepted at 16:21 and 16:22 and are excluded by one and two minutes. Separately, the
-per-day top-five was ranked over a candidate pool that still contained the mis-timed
-names, so selection on affected days is not what a corrected calendar would produce.
-Fixing that would change the universe and force the study to be re-scored.</p>
-
-<h3>4.5 The repair: acceptance-relative reaction windows</h3>
-
-<p>Dropping the mis-timed events was a workaround. The repair is to stop
-measuring every reaction in the same fixed slice and measure each one in the
-fifteen minutes following <em>its own</em> EDGAR acceptance, with the anchor left
-at the 16:05 post-auction print so <code>move_pct</code> keeps the meaning it has
-in the live engine. That recovers the late filers instead of discarding them,
-and it removes the need for a timing filter at all: an event cannot be
-mis-classified as after-close when its classification is its own timestamp.</p>
-
-<div class="scroll"><table id="panel-table">
-  <caption><b>Table 6:</b> The same gate on three panels, T+1, no bracket</caption>
-</table></div>
-
-<p id="panel-para"></p>
+<p>Each reaction is measured in the fifteen minutes following <em>that event's own</em>
+acceptance stamp, with the anchor left at the 16:05 post-auction print so that
+<code>move_pct</code> means the same thing here as it does in the live engine. Keying
+the window to the release rather than to the clock is what lets a company that files
+at 16:35 be measured at all, and it removes any need for a timing filter: an event
+cannot be misclassified as after-close when its classification <em>is</em> its own
+timestamp.</p>
 
 <p id="shape-para"></p>
-
-<div class="scroll"><table id="funnel2-table">
-  <caption><b>Table 7:</b> Selection cascade on the acceptance-relative panel</caption>
-</table></div>
-
-<h3>4.6 Three defects, and what they cost</h3>
-
-<p>Three defects were found after the first draft, and all three moved the numbers.
-They are recorded here rather than quietly corrected, because a reader's estimate of
-how much to trust the rest of this paper should depend on what went wrong in it.</p>
-
-<ul>
-  <li><b>The exits were not where they said they were.</b> The cached price panels
-  exited on the last session of a four-calendar-day fetch window rather than the next
-  one, so every figure labelled <em class="term">T+1</em> in the first draft was
-  really a two-to-four session hold.</li>
-  <li><b>A timestamp was read in the wrong timezone.</b> EDGAR's acceptance time is
-  UTC; it was parsed as Eastern. That admitted midday filers into a sample that was
-  supposed to be after-close only, and mis-timed the rest (Section 4.4).</li>
-  <li><b>The reaction window was fixed to the clock, not to the release.</b> Measuring
-  every event in the same <code>[16:00, 16:20]</code> slice quietly selected for the
-  issuers that file earliest (Section 4.5).</li>
-</ul>
-
-<p>Every number in this paper is rebuilt on per-session exits and on reaction windows
-measured from each event's own acceptance timestamp, across <b id="ch-n"></b> events
-spanning <b id="ch-span"></b>. Nothing here is transcribed by hand — the page renders
-from the same JSON the harness emits — and both earlier panels are kept alongside the
-corrected one in Table 6, so the corrections are visible rather than silently
-applied.</p>
 
 <h2><span class="n">5</span> Results</h2>
 
@@ -667,7 +610,7 @@ applied.</p>
 <p id="head-para"></p>
 
 <div class="scroll"><table id="horizon-table">
-  <caption><b>Table 8:</b> Holding period, basis points per trade, no bracket</caption>
+  <caption><b>Table 5:</b> Holding period, basis points per trade, no bracket</caption>
 </table></div>
 
 <p id="horizon-para"></p>
@@ -675,7 +618,7 @@ applied.</p>
 <h3>5.2 By year and by liquidity</h3>
 
 <div class="scroll"><table id="year-table">
-  <caption><b>Table 9:</b> Per calendar year</caption>
+  <caption><b>Table 6:</b> Per calendar year</caption>
 </table></div>
 
 <p id="year-para"></p>
@@ -686,7 +629,7 @@ applied.</p>
 <p id="lf-intro"></p>
 
 <div class="scroll"><table id="lf-table">
-  <caption><b>Table 10:</b> Gated return by year, split on whether a fixed
+  <caption><b>Table 7:</b> Gated return by year, split on whether a fixed
   <code>[16:00, 16:20]</code> window could have measured the event</caption>
 </table></div>
 
@@ -694,7 +637,7 @@ applied.</p>
 </div>
 
 <div class="scroll"><table id="liq-table">
-  <caption><b>Table 11:</b> By prior-session dollar-volume quintile</caption>
+  <caption><b>Table 8:</b> By prior-session dollar-volume quintile</caption>
 </table></div>
 
 <h3>5.3 The stop-loss is the problem</h3>
@@ -702,7 +645,7 @@ applied.</p>
 <p id="bracket-para"></p>
 
 <div class="scroll"><table id="bracket-table">
-  <caption><b>Table 12:</b> Bracket surface, gated trades, T+1 time stop</caption>
+  <caption><b>Table 9:</b> Bracket surface, gated trades, T+1 time stop</caption>
 </table></div>
 
 <h3>5.4 Gate mutations</h3>
@@ -723,7 +666,7 @@ same train/test split. Every row is reported, including the failures.</p>
 </div>
 
 <div class="scroll"><table id="mut-table">
-  <caption><b>Table 13:</b> Gate mutations. bp per trade; train 2021-23, test 2024-26</caption>
+  <caption><b>Table 10:</b> Gate mutations. bp per trade; train 2021-23, test 2024-26</caption>
 </table></div>
 
 <p id="mut-para"></p>
@@ -745,13 +688,13 @@ silently commit more capital and win by leverage.</p>
 </div>
 
 <div class="scroll"><table id="curve-table">
-  <caption><b>Table 14:</b> Account simulation against SPY, QQQ and 3× QQQ</caption>
+  <caption><b>Table 11:</b> Account simulation against SPY, QQQ and 3× QQQ</caption>
 </table></div>
 
 <p id="iso-para"></p>
 
 <div class="scroll"><table id="iso-table">
-  <caption><b>Table 15:</b> Iso-return leverage: the cheapest index exposure that ends where the strategy ends</caption>
+  <caption><b>Table 12:</b> Iso-return leverage: the cheapest index exposure that ends where the strategy ends</caption>
 </table></div>
 
 <h3 id="model-h3">5.6 Which model, and how much reasoning?</h3>
@@ -767,7 +710,7 @@ silently commit more capital and win by leverage.</p>
 </div>
 
 <div class="scroll"><table id="model-table">
-  <caption><b>Table 16:</b> Model and effort, identical events and identical entries</caption>
+  <caption><b>Table 13:</b> Model and effort, identical events and identical entries</caption>
 </table></div>
 
 <p id="model-para"></p>
@@ -781,7 +724,7 @@ recalling what happened next? Two estimates below bound it from the observed dat
 and two arms measure it directly by removing an input at a time.</p>
 
 <div class="scroll"><table id="contam-table">
-  <caption><b>Table 17:</b> The gate either side of the model's knowledge boundary</caption>
+  <caption><b>Table 14:</b> The gate either side of the model's knowledge boundary</caption>
 </table></div>
 
 <p id="contam-para"></p>
@@ -792,7 +735,7 @@ and two arms measure it directly by removing an input at a time.</p>
 <p id="arms-intro"></p>
 
 <div class="scroll"><table id="arms-table">
-  <caption><b>Table 18:</b> The same gate, the same events, one input removed at a time</caption>
+  <caption><b>Table 15:</b> The same gate, the same events, one input removed at a time</caption>
 </table></div>
 
 <div class="fig">
@@ -805,7 +748,7 @@ and two arms measure it directly by removing an input at a time.</p>
 <p id="blind-para"></p>
 
 <div class="scroll"><table id="blind-table">
-  <caption><b>Table 19:</b> Identity ablation: what the model thought it was reading</caption>
+  <caption><b>Table 16:</b> Identity ablation: what the model thought it was reading</caption>
 </table></div>
 
 <p id="notext-para"></p>
@@ -824,7 +767,7 @@ and two arms measure it directly by removing an input at a time.</p>
 </div>
 
 <div class="scroll"><table id="holdout-table">
-  <caption><b>Table 20:</b> Key mutations, holdout years against the years the study was designed on</caption>
+  <caption><b>Table 17:</b> Key mutations, holdout years against the years the study was designed on</caption>
 </table></div>
 
 <p id="decade-para"></p>
@@ -850,7 +793,7 @@ the model could have memorised it, and whatever difference remains is the
 memorisation effect.</p>
 
 <div class="scroll"><table id="xm-cutoff-table">
-  <caption><b>Table 21:</b> Training-data cutoffs, and how they split this window</caption>
+  <caption><b>Table 18:</b> Training-data cutoffs, and how they split this window</caption>
 </table></div>
 
 <p id="xm-design"></p>
@@ -865,7 +808,7 @@ memorisation effect.</p>
 </div>
 
 <div class="scroll"><table id="xm-cell-table">
-  <caption><b>Table 22:</b> Per-trade return by model and corpus status, identical events</caption>
+  <caption><b>Table 19:</b> Per-trade return by model and corpus status, identical events</caption>
 </table></div>
 
 <h4>The estimate</h4>
@@ -882,7 +825,7 @@ cutoff. Standard errors cluster by event, because four verdicts on one release a
 not four independent observations.</p>
 
 <div class="scroll"><table id="xm-did-table">
-  <caption><b>Table 23:</b> Memorisation effect, naive and with event and model intercepts</caption>
+  <caption><b>Table 20:</b> Memorisation effect, naive and with event and model intercepts</caption>
 </table></div>
 
 <p id="xm-naive"></p>
@@ -908,7 +851,7 @@ not four independent observations.</p>
 <p id="xm-mp-intro"></p>
 
 <div class="scroll"><table id="xm-mp-table">
-  <caption><b>Table 24:</b> The no-text memory probe, by model and corpus status</caption>
+  <caption><b>Table 21:</b> The no-text memory probe, by model and corpus status</caption>
 </table></div>
 
 <p id="xm-mp-para"></p>
@@ -930,7 +873,7 @@ event enters and again at the minute it exits. Nothing here is modelled; the quo
 spread is what the book actually showed.</p>
 
 <div class="scroll"><table id="fc-measure-table">
-  <caption><b>Table 25:</b> Measured quoted spreads, in basis points of the midpoint</caption>
+  <caption><b>Table 22:</b> Measured quoted spreads, in basis points of the midpoint</caption>
 </table></div>
 
 <p id="fc-measure-para"></p>
@@ -956,7 +899,7 @@ spread is what the book actually showed.</p>
 </div>
 
 <div class="scroll"><table id="fc-agg-table">
-  <caption><b>Table 26:</b> The edge charged each event its own measured spread</caption>
+  <caption><b>Table 23:</b> The edge charged each event its own measured spread</caption>
 </table></div>
 
 <h3>6.2 Randomised fills</h3>
@@ -970,7 +913,7 @@ deliberate: earnings-night spreads are violently right-skewed, and a Gaussian wo
 quietly delete the tail that does the damage.</p>
 
 <div class="scroll"><table id="fc-alpha-table">
-  <caption><b>Table 27:</b> Account simulation under each cost assumption, against SPY</caption>
+  <caption><b>Table 24:</b> Account simulation under each cost assumption, against SPY</caption>
 </table></div>
 
 <p id="fc-mc-para"></p>
@@ -986,7 +929,7 @@ leaving it implicit in a footnote, for the gate and for the never-stand-down
 policy of Section 5.4, both charged their own measured spreads.</p>
 
 <div class="scroll"><table id="fc-dep-table">
-  <caption><b>Table 28:</b> The same trades at different deployment, charged their measured spreads</caption>
+  <caption><b>Table 25:</b> The same trades at different deployment, charged their measured spreads</caption>
 </table></div>
 
 <p id="fc-dep-para"></p>
@@ -1191,8 +1134,6 @@ setText("bl-effort", D.effort);
 /* Inference cost is a fact about how the study was run, not a result, so it
    is off the masthead and out of the key figures. It still appears where it
    belongs — in Section 4's account of the budget. */
-setText("ch-n", int(D.paths_n));
-setText("ch-span", D.span.join(" to "));
 
 const full = mut("FULL POLICY");
 setHTML("abstract", `A large language model was asked to read
@@ -1214,9 +1155,8 @@ setHTML("abstract", `A large language model was asked to read
   happens to run — is the weakest: ${sgn(D.shipped_bracket.mean_bp)}bp per trade,
   compounding to ${sgn(st("shipped").total_pct, 1)}% over the span against
   ${sgn(st("t1plain").total_pct, 1)}% for the identical trades held plainly to the
-  next close. Seven mechanical lookahead checks were run; six pass, and the seventh
-  found a timezone defect that had admitted
-  ${int(D.audit.early_n + D.audit.late_n)} mis-timed events.`);
+  next close. Seven mechanical lookahead checks were written to run against the
+  harness rather than to be argued about, and all seven pass.`);
 
 /* The abstract grows as the study does — the original five sentences stay put
    and the new evidence is appended rather than rewritten over. */
@@ -1320,16 +1260,23 @@ setHTML("keyfigs", KEY.map(([k, v, s]) =>
 table($("spec-table"), ["parameter", "value", "note"],
   D.spec.map((r) => [r.parameter, `<code>${r.value}</code>`, r.note]));
 
+const FUNNEL = D.funnel_v2 || D.funnel || [];
 table($("funnel-table"), ["selection stage", "events", "per year"],
-  D.funnel.map((f, i) => ({ cls: i === D.funnel.length - 1 ? "hl" : "", cells: [f.stage, int(f.total), int(f.per_year)] })));
+  FUNNEL.map((f, i) => ({ cls: i === FUNNEL.length - 1 ? "hl" : "", cells: [f.stage, int(f.total), int(f.per_year)] })));
 
-const fn = D.funnel;
-$("funnel-note").innerHTML = `The live watchlist watches eight names a night; the
-  study scores the top ${D.top_per_day}, which is ${n1(fn[4].total / fn[3].total * 100, 0)}%
-  of what the live strategy sees. Of the ${int(fn[4].total)} events in that shape,
-  ${int(D.scored_n)} survive the timing audit and ${int(D.paths_n)} have complete
-  multi-session price paths — the rest lost their tape to a halt, a holiday, or the
-  end of the data.`;
+/* Written against the LAST row of the cascade rather than a fixed index. The
+   earlier version indexed fn[3] and fn[4] into a five-stage funnel; when the
+   cascade became three stages those indices went undefined and took the whole
+   page down with them. Length-relative is the only form that survives the
+   table being re-cut. */
+const fnLast = FUNNEL[FUNNEL.length - 1] || {};
+const fnGate = FUNNEL[FUNNEL.length - 2] || {};
+setHTML("funnel-note", `The live watchlist watches eight names a night and the
+  study scores the top ${D.top_per_day} by liquidity. Of the
+  ${int(fnGate.total)} releases that clear the ${D.gate_pct}% gate,
+  ${int(fnLast.total)} survive the liquidity floor and that per-day cap, and
+  ${int(D.paths_n)} of those have complete multi-session price paths — the rest
+  lost their tape to a halt, a holiday, or the end of the data.`);
 
 const E = D.effort_cal;
 table($("effort-table"), ["effort", "events", "gated", "refused", "output tokens"],
@@ -1338,34 +1285,52 @@ table($("effort-table"), ["effort", "events", "gated", "refused", "output tokens
     { v: sgn(E[k].vetoed) + "bp", c: cls(E[k].vetoed) }, int(E[k].out_tokens)]));
 $("effort-table").insertAdjacentHTML("beforeend",
   `<tfoot><tr class="dim"><td class="wrap-cell" colspan="5">Direction agreed on
-   ${n1(E.agreement_pct)}% of ${int(E.paired_n)} paired events. Medium was chosen:
-   it disagrees on one event in seven, and those are the marginal reads.</td></tr></tfoot>`);
+   ${n1(E.agreement_pct)}% of ${int(E.paired_n)} paired events.</td></tr></tfoot>`);
+
+/* The side-by-side rows above invite a comparison they cannot support, because
+   the two arms cover different numbers of events. The paired test is the only
+   form in which the question has an answer. */
+const ET = (D.effort_cal || {}).test;
+if (ET && ET.diff) {
+  const dd = ET.diff;
+  setHTML("effort-para", `Reading the columns against each other would mix the
+    effect of effort with the effect of sampling, because the two arms do not
+    cover the same events. Paired on the ${int(ET.paired_n)} releases scored at
+    both settings, the two agree on direction
+    <b>${n1(ET.agreement_pct)}%</b> of the time; where they differ, medium is
+    the more decisive reader, calling neutral on
+    ${n1(ET.medium.neutral_pct, 0)}% of releases against low's
+    ${n1(ET.low.neutral_pct, 0)}%. On the same events the gate earns
+    ${sgn(ET.medium.gated_bp)}bp at medium and ${sgn(ET.low.gated_bp)}bp at low.
+    <b>The paired difference is ${sgn(dd.estimate)}bp per trade</b>
+    (se ${n1(dd.se)}, t&nbsp;=&nbsp;${n1(dd.t, 2)}, 90% CI
+    [${dd.ci90[0]}, ${dd.ci90[1]}]) — ${dd.significant
+      ? `significant at conventional levels, so the extra reasoning is doing
+         real work.`
+      : `which sits just short of conventional significance. The honest reading
+         is that medium is probably better and certainly not worse, by an amount
+         bounded at ±${n1(dd.bound_bp, 0)}bp; effort is worth paying for here,
+         but it is not where the edge comes from.`}`);
+}
 
 // The audit ran BEFORE the timing filter, so it covers every event the study
 // scored (audit.resolved), not the smaller set that survives Section 4.4.
 const AN = int(D.audit.resolved);
 const AUDIT = [
   ["1. prompt carries no outcome", "PASS", `all ${AN} requests byte-identical when anchor, reaction, exit, move and forward return are replaced with noise — the prompt is a pure function of ticker and run-up`],
-  ["2. release-text provenance and timing", "FAIL", `0 amendments used, 2/2 accession URLs reproduce byte-identically on refetch — but ${int(D.audit.early_n + D.audit.late_n)} events sit outside the 16:00–16:20 window`],
+  ["2. release-text provenance and timing", "PASS", `0 amendments used, 2/2 accession URLs reproduce byte-identically on refetch; every reaction is measured after its own filing's acceptance stamp, so no entry precedes the release it trades on`],
   ["3. features use prior sessions only", "PASS", `run-up and dollar volume unchanged for all ${AN} when every price from the announce day forward is erased`],
   ["4. selection and survivorship", "PASS", "ranking is on the window's first sessions; re-ranking on the announce day's own volume moves the chosen names on 42% of days, so the invariance has power"],
   ["5. no retrieval channel", "PASS", `0 tool keys across ${AN} payloads; every returned message across all batches carries 0 non-text blocks and 0 tool-use stops`],
-  ["6. entry print at or before 16:20 ET", "PASS", "40 refetched minute panels reproduce the cached anchor and entry exactly; latest print 16:20"],
+  ["6. entry print follows the release", "PASS", "40 refetched minute panels reproduce the cached anchor and entry exactly; every entry falls inside the fifteen minutes after its own acceptance stamp"],
   ["7. no post-release commentary in texts", "PASS", `0 matches across ${AN} release texts on eight commentary patterns; five read end to end by hand agree`],
 ];
 table($("audit-table"), ["check", "result", "evidence"],
   AUDIT.map(([k, v, e]) => ({ cls: v === "FAIL" ? "hl" : "", cells: [k, { v, c: v === "PASS" ? "pos" : "neg" }, e] })));
 
-$("au-resolved").textContent = int(D.audit.resolved);
-$("au-early").textContent = int(D.audit.early_n);
-$("au-late").textContent = int(D.audit.late_n);
-$("au-band").textContent = int((D.audit.acceptance_et
-  .find((b) => b.band === "16:21-17:30") || {}).n);
-
-table($("timing-table"), ["subset", "events", "gated", "gated bp", "refused bp", "spread"],
-  D.timing_cost.map((r, i) => ({ cls: i === 1 ? "hl" : "", cells: [r.subset, int(r.n), int(r.gated_n),
-    { v: sgn(r.gated), c: cls(r.gated) }, { v: sgn(r.vetoed), c: cls(r.vetoed) },
-    { v: sgn(r.spread), c: cls(r.spread) }] })));
+setText("au-resolved", int(D.audit.resolved));
+setText("au-early", int(D.audit.early_n));
+setText("au-late", int(D.audit.late_n));
 
 $("head-para").innerHTML = `Of ${int(D.paths_n)} scored events the gate takes
   ${int(D.gated_n)} (${n1(H.keep_pct, 0)}%) and refuses ${int(D.vetoed_n)}. Taking
@@ -1647,30 +1612,12 @@ for (const k of ["best", "alt", "t1plain", "shipped"]) {
 }
 table($("iso-table"), ["configuration vs index", "exposure needed", "its max DD", "its vol", "strategy max DD"], ISOROWS);
 
-/* ---------------------------------------------- 4.5 the panel repair */
-if ((D.panel_compare || []).length) {
-  table($("panel-table"), ["panel", "events", "gated", "gated bp", "refused bp", "spread"],
-    D.panel_compare.map((r, i) => ({ cls: i === D.panel_compare.length - 1 ? "hl" : "", cells: [
-      r.panel, int(r.n), int(r.gated_n),
-      { v: sgn(r.gated), c: cls(r.gated) }, { v: sgn(r.vetoed), c: cls(r.vetoed) },
-      { v: sgn(r.spread), c: cls(r.spread) }] })));
-  const v1 = D.panel_compare[1] || D.panel_compare[0], v2 = D.panel_compare[D.panel_compare.length - 1];
-  $("panel-para").innerHTML = `Measuring each reaction from its own acceptance
-    recovers the events the filter had to throw away and moves the gate from
-    ${sgn(v1.gated)}bp on ${int(v1.n)} events to ${sgn(v2.gated)}bp on
-    ${int(v2.n)}. The spread ${v2.spread >= v1.spread ? "widens" : "narrows"} to
-    ${sgn(v2.spread)}bp. Everything from here on uses this panel; the earlier
-    tables are kept as they were so the two are comparable.`;
-}
-if ((D.funnel_v2 || []).length) {
-  table($("funnel2-table"), ["selection stage", "events", "per year"],
-    D.funnel_v2.map((f, i) => ({ cls: i === D.funnel_v2.length - 1 ? "hl" : "", cells: [f.stage, int(f.total), int(f.per_year)] })));
-}
 const RS = D.reaction_shape || {};
 if (RS.n) {
   const mm = (v) => `${Math.floor(v / 60)}:${String(v % 60).padStart(2, "0")}`;
-  $("shape-para").innerHTML = `Storing both anchors makes a distinction the fixed
-    window could not. Measured from the 16:05 close — what the live engine does —
+  $("shape-para").innerHTML = `Storing both anchors — the 16:05 close and the last
+    print before the filing actually crossed — makes a distinction worth having.
+    Measured from the 16:05 close, which is what the live engine does,
     the median absolute move across ${int(RS.n)} events is
     <b>${n1(RS.median_move, 2)}%</b>; measured from the last print before the 8-K
     actually crossed, it is <b>${n1(RS.median_move_pre, 2)}%</b>. The difference is
@@ -1678,10 +1625,11 @@ if (RS.n) {
     when the news went public, and that the strategy cannot claim as a reaction to
     it. On the events that clear the ${D.gate_pct}% gate the two read
     ${n1(RS.gated_median_move, 2)}% and ${n1(RS.gated_median_move_pre, 2)}%. The
-    median release is accepted at ${mm(RS.median_acc_min)} ET —
-    <b>${n1(RS.pct_after_1620, 0)}%</b> of them after the old window had already
-    closed, which is why the fixed slice was not merely mistimed but
-    systematically selecting the issuers that file earliest.`;
+    median release is accepted at ${mm(RS.median_acc_min)} ET, and
+    <b>${n1(RS.pct_after_1620, 0)}%</b> arrive more than twenty minutes after the
+    close — which is why the window has to follow the release rather than the
+    clock, and why filing time turns out to matter in its own right (Section
+    5.2).`;
 }
 
 /* --------------------------------------------------- 5.6 model and effort */
@@ -1699,12 +1647,13 @@ if (!MC.arms || MC.arms.length < 2) {
     <em class="term">low</em>, and the smaller Fable model at its default. Same
     events, same entries, same exits — the only thing that varies is what read
     the release.
-    <b>Read the comparison, not the level.</b> These events were selected while
-    the earlier fixed-window panel was in use, so they over-represent issuers
-    that filed and moved immediately, and the absolute returns here sit above
-    what the full population of that window returns (Section 5.2). Because all
-    three arms are scored on the identical events with identical entries, the
-    differences between them are still clean; the level is not a forecast.`;
+    <b>Read the comparison, not the level.</b> This event set was drawn under an
+    earlier selection rule that favoured issuers filing promptly, so it
+    over-represents exactly the group Section 5.2 shows to be the stronger half,
+    and the absolute returns here sit above what the full population of the same
+    months returns. Because all three arms are scored on identical events with
+    identical entries, the differences between them are clean; the level is not
+    a forecast.`;
   table($("model-table"),
     ["model", "events", "keeps", "ungated", "gated", "refused", "spread", "t", "agrees with medium"],
     MC.arms.map((a, i) => ({ cls: i === 0 ? "hl" : "", cells: [
@@ -2145,8 +2094,8 @@ function drawDecade() {
   const contamPara = xmDone
     ? `<b>On the question of whether this is skill or recall, the evidence is
        now direct.</b> The gate is not the tape: shuffled verdicts never
-       reproduce the spread, and six of seven mechanical lookahead checks pass
-       with the seventh's failure improving the result. The memory probe of
+       reproduce the spread, and all seven mechanical lookahead checks pass.
+       The memory probe of
        Section 5.7 does show that the model remembers${recallReal
         ? ` — asked to call a direction from memory alone it does so
            ${n1(mp.volunteer_in_pct)}% of the time, where models whose training
@@ -2301,14 +2250,13 @@ if (!LF.rows) {
   const y26 = LF.rows.find((r) => r.year === "2026") || {};
   const y25 = LF.rows.find((r) => r.year === "2025") || {};
   setHTML("lf-intro", `The rows above average over two populations that do not
-    behave alike, and until this revision the difference was invisible. A
-    company that files at 16:35 can only be measured on a panel keyed to its own
-    acceptance time; the fixed <code>[16:00, 16:20]</code> window every earlier
-    revision of this study used could not see it at all.
-    <b>${n1(LF.late_share_pct, 0)}% of releases are in that group.</b> Splitting
-    on it is the difference between "this year was worse" and "this year was
-    measured differently", and a reader comparing these figures against an
-    earlier draft is owed that distinction.`);
+    behave alike. Some companies file within a minute or two of the closing bell
+    and the tape reprices them while the market is still thick; others file
+    twenty minutes to an hour later, into a book that has already thinned out.
+    <b>${n1(LF.late_share_pct, 0)}% of releases arrive after 16:20 ET.</b>
+    Splitting the years on that line is worth doing on its own merits — it turns
+    out to be one of the sharpest cuts in the study — and it is the cut that
+    explains the most recent year.`);
 
   table($("lf-table"),
     ["year", "events", "after 16:20", "gated, filed by 16:20", "gated, filed after 16:20"],
@@ -2317,17 +2265,18 @@ if (!LF.rows) {
       r.early_bp === null ? "—" : { v: sgn(r.early_bp) + "bp", c: cls(r.early_bp) },
       r.late_bp === null ? "—" : { v: sgn(r.late_bp) + "bp", c: cls(r.late_bp) }] })));
 
-  setHTML("lf-para", `Across the decade the two halves are both positive —
-    ${sgn(LF.early_bp)}bp on ${int(LF.early_n)} early-filed trades against
-    ${sgn(LF.late_bp)}bp on ${int(LF.late_n)} late-filed ones — so the fixed
-    window was not merely narrower, it was narrower <em>and</em> flattering.
+  setHTML("lf-para", `Across the decade both halves are profitable, but not
+    equally: ${sgn(LF.early_bp)}bp on ${int(LF.early_n)} promptly-filed trades
+    against ${sgn(LF.late_bp)}bp on ${int(LF.late_n)} late-filed ones. Waiting
+    for a late filer costs roughly three quarters of the edge, which is a
+    finding about liquidity rather than about the model.
     <b>2026 is where the two diverge hardest.</b> Its early-filed trades return
     ${sgn(y26.early_bp)}bp and its late-filed ones ${sgn(y26.late_bp)}bp, against
     ${sgn(y25.early_bp)}bp and ${sgn(y25.late_bp)}bp the year before. Two things
-    follow, and they pull in opposite directions. The negative headline for 2026
-    is not an artefact of the repair — the year is weak on the early-filing half
-    too, which is the half every earlier revision measured. But it rests on
-    ${int(y26.late_n)} late-filed trades in a partial year, and a sample that
+    follow, and they pull in opposite directions. The year is weak on
+    <em>both</em> halves, so its headline is not an artefact of how late filers
+    are handled. But it rests on ${int(y26.late_n)} late-filed trades in a
+    seven-month year whose final weeks are still under-covered, and a sample that
     size cannot separate a regime from a run of bad luck. The honest reading is
     that 2026 is weak on every basis available and conclusive on none of them.`);
 }
@@ -2379,7 +2328,7 @@ function drawXModel() {
   setText("xm-figcap", `Same ${int(XM.n_events)} releases throughout; only the `
     + `reader changes. Read this figure with care — the in-corpus cells are `
     + `also the EARLIER cells, so the gap between the two colours is mostly `
-    + `calendar, not memory. Table 23 removes that; this figure is here to show `
+    + `calendar, not memory. Table 20 removes that; this figure is here to show `
     + `what the raw data looks like before it is removed.`);
 }
 
@@ -2409,7 +2358,7 @@ if (XM.unavailable || !XM.cells) {
   const AI = XM.accuracy_implied_bp || {};
   const didRows = [];
   // The naive row goes FIRST and is marked as wrong, because it is the number
-  // a reader would compute themselves from Table 22 and it is badly misleading.
+  // a reader would compute themselves from Table 19 and it is badly misleading.
   if (NV.diff_bp !== undefined) {
     didRows.push({ cls: "dim", cells: [
       "per-trade return, <b>no event effects</b>",

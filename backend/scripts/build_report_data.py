@@ -265,6 +265,75 @@ def late_filers(p: pd.DataFrame, ret: np.ndarray, gated: np.ndarray) -> dict:
             "late_n": int((late & gated).sum())}
 
 
+def effort_test(p: pd.DataFrame, gross: np.ndarray) -> dict:
+    """Does reasoning effort change the answer? Paired, on identical events.
+
+    The calibration table reports each effort's numbers side by side, which
+    invites a comparison it cannot support: the two arms ran on different
+    numbers of events, so a gap between them mixes the effect of effort with
+    the effect of sampling. This pairs them — same event, both efforts — and
+    tests the difference directly, which is the only form in which the
+    question has an answer.
+
+    Reported as an equivalence bound as well as a significance test, for the
+    same reason Section 5.9 is: "not significant" is not "the same", and the
+    interesting claim here is the null one.
+    """
+    res = _load_results_local()
+    arms = {}
+    for eff in ("low", "medium"):
+        a = res[(res["effort"] == eff) & (res["arm"] == "named")
+                & (res["model"] == MODEL)][["symbol", "date", "direction"]]
+        arms[eff] = a.drop_duplicates(subset=["symbol", "date"])
+    key = ["symbol", "date"]
+    both = arms["low"].merge(arms["medium"], on=key,
+                             suffixes=("_low", "_medium"))
+    m = p[[*key, "move_pct"]].copy()
+    m["_i"] = np.arange(len(p))
+    both = both.merge(m, on=key, how="inner")
+    if len(both) < 100:
+        return {}
+
+    i = both["_i"].to_numpy()
+    tape = np.sign(both["move_pct"].to_numpy())
+    cost = COSTS_BP / 1e4
+    # `gross` arrives TAPE-SIGNED — it is the long-or-short return the tape's
+    # own direction would have earned. Multiplying it by an arm's side again
+    # would apply the sign twice and silently invert every short. Undo it once
+    # to recover the raw forward move, then sign it per arm.
+    raw = tape * gross[i]
+    out: dict = {"paired_n": int(len(both))}
+    signed = {}
+    for eff in ("low", "medium"):
+        side = np.where(both[f"direction_{eff}"] == "bullish", 1,
+                        np.where(both[f"direction_{eff}"] == "bearish", -1, 0))
+        # A neutral verdict is not a trade, so it earns nothing and pays
+        # nothing — charging it the round trip would penalise abstention.
+        signed[eff] = np.where(side == 0, 0.0, side * raw - cost)
+        agree = (side != 0) & (side == tape)
+        g = np.where(agree, tape * raw - cost, np.nan)
+        v = np.where(~agree, tape * raw - cost, np.nan)
+        out[eff] = {
+            "gated_n": int(agree.sum()),
+            "gated_bp": _f(np.nanmean(g) * 1e4),
+            "spread_bp": _f((np.nanmean(g) - np.nanmean(v)) * 1e4),
+            "neutral_pct": _f((side == 0).mean() * 100),
+        }
+    diff = (signed["medium"] - signed["low"]) * 1e4
+    se = float(diff.std(ddof=1) / math.sqrt(len(diff)))
+    out["diff"] = {
+        "estimate": _f(diff.mean()), "se": _f(se),
+        "t": _f(diff.mean() / se) if se else None,
+        "ci90": [_f(diff.mean() - 1.645 * se), _f(diff.mean() + 1.645 * se)],
+        "bound_bp": _f(max(abs(diff.mean() - 1.645 * se),
+                           abs(diff.mean() + 1.645 * se))),
+        "significant": bool(abs(diff.mean() / se) > 1.96) if se else False,
+    }
+    out["agreement_pct"] = _f(
+        (both["direction_low"] == both["direction_medium"]).mean() * 100)
+    return out
+
+
 def contamination_estimate(panel: str = "v1") -> dict:
     """How much of the edge could be memorisation? Two estimators, both with
     their uncertainty attached, because the honest answer here is an interval
@@ -621,9 +690,11 @@ def main() -> None:
         "gate_pct": GATE, "top_per_day": TOP_PER_DAY,
         "min_dv_musd": MIN_DV / 1e6, "costs_bp": COSTS_BP,
         "timing_corrected": not args.all_events,
-        "funnel": funnel(), "funnel_v2": funnel_v2(), "spec": spec(),
-        "audit": audit(), "timing_cost": timing_cost(),
-        "panel_compare": panel_compare(),
+        # The v1 funnel, the timing-cost table and the three-panel comparison
+        # were all statements ABOUT the superseded panel rather than results
+        # from the current one. The selection cascade is the v2 one.
+        "funnel_v2": funnel_v2(), "spec": spec(),
+        "audit": audit(),
         "reaction_shape": reaction_shape(),
         "model_compare": model_compare(),
         "contamination": contamination_estimate("v2"),
@@ -790,6 +861,8 @@ def main() -> None:
     data["effort_cal"]["agreement_pct"] = _f(
         (pair["direction_low"] == pair["direction_med"]).mean() * 100)
     data["effort_cal"]["paired_n"] = len(pair)
+    # The paired test, which is the only form the comparison is valid in.
+    data["effort_cal"]["test"] = effort_test(p, r1 + COSTS_BP / 1e4)
 
     for tag, name in (("raw", "study-curve.json"),
                       ("bracketed", "study-curve-bracketed.json")):

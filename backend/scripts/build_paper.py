@@ -32,15 +32,15 @@ OUT = ROOT / "docs" / "report.html"
 # a page without a loading spinner.
 KEEP = ("model", "effort", "universe_n", "scored_n", "paths_n", "gated_n",
         "vetoed_n", "span", "train_n", "test_n", "gate_pct", "top_per_day",
-        "min_dv_musd", "costs_bp", "timing_corrected", "funnel", "spec",
-        "audit", "timing_cost", "horizons", "headline", "years", "liquidity",
+        "min_dv_musd", "costs_bp", "timing_corrected", "spec",
+        "audit", "horizons", "headline", "years", "liquidity",
         "gradient", "brackets", "shipped_bracket", "mutations", "spy",
         "effort_cal", "spend_usd",
         # Added 2026-08-06. This is an ALLOWLIST: a key absent here is silently
         # dropped from the payload and the page renders its guard instead of
         # its table, which looks exactly like "the data has not been computed
         # yet". Anything new in build_report_data must be listed.
-        "funnel_v2", "panel_compare", "reaction_shape", "model_compare",
+        "funnel_v2", "reaction_shape", "model_compare",
         "holdout", "arms", "contamination", "regimes",
         # Added 2026-08-06 with the fill-cost measurement and the
         # out-of-training test. Listed here at the same time as the keys were
