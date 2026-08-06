@@ -16,6 +16,7 @@ Run (after build_report_data.py):
 
 from __future__ import annotations
 
+import argparse
 import json
 import sys
 from pathlib import Path
@@ -63,8 +64,20 @@ def trades() -> dict:
 
 
 def main() -> None:
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--print", dest="print_mode", action="store_true",
+                    help="write report_print.html: light palette, every "
+                         "appendix row, no pagination — the PDF source")
+    args = ap.parse_args()
+
     data = json.loads(DATA.read_text(encoding="utf-8"))
     payload = {k: data[k] for k in KEEP if k in data}
+    # Baked into the payload rather than read from location.search at runtime:
+    # a `file://` URL's query string does not survive every viewer (the
+    # in-app preview strips it, and the first PDF attempt printed zero
+    # appendix rows because of exactly that). A flag in the document cannot
+    # be lost in transit.
+    payload["print_mode"] = bool(args.print_mode)
     curve = data.get("curve_raw") or {}
     payload["curve"] = {k: curve.get(k) for k in
                         ("dates", "series", "labels", "stats", "span", "note")}
@@ -74,10 +87,12 @@ def main() -> None:
     html = TEMPLATE.read_text(encoding="utf-8")
     if "/*DATA*/" not in html:
         raise SystemExit("template has no /*DATA*/ slot")
-    OUT.write_text(html.replace("/*DATA*/", blob), encoding="utf-8")
-    print(f"wrote {OUT} ({OUT.stat().st_size / 1024:.0f} KB) — "
+    out = OUT.with_name("report_print.html") if args.print_mode else OUT
+    out.write_text(html.replace("/*DATA*/", blob), encoding="utf-8")
+    print(f"wrote {out} ({out.stat().st_size / 1024:.0f} KB) — "
           f"payload {len(blob) / 1024:.0f} KB, "
-          f"{payload['trades']['n']} appendix rows")
+          f"{payload['trades']['n']} appendix rows"
+          + (" [print build]" if args.print_mode else ""))
 
 
 if __name__ == "__main__":

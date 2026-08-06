@@ -164,8 +164,36 @@ th.sortable[aria-sort="descending"]::after { content:"\2193"; opacity:1; }
 .tag.took { color:var(--pos); border-color:color-mix(in srgb, var(--pos) 40%, transparent); }
 .tag.dec { color:var(--faint); }
 
-@media print { body { font-size:11pt; } .ctrl, .filters, .pager { display:none; } }
 @media (prefers-reduced-motion: reduce) { * { transition:none !important; } }
+
+/* ---------------------------------------------------------------- print
+   The PDF export loads this page with ?print=1, which forces the light
+   palette and renders every appendix row instead of the first fifty. These
+   rules do the rest: one column, repeating table headers, and nothing broken
+   across a page boundary that would be unreadable split in half. */
+@media print {
+  @page { margin: 14mm 12mm; }
+  body { font-size:10pt; line-height:1.5; background:#fff; }
+  .wrap { display:block; padding:0; max-width:none; }
+  .wrap > *, .wide { max-width:none; }
+  .ctrl, .filters, .pager { display:none !important; }
+  .scroll { overflow:visible; }
+  h1 { font-size:19pt; }
+  h2 { break-after:avoid; break-inside:avoid; margin-top:1.6rem; }
+  h3, h4 { break-after:avoid; }
+  p, li { orphans:3; widows:3; }
+  .fig, .callout, .keyfigs { break-inside:avoid; }
+  /* Small tables stay whole; the 1,300-row appendix obviously cannot, so it
+     breaks freely and repeats its header on every page instead. */
+  table { break-inside:avoid; font-size:8pt; }
+  #trade-table { break-inside:auto; font-size:7.2pt; }
+  #trade-table thead { display:table-header-group; }
+  #trade-table tr { break-inside:avoid; }
+  td.wrap-cell, th.wrap-cell { min-width:0; }
+  svg { max-width:100%; }
+  a { color:inherit; border-bottom:none; }
+  .tip { display:none; }
+}
 </style>
 
 <script id="report-data" type="application/json">/*DATA*/</script>
@@ -1515,6 +1543,13 @@ $("conc-para").innerHTML = `The gate is real and it is not the tape. Verdict lab
 
 /* ------------------------------------------------------------ trade appendix */
 const TR = D.trades, TC = TR.cols;
+// ?print=1 is the PDF export path: force the light palette (a dark PDF is
+// unreadable on paper) and drop pagination so every row is in the document
+// rather than only the fifty on screen.
+const PRINT = D.print_mode === true
+  || new URLSearchParams(location.search).has("print");
+if (PRINT) document.documentElement.setAttribute("data-theme", "light");
+const PAGE = PRINT ? TR.rows.length : 50;
 const COL = Object.fromEntries(TC.map((c, i) => [c, i]));
 $("appendix-para").innerHTML = `Every one of the ${int(TR.n)} scored events, taken and
   declined. The declined rows are the point: a view that shows only executed trades
@@ -1523,13 +1558,12 @@ $("appendix-para").innerHTML = `Every one of the ${int(TR.n)} scored events, tak
   <em class="term">shipped</em> is the same trade under the live 5% stop and 2×
   target, with the exit that actually fired. Returns are shown for declined events
   too — that is what the trade <em>would</em> have made had the gate allowed it.
-  Sort any column; filter with the controls.`;
+  Sort any column; filter with the controls.${PRINT ? " All rows are printed below." : ""}`;
 
 const HEAD = [["date", "date"], ["sym", "ticker"], ["dir", "verdict"], ["conf", "conf"],
   ["guid", "guidance"], ["move", "reaction %"], ["run5d", "run-up %"], ["dvM", "$M/day"],
   ["gated", "action"], ["t1", "T+1 bp"], ["t3", "T+3 bp"], ["shipped", "shipped bp"],
   ["exit", "exit"], ["why", "reason / summary"]];
-const PAGE = 50;
 let sortKey = "date", sortDir = 1, page = 0, view = TR.rows;
 
 for (const [sel, col] of [["f-dir", "dir"], ["f-conf", "conf"], ["f-year", "date"]]) {
