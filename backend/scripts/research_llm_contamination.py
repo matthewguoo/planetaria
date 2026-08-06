@@ -749,21 +749,42 @@ def _batches() -> list[dict]:
 
 
 def _spent_so_far() -> float:
+    """Measured spend, PLUS the estimate for anything submitted and not yet
+    collected.
+
+    usage.json only grows when `collect` runs, so a guard that read it alone
+    would happily wave through a second batch while the first was still in
+    flight — the exact way a staged budget gets blown. Pending batches are
+    counted at their (deliberately high) estimate until their real cost is
+    known.
+    """
     path = OUT / "usage.json"
+    measured, collected = 0.0, set()
     if path.exists():
-        return float(json.loads(path.read_text())["usd"])
-    return sum(b.get("est_usd", 0.0) for b in _batches())
+        doc = json.loads(path.read_text())
+        measured = float(doc["usd"])
+        collected = set(doc.get("collected") or [])
+    pending = sum(b.get("est_usd", 0.0) for b in _batches()
+                  if b["id"] not in collected)
+    if not path.exists():
+        return pending
+    return measured + pending
 
 
 def stage_collect(args) -> None:
     api = client()
     usd = 0.0
+    settled: list[str] = []
     for meta in _batches():
         batch = api.messages.batches.retrieve(meta["id"])
         print(f"{meta['id']} {meta['arm']:6s} {batch.processing_status} "
               f"{batch.request_counts}")
         if batch.processing_status != "ended":
             continue
+        # Once a batch's real cost is banked, stop charging the budget guard
+        # its estimate as well — otherwise every collected batch is counted
+        # twice for the rest of the study.
+        settled.append(meta["id"])
         path = OUT / f"results_{meta['arm']}.jsonl"
         seen = _completed_ids()
         with path.open("a", encoding="utf-8") as fh:
@@ -785,11 +806,23 @@ def stage_collect(args) -> None:
                     "custom_id": result.custom_id, "arm": meta["arm"],
                     "effort": meta["effort"], "verdict": verdict,
                     "in": u.input_tokens, "out": u.output_tokens}) + "\n")
-    prior = 0.0
+    prior, collected = 0.0, set()
     if (OUT / "usage.json").exists():
-        prior = float(json.loads((OUT / "usage.json").read_text())["usd"])
-    (OUT / "usage.json").write_text(json.dumps({"usd": round(prior + usd, 4)}))
-    print(f"MEASURED spend this study: ${prior + usd:.2f}")
+        doc = json.loads((OUT / "usage.json").read_text())
+        prior = float(doc["usd"])
+        collected = set(doc.get("collected") or [])
+    # The pre-2026-08-06 usage.json has no `collected` list, so the batches it
+    # already paid for would look pending. Seed it with every batch that has
+    # ended — their cost is inside `prior` by construction.
+    if not collected:
+        collected = {m["id"] for m in _batches()
+                     if api.messages.batches.retrieve(m["id"]).processing_status
+                     == "ended"}
+    collected |= set(settled)
+    (OUT / "usage.json").write_text(json.dumps(
+        {"usd": round(prior + usd, 4), "collected": sorted(collected)}))
+    print(f"MEASURED spend this study: ${prior + usd:.2f} "
+          f"({len(collected)} batches settled)")
 
 
 # ------------------------------------------------------------------ scoring
