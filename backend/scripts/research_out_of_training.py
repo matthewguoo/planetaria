@@ -502,6 +502,32 @@ def compute(args=None) -> dict:
                      "the event in corpus and models that did not"),
         }
 
+    # --- does the memorisation effect itself track liquidity? --------------
+    # The liquidity result in Section 5.2 has an alternative reading: liquid
+    # names are the most written-about, so the model may remember them better
+    # and the "edge in liquid names" may be recall wearing a microstructure
+    # costume. The two stories make opposite predictions HERE. If the edge in
+    # liquid names is memory, the in-corpus advantage must be larger there.
+    try:
+        u = load_universe_v2()[["symbol", "date", "dv"]]
+        b2 = bal.merge(u, on=["symbol", "date"], how="inner")
+        if len(b2) > 100 and b2["dv"].notna().any():
+            cut = float(b2["dv"].median())
+            halves = {}
+            for tag, sel in (("high", b2["dv"] >= cut), ("low", b2["dv"] < cut)):
+                sub = b2[sel].reset_index(drop=True)
+                est = twfe(sub, "signed_bp")
+                acc = twfe(sub, "correct")
+                halves[tag] = {**{k: est[k] for k in
+                                  ("estimate", "se", "t", "n_events", "ci90")
+                                  if k in est},
+                               "accuracy": acc.get("estimate"),
+                               "accuracy_se": acc.get("se")}
+            halves["cut_musd"] = round(cut / 1e6)
+            out["by_liquidity"] = halves
+    except Exception as exc:                              # noqa: BLE001
+        out["by_liquidity_unavailable"] = f"{type(exc).__name__}: {exc}"
+
     # --- the memory probe, re-run where recall is impossible ---------------
     mp = memory_probe(getattr(args, "effort", "medium"))
     if mp:

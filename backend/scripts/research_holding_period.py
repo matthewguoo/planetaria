@@ -611,22 +611,31 @@ def stage_best(args) -> None:
     # included — rather than widening the search panel and changing what the
     # bracket sweep runs on.
     _meta = scored_events(args.effort, args.all_events, args.panel)[
-        ["symbol", "date", "edate", "year", "move_pct", "run5d", "direction",
-         "confidence", "eps_vs_consensus", "revenue_vs_consensus", "guidance",
-         "quality_flags", "gated"]]
+        ["symbol", "date", "edate", "year", "move_pct", "run5d", "dv",
+         "direction", "confidence", "eps_vs_consensus",
+         "revenue_vs_consensus", "guidance", "quality_flags", "gated"]]
     p_mut = (pd.read_parquet(pf).drop(columns=["gated", "side"], errors="ignore")
              .merge(_meta, on=["symbol", "date"], how="inner")
              .reset_index(drop=True))
+    FLOOR_MUSD = 100.0
     for key, label, mname in (
             ("full", "never stand down (with the tape if the verdict agrees, "
                      "against it otherwise)",
              "FULL POLICY: with the tape if the verdict agrees, against it "
              "otherwise"),
             ("llmdir", "pure LLM direction (tape ignored, neutrals skipped)",
-             "pure LLM direction (gate + fade, tape ignored)")):
+             "pure LLM direction (gate + fade, tape ignored)"),
+            ("full100", f"never stand down, ${FLOOR_MUSD:.0f}M/day liquidity floor",
+             "FULL POLICY: with the tape if the verdict agrees, against it "
+             "otherwise")):
         side = mutation_sides(p_mut).get(mname)
         if side is None:
             continue
+        if key.endswith("100"):
+            # The floor is a SELECTION rule, so it stands the position down
+            # rather than resizing it — the same trade set minus the names
+            # that never cleared the bar.
+            side = np.where(p_mut["dv"].to_numpy() >= FLOOR_MUSD * 1e6, side, 0)
         live = side != 0
         ret_m, _ = resolve(p_mut.assign(side=side), np.ones(len(p_mut), int),
                            None, None)
@@ -818,9 +827,9 @@ def stage_mutations(args) -> None:
         raise SystemExit(f"no {pf.name} — run the `paths` stage first")
     paths = pd.read_parquet(pf)
     meta = scored_events(args.effort, args.all_events, args.panel)[
-        ["symbol", "date", "edate", "year", "move_pct", "run5d", "direction",
-         "confidence", "eps_vs_consensus", "revenue_vs_consensus", "guidance",
-         "quality_flags", "gated"]]
+        ["symbol", "date", "edate", "year", "move_pct", "run5d", "dv",
+         "direction", "confidence", "eps_vs_consensus",
+         "revenue_vs_consensus", "guidance", "quality_flags", "gated"]]
     p = paths.drop(columns=["gated", "side"], errors="ignore").merge(
         meta, on=["symbol", "date"], how="inner").reset_index(drop=True)
     n = len(p)

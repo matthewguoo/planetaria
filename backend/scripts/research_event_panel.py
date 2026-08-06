@@ -250,7 +250,8 @@ SAMPLE_PER_YEAR = 110
 
 def load_universe_v2(which: str = "ten",
                      sample_per_year: int | None = SAMPLE_PER_YEAR,
-                     seed: int = 20260806) -> pd.DataFrame:
+                     seed: int = 20260806,
+                     rank_lo: int = 1, rank_hi: int = TOP_PER_DAY) -> pd.DataFrame:
     """Same selection rule as the original study — gate, liquidity floor,
     top-N per day — applied to acceptance-relative reactions.
 
@@ -292,7 +293,15 @@ def load_universe_v2(which: str = "ten",
 
         g = pd.concat([g, g.apply(ctx, axis=1)], axis=1)
         g = g[g["dv"] >= MIN_DV]
-        g = g.sort_values("dv", ascending=False).groupby("date").head(TOP_PER_DAY)
+        # Rank within the night by liquidity, then take a WINDOW of ranks.
+        # The default window is 1..TOP_PER_DAY, which is `head(TOP_PER_DAY)`
+        # exactly — the study's own universe is unchanged. A window starting
+        # above 1 addresses the names the live watchlist would have seen and
+        # the study never scored, without disturbing the panel every other
+        # number in the paper is computed on.
+        g = g.sort_values("dv", ascending=False)
+        g["_rank"] = g.groupby("date").cumcount() + 1
+        g = g[(g["_rank"] >= rank_lo) & (g["_rank"] <= rank_hi)].drop(columns="_rank")
         frames.append(g)
     if not frames:
         raise SystemExit("no v2 event panels — run `calendar` then `react`")
@@ -324,7 +333,9 @@ def stage_paths(args) -> None:
     from alpaca.data.timeframe import TimeFrame
 
     m = load_universe_v2(args.windows,
-                         args.sample_per_year or SAMPLE_PER_YEAR)
+                         args.sample_per_year or SAMPLE_PER_YEAR,
+                         rank_lo=getattr(args, "rank_lo", 1),
+                         rank_hi=getattr(args, "rank_hi", TOP_PER_DAY))
     print(f"{len(m)} selected events {m['date'].min()}..{m['date'].max()}")
     prior, have = pd.DataFrame(), set()
     if PATHS_V2.exists():
@@ -398,6 +409,8 @@ def main() -> None:
     ap.add_argument("--sample-per-year", type=int, default=None,
                     help=f"cap qualifying events per pre-2021 year "
                          f"(default {SAMPLE_PER_YEAR}, shared by every stage)")
+    ap.add_argument("--rank-lo", dest="rank_lo", type=int, default=1)
+    ap.add_argument("--rank-hi", dest="rank_hi", type=int, default=TOP_PER_DAY)
     ap.add_argument("--refresh", action="store_true")
     args = ap.parse_args()
     {"calendar": stage_calendar, "react": stage_react,

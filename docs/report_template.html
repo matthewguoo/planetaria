@@ -309,6 +309,14 @@ th.sortable[aria-sort="descending"]::after { content:"\2193"; opacity:1; }
 
 <div class="keyfigs" id="keyfigs"></div>
 
+<div class="fig" id="hero-fig">
+  <div class="legend" id="hero-legend"></div>
+  <div id="hero-chart"></div>
+  <figcaption><b>Figure 1:</b> <span id="hero-cap"></span></figcaption>
+</div>
+
+<div class="scroll"><table id="hero-table"></table></div>
+
 <h2><span class="n">1</span> What is being tested</h2>
 
 <p>When a company reports earnings after the closing bell, its shares reprice in the
@@ -440,7 +448,7 @@ controls built to detect that; Section 5.9 reports the one that settles it.</p>
 
 <div class="fig">
   <div id="timeline"></div>
-  <figcaption><b>Figure 1:</b> One night, in order. Everything left of the entry
+  <figcaption><b>Figure 2:</b> One night, in order. Everything left of the entry
   is information available at decision time; everything right of it is outcome.
   The release can cross anywhere in the shaded band — Section 4.5 shows that where
   it lands turned out to matter a great deal.</figcaption>
@@ -590,7 +598,7 @@ merely looks innocuous.</p>
 <div class="fig">
   <div class="legend"><span>EDGAR acceptance time, converted to Eastern</span></div>
   <div id="acc-hist"></div>
-  <figcaption><b>Figure 2:</b> When the 8-K behind each scored event actually reaches
+  <figcaption><b>Figure 3:</b> When the 8-K behind each scored event actually reaches
   EDGAR. The spread across the hour after the close is why the reaction window is
   keyed to each release rather than to the clock.</figcaption>
 </div>
@@ -627,13 +635,38 @@ timestamp.</p>
 
 <p id="year-para"></p>
 
+<div id="liq-block">
+<h4>Where the liquidity floor should sit, and whether the edge reaches further down the list</h4>
+
+<p id="liq-intro"></p>
+
+<div class="scroll"><table id="liq-floor-table">
+  <caption><b>Table 7:</b> Raising the liquidity floor, on events already scored</caption>
+</table></div>
+
+<p id="liq-floor-para"></p>
+
+<div id="liq-rank-block">
+<p id="liq-rank-para"></p>
+</div>
+
+<div class="callout" id="liq-contam-block">
+  <span class="label">Is this a liquidity finding or a contamination finding?</span>
+  <p id="liq-contam-para"></p>
+</div>
+
+<div class="scroll"><table id="liq-cost-table">
+  <caption><b>Table 8:</b> The same quintiles, separating the quoted spread from the signal</caption>
+</table></div>
+</div>
+
 <div id="lf-block">
 <h4>The same years, split by when the release arrived</h4>
 
 <p id="lf-intro"></p>
 
 <div class="scroll"><table id="lf-table">
-  <caption><b>Table 7:</b> Gated return by year, split on whether a fixed
+  <caption><b>Table 9:</b> Gated return by year, split on whether a fixed
   <code>[16:00, 16:20]</code> window could have measured the event</caption>
 </table></div>
 
@@ -641,7 +674,7 @@ timestamp.</p>
 </div>
 
 <div class="scroll"><table id="liq-table">
-  <caption><b>Table 8:</b> By prior-session dollar-volume quintile</caption>
+  <caption><b>Table 10:</b> By prior-session dollar-volume quintile</caption>
 </table></div>
 
 <h3>5.3 The stop-loss is the problem</h3>
@@ -649,7 +682,7 @@ timestamp.</p>
 <p id="bracket-para"></p>
 
 <div class="scroll"><table id="bracket-table">
-  <caption><b>Table 9:</b> Bracket surface, gated trades, T+1 time stop</caption>
+  <caption><b>Table 11:</b> Bracket surface, gated trades, T+1 time stop</caption>
 </table></div>
 
 <h3>5.4 Gate mutations</h3>
@@ -675,7 +708,7 @@ same train/test split. Every row is reported, including the failures.</p>
 </div>
 
 <div class="scroll"><table id="mut-table">
-  <caption><b>Table 10:</b> Gate mutations. bp per trade; train 2021-23, test 2024-26</caption>
+  <caption><b>Table 12:</b> Gate mutations. bp per trade; train 2021-23, test 2024-26</caption>
 </table></div>
 
 <p id="mut-para"></p>
@@ -694,14 +727,14 @@ prose.</p>
 <div class="fig">
   <div class="legend" id="curve-legend"></div>
   <div id="curve"></div>
-  <figcaption><b>Figure 3:</b> Equity curves, log scale, <span id="curve-span"></span>.
-  The top two lines are the never-stand-down and pure-direction policies of
+  <figcaption><b>Figure 4:</b> Equity curves, log scale, <span id="curve-span"></span>.
+  The lines are the policies of
   Section 5.4; the rest trade only what the gate approves. Grey is SPY.
   <span id="curve-note"></span></figcaption>
 </div>
 
 <div class="scroll"><table id="curve-table">
-  <caption><b>Table 11:</b> Account simulation against SPY, QQQ and 3× QQQ</caption>
+  <caption><b>Table 13:</b> Account simulation against SPY, QQQ and 3× QQQ</caption>
 </table></div>
 
 <p id="curve-cost"></p>
@@ -711,7 +744,7 @@ prose.</p>
 <p id="iso-para"></p>
 
 <div class="scroll"><table id="iso-table">
-  <caption><b>Table 12:</b> Iso-return leverage: the cheapest index exposure that ends where the strategy ends</caption>
+  <caption><b>Table 14:</b> Iso-return leverage: the cheapest index exposure that ends where the strategy ends</caption>
 </table></div>
 
 <h3 id="model-h3">5.6 Which model, and how much reasoning?</h3>
@@ -722,12 +755,12 @@ prose.</p>
 <div class="fig">
   <div class="legend" id="model-legend"></div>
   <div id="model-chart"></div>
-  <figcaption><b>Figure 4:</b> Gated and refused returns by model arm on the
+  <figcaption><b>Figure 5:</b> Gated and refused returns by model arm on the
   shared six-month slice. <span id="model-figcap"></span></figcaption>
 </div>
 
 <div class="scroll"><table id="model-table">
-  <caption><b>Table 13:</b> Model and effort, identical events and identical entries</caption>
+  <caption><b>Table 15:</b> Model and effort, identical events and identical entries</caption>
 </table></div>
 
 <p id="model-para"></p>
@@ -741,7 +774,7 @@ recalling what happened next? Two estimates below bound it from the observed dat
 and two arms measure it directly by removing an input at a time.</p>
 
 <div class="scroll"><table id="contam-table">
-  <caption><b>Table 14:</b> The gate either side of the model's knowledge boundary</caption>
+  <caption><b>Table 16:</b> The gate either side of the model's knowledge boundary</caption>
 </table></div>
 
 <p id="contam-para"></p>
@@ -752,20 +785,20 @@ and two arms measure it directly by removing an input at a time.</p>
 <p id="arms-intro"></p>
 
 <div class="scroll"><table id="arms-table">
-  <caption><b>Table 15:</b> The same gate, the same events, one input removed at a time</caption>
+  <caption><b>Table 17:</b> The same gate, the same events, one input removed at a time</caption>
 </table></div>
 
 <div class="fig">
   <div class="legend" id="arms-legend"></div>
   <div id="arms-chart"></div>
-  <figcaption><b>Figure 5:</b> Gate spread by arm on the paired event set.
+  <figcaption><b>Figure 6:</b> Gate spread by arm on the paired event set.
   <span id="arms-figcap"></span></figcaption>
 </div>
 
 <p id="blind-para"></p>
 
 <div class="scroll"><table id="blind-table">
-  <caption><b>Table 16:</b> Identity ablation: what the model thought it was reading</caption>
+  <caption><b>Table 18:</b> Identity ablation: what the model thought it was reading</caption>
 </table></div>
 
 <p id="notext-para"></p>
@@ -779,12 +812,12 @@ and two arms measure it directly by removing an input at a time.</p>
 <div class="fig">
   <div class="legend"><span><span class="swatch" style="background:var(--s1)"></span>gate spread, bp per trade</span><span><span class="swatch" style="background:var(--muted)"></span>events scored</span></div>
   <div id="decade-chart"></div>
-  <figcaption><b>Figure 6:</b> Gate spread by calendar year across the decade.
+  <figcaption><b>Figure 7:</b> Gate spread by calendar year across the decade.
   <span id="decade-figcap"></span></figcaption>
 </div>
 
 <div class="scroll"><table id="holdout-table">
-  <caption><b>Table 17:</b> Key mutations, holdout years against the years the study was designed on</caption>
+  <caption><b>Table 19:</b> Key mutations, holdout years against the years the study was designed on</caption>
 </table></div>
 
 <p id="decade-para"></p>
@@ -810,7 +843,7 @@ the model could have memorised it, and whatever difference remains is the
 memorisation effect.</p>
 
 <div class="scroll"><table id="xm-cutoff-table">
-  <caption><b>Table 18:</b> Training-data cutoffs, and how they split this window</caption>
+  <caption><b>Table 20:</b> Training-data cutoffs, and how they split this window</caption>
 </table></div>
 
 <p id="xm-design"></p>
@@ -818,14 +851,14 @@ memorisation effect.</p>
 <div class="fig">
   <div class="legend" id="xm-legend"></div>
   <div id="xm-chart"></div>
-  <figcaption><b>Figure 7:</b> The same events, scored by four models. Each model
+  <figcaption><b>Figure 8:</b> The same events, scored by four models. Each model
   has two bars: colour marks whether those events were inside its training corpus,
   and length is the mean return, measured left or right of the zero line by sign.
   <span id="xm-figcap"></span></figcaption>
 </div>
 
 <div class="scroll"><table id="xm-cell-table">
-  <caption><b>Table 19:</b> Per-trade return by model and corpus status, identical events</caption>
+  <caption><b>Table 21:</b> Per-trade return by model and corpus status, identical events</caption>
 </table></div>
 
 <h4>The estimate</h4>
@@ -842,7 +875,7 @@ cutoff. Standard errors cluster by event, because four verdicts on one release a
 not four independent observations.</p>
 
 <div class="scroll"><table id="xm-did-table">
-  <caption><b>Table 20:</b> Memorisation effect, naive and with event and model intercepts</caption>
+  <caption><b>Table 22:</b> Memorisation effect, naive and with event and model intercepts</caption>
 </table></div>
 
 <p id="xm-naive"></p>
@@ -868,7 +901,7 @@ not four independent observations.</p>
 <p id="xm-mp-intro"></p>
 
 <div class="scroll"><table id="xm-mp-table">
-  <caption><b>Table 21:</b> The no-text memory probe, by model and corpus status</caption>
+  <caption><b>Table 23:</b> The no-text memory probe, by model and corpus status</caption>
 </table></div>
 
 <p id="xm-mp-para"></p>
@@ -890,7 +923,7 @@ event enters and again at the minute it exits. Nothing here is modelled; the quo
 spread is what the book actually showed.</p>
 
 <div class="scroll"><table id="fc-measure-table">
-  <caption><b>Table 22:</b> Measured quoted spreads, in basis points of the midpoint</caption>
+  <caption><b>Table 24:</b> Measured quoted spreads, in basis points of the midpoint</caption>
 </table></div>
 
 <p id="fc-measure-para"></p>
@@ -898,7 +931,7 @@ spread is what the book actually showed.</p>
 <div class="fig">
   <div class="legend" id="fc-legend"></div>
   <div id="fc-dist"></div>
-  <figcaption><b>Figure 8:</b> Distribution of measured quoted spreads at the entry
+  <figcaption><b>Figure 9:</b> Distribution of measured quoted spreads at the entry
   print, against the flat assumption the study has been using.
   <span id="fc-dist-cap"></span></figcaption>
 </div>
@@ -910,13 +943,13 @@ spread is what the book actually showed.</p>
 <div class="fig">
   <div class="legend"><span><span class="swatch" style="background:var(--s1)"></span>gated leg</span><span><span class="swatch" style="background:var(--s2)"></span>selection spread</span></div>
   <div id="fc-curve"></div>
-  <figcaption><b>Figure 9:</b> Per-trade edge against an assumed flat round-trip cost.
+  <figcaption><b>Figure 10:</b> Per-trade edge against an assumed flat round-trip cost.
   The selection spread is flat because both legs pay the same cost; only the gated
   leg's own profitability can be destroyed by one. <span id="fc-curve-cap"></span></figcaption>
 </div>
 
 <div class="scroll"><table id="fc-agg-table">
-  <caption><b>Table 23:</b> The edge charged each event its own measured spread</caption>
+  <caption><b>Table 25:</b> The edge charged each event its own measured spread</caption>
 </table></div>
 
 <h3>6.2 Randomised fills</h3>
@@ -930,7 +963,7 @@ deliberate: earnings-night spreads are violently right-skewed, and a Gaussian wo
 quietly delete the tail that does the damage.</p>
 
 <div class="scroll"><table id="fc-alpha-table">
-  <caption><b>Table 24:</b> Account simulation under each cost assumption, against SPY</caption>
+  <caption><b>Table 26:</b> Account simulation under each cost assumption, against SPY</caption>
 </table></div>
 
 <p id="fc-mc-para"></p>
@@ -948,15 +981,15 @@ policy of Section 5.4, both charged their own measured spreads.</p>
 <div class="fig">
   <div class="legend" id="fc-dep-legend"></div>
   <div id="fc-dep-chart"></div>
-  <figcaption><b>Figure 10:</b> Never standing down at five levels of average
+  <figcaption><b>Figure 11:</b> Never standing down at five levels of average
   gross exposure, log scale, every event charged its own measured quoted
-  spread. Grey is SPY. This is the same book as Figure 3 priced at what the
+  spread. Grey is SPY. This is the same book as Figure 4 priced at what the
   market actually quoted rather than at the flat assumption, which is why the
   top of the range sits where it does. <span id="fc-dep-cap"></span></figcaption>
 </div>
 
 <div class="scroll"><table id="fc-dep-table">
-  <caption><b>Table 25:</b> The same trades at different deployment, charged their measured spreads</caption>
+  <caption><b>Table 27:</b> The same trades at different deployment, charged their measured spreads</caption>
 </table></div>
 
 <p id="fc-dep-para"></p>
@@ -975,6 +1008,15 @@ policy of Section 5.4, both charged their own measured spreads.</p>
   (ticker and date only, no release text, so any edge is pure recall). Until they
   run, the evidence against memorisation is indirect: the permutation null, the flat
   age gradient, and the absence of a retrieval channel.</li>
+  <li><b>Familiarity is not separated from skill.</b> The edge concentrates in
+  the most liquid issuers, and Section 5.2 shows that most of the gap is the
+  quoted spread rather than memorisation. What it cannot separate is whether the
+  model reads a large company's release better because it knows more about that
+  company — its segments, its competitors, what a metric means for this issuer.
+  That knowledge predates the event, so it is not contamination, but it would
+  not transfer to an unfamiliar name and it therefore bounds how far the result
+  generalises. The instrument that would test it is the identity ablation, and
+  the scrub fails on almost every release, so the question is open.</li>
   <li><b>Regime priors survive any scrub.</b> A model trained on text written after
   these events knows what kind of company this is even when it recalls no specific
   release. The ablation arm would bound this; nothing removes it.</li>
@@ -1510,7 +1552,7 @@ function svg(w, h, inner, extra = "") {
   return `<svg viewBox="0 0 ${w} ${h}" role="img" ${extra}>${inner}</svg>`;
 }
 
-/* Figure 1 — one night, in order. A diagram of the RULE, not of data, so the
+/* Figure 2 — one night, in order. A diagram of the RULE, not of data, so the
    only numbers in it come from the spec table and cannot drift from it. */
 (function timeline() {
   const spec = Object.fromEntries((D.spec || []).map((r) => [r.parameter, r.value]));
@@ -1563,7 +1605,7 @@ function svg(w, h, inner, extra = "") {
     `aria-label="Timeline of one trading night: watchlist frozen 15:30, close and anchor 16:00, re-anchor 16:04, 8-K crosses, tape re-checked after the confirmation delay, model reads and the gate decides, exit at T+1 15:55."`);
 })();
 
-/* Figure 1 — acceptance histogram */
+/* Figure 3 — acceptance histogram */
 (function accHist() {
   const b = D.audit.acceptance_et.filter((x) => x.n > 0);
   const W = 720, H = 190, L = 96, R = 46, T = 6, B = 26;
@@ -1582,14 +1624,79 @@ function svg(w, h, inner, extra = "") {
     `aria-label="Acceptance time histogram: ${b.map((x) => x.band + " " + x.n).join(", ")}"`);
 })();
 
-/* Figure 3 — equity curves.
+/* Figure 1 — the whole paper in three lines, directly under the abstract.
+   A reader who goes no further should still leave with the right picture: the
+   strategy, the strategy with the liquidity floor of Section 5.2, and the
+   index. Everything else in the paper is an argument about whether these
+   three lines mean what they appear to mean. */
+function drawHero() {
+  const need = ["full", "full100", "spy"];
+  if (!C.dates || !C.series || need.some((k) => !C.series[k])) {
+    const f = $("hero-fig"); if (f) f.style.display = "none";
+    return;
+  }
+  const W = 760, H = 250, L = 46, R = 74, T = 10, B = 24;
+  const N = C.dates.length;
+  const all = need.flatMap((k) => C.series[k]).filter((v) => v > 0);
+  const lo = Math.log(Math.min(...all)), hi = Math.log(Math.max(...all));
+  const x = (i) => L + (i / (N - 1)) * (W - L - R);
+  const y = (v) => H - B - ((Math.log(Math.max(v, 1e-6)) - lo) / (hi - lo || 1)) * (H - T - B);
+  let inner = "", year = "";
+  C.dates.forEach((d, i) => {
+    if (d.slice(0, 4) !== year) {
+      year = d.slice(0, 4);
+      inner += `<line x1="${x(i)}" x2="${x(i)}" y1="${T}" y2="${H - B}" stroke="${cssv("--rule")}"></line>
+        <text x="${x(i) + 4}" y="${H - 8}" font-size="10" fill="${cssv("--faint")}" font-family="${cssv("--mono")}">${year}</text>`;
+    }
+  });
+  for (const m of [1, 5, 10]) {
+    if (Math.log(m) < lo || Math.log(m) > hi) continue;
+    inner += `<line x1="${L}" x2="${W - R}" y1="${y(m)}" y2="${y(m)}" stroke="${cssv("--rule")}" stroke-dasharray="2 4"></line>
+      <text x="${L - 6}" y="${y(m) + 3}" text-anchor="end" font-size="10" fill="${cssv("--faint")}" font-family="${cssv("--mono")}">${m}×</text>`;
+  }
+  const COL = { full: cssv(S[0]), full100: cssv(S[2]), spy: cssv("--muted") };
+  const SHORT = { full: "strategy", full100: "+ $100M floor", spy: "SPY" };
+  need.forEach((k) => {
+    const arr = C.series[k];
+    inner += `<path d="${arr.map((v, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ")}"
+      fill="none" stroke="${COL[k]}" stroke-width="${k === "spy" ? 1.5 : 2.2}"></path>
+      <text x="${W - R + 6}" y="${y(arr[N - 1]) + 3}" font-size="10" fill="${COL[k]}"
+        font-family="${cssv("--mono")}">${SHORT[k]}</text>`;
+  });
+  setHTML("hero-chart", svg(W, H, inner, `aria-label="Equity of the strategy, the strategy with a liquidity floor, and SPY"`));
+  setHTML("hero-legend", need.map((k) =>
+    `<span><span class="swatch" style="background:${COL[k]}"></span>${C.labels[k] || k}</span>`).join(""));
+  const f = st("full"), f100 = st("full100"), spy = st("spy");
+  table($("hero-table"), ["", "trades", "total", "CAGR", "max drawdown", "Sharpe", "α vs SPY"],
+    [["the strategy — never standing down", int(f.taken),
+      { v: sgn(f.total_pct, 0) + "%", c: "pos" }, n1(f.cagr_pct, 1) + "%",
+      { v: "−" + n1(f.max_dd_pct) + "%", c: "neg" }, n1(f.sharpe, 2),
+      { v: sgn((f.vs && f.vs.SPY ? f.vs.SPY.alpha_annual_pct : f.alpha_pct), 1) + "%", c: "pos" }],
+     { cls: "hl", cells: ["the same, above a $100M/day liquidity floor", int(f100.taken),
+      { v: sgn(f100.total_pct, 0) + "%", c: "pos" }, n1(f100.cagr_pct, 1) + "%",
+      { v: "−" + n1(f100.max_dd_pct) + "%", c: "neg" }, n1(f100.sharpe, 2),
+      { v: sgn((f100.vs && f100.vs.SPY ? f100.vs.SPY.alpha_annual_pct : f100.alpha_pct), 1) + "%", c: "pos" }] },
+     { cls: "dim", cells: ["SPY, bought and held", "—",
+      { v: sgn(spy.total_pct, 0) + "%", c: "" }, n1(spy.cagr_pct, 1) + "%",
+      { v: "−" + n1(spy.max_dd_pct) + "%", c: "neg" }, n1(spy.sharpe, 2), "—"] }]);
+  setText("hero-cap", `Every trade the model approved, compounded through the real `
+    + `session calendar at ${n1((C.stats && C.stats.full ? C.stats.full.weight_pct * C.stats.full.avg_concurrent : 30), 0)}% `
+    + `average gross exposure, log scale, ${(C.span || D.span).join(" to ")}. `
+    + `Costs are the flat ${n1(D.costs_bp, 0)}bp assumed through Section 5; `
+    + `Section 6 measures them and restates this at a lower level. The middle `
+    + `line is the same strategy declining to trade the least liquid names, `
+    + `which is Section 5.2's finding and most of what separates the two.`);
+}
+drawHero();
+
+/* Figure 4 — equity curves.
    The two policies Section 5.4 concludes for lead the list. An earlier version
    drew four variations of the gated book and none of the two the paper
    recommends, which left the chart arguing quietly against the text. */
 const CURVE_KEYS = [
-  { k: "full", i: 0, dash: "" }, { k: "llmdir", i: 1, dash: "5 3" },
-  { k: "t1plain", i: 2, dash: "" }, { k: "best", i: 3, dash: "2 3" },
-  { k: "shipped", i: 4, dash: "7 4" },
+  { k: "full", i: 0, dash: "" }, { k: "full100", i: 2, dash: "" },
+  { k: "llmdir", i: 1, dash: "5 3" },
+  { k: "t1plain", i: 3, dash: "" }, { k: "shipped", i: 4, dash: "7 4" },
   // Only five series colours exist; the benchmark takes the neutral rule
   // colour so it reads as the baseline rather than as a sixth strategy.
   { k: "spy", i: null, dash: "" },
@@ -1633,12 +1740,12 @@ function drawCurve() {
 }
 drawCurve();
 
-const ROWS = ["full", "llmdir", "best", "alt", "t1plain", "shipped", "spy", "qqq", "tqqq"].filter((k) => (C.stats || {})[k]);
+const ROWS = ["full", "full100", "llmdir", "best", "alt", "t1plain", "shipped", "spy", "qqq", "tqqq"].filter((k) => (C.stats || {})[k]);
 table($("curve-table"), ["configuration", "trades", "total", "CAGR", "max DD", "Sharpe", "α vs SPY", "β vs SPY", "β vs QQQ"],
   ROWS.map((k) => {
     const s = st(k), vs = s.vs || {};
     const isB = ["spy", "qqq", "tqqq"].includes(k);
-    return { cls: (k === "full" || k === "llmdir") ? "hl" : (isB ? "dim" : ""), cells: [
+    return { cls: (k === "full" || k === "full100") ? "hl" : (isB ? "dim" : ""), cells: [
       C.labels && C.labels[k] ? C.labels[k] : k.toUpperCase(), isB ? "—" : int(s.taken),
       { v: sgn(s.total_pct, 1) + "%", c: cls(s.total_pct) },
       { v: n1(s.cagr_pct, 2) + "%", c: cls(s.cagr_pct) },
@@ -2351,6 +2458,138 @@ $("pg-prev").addEventListener("click", () => { page--; render(); window.scrollTo
 $("pg-next").addEventListener("click", () => { page++; render(); window.scrollTo({ top: $("trade-table").offsetTop - 80 }); });
 applyFilters();
 
+
+/* ------------------------------------- 5.2 liquidity floor and rank window */
+const LQ = D.liquidity_study || {};
+if (!LQ.rows) {
+  absent("liq-block", "not computed", "The liquidity study");
+} else {
+  const cur = LQ.rows.find((r) => r.floor_musd === LQ.floor_now_musd) || LQ.rows[0];
+  const best = LQ.rows.slice().sort((a, b) => b.t - a.t)[0];
+  const worst = (LQ.deciles || [])[0] || {};
+  setHTML("liq-intro", `The quintile table shows the edge is not flat in
+    liquidity, which raises a question the study can answer for nothing: is the
+    least liquid name it trades worth trading? The floor sits at
+    $${n1(LQ.floor_now_musd, 0)}M of prior-session dollar volume, and the
+    weakest decile — $${int(worst.lo_musd)}M to $${int(worst.hi_musd)}M —
+    returns ${sgn(worst.gated_bp)}bp against ${sgn(cur.gated_bp)}bp for the
+    book as a whole.`);
+
+  table($("liq-floor-table"),
+    ["floor", "events kept", "gated trades", "gated", "t", "selection spread"],
+    LQ.rows.map((r) => ({ cls: r.floor_musd === best.floor_musd ? "hl"
+        : (r.floor_musd === LQ.floor_now_musd ? "" : "dim"), cells: [
+      "$" + int(r.floor_musd) + "M", `${int(r.n)} (${n1(r.kept_pct, 0)}%)`,
+      int(r.gated_n), { v: sgn(r.gated_bp) + "bp", c: cls(r.gated_bp) },
+      n1(r.t, 2), { v: sgn(r.spread_bp) + "bp", c: cls(r.spread_bp) }] })));
+
+  setHTML("liq-floor-para", `<b>Raising the floor to
+    $${int(best.floor_musd)}M improves the edge and the t-statistic at the same
+    time</b> — ${sgn(best.gated_bp)}bp at t&nbsp;=&nbsp;${n1(best.t, 2)} against
+    ${sgn(cur.gated_bp)}bp at ${n1(cur.t, 2)} — while keeping
+    ${n1(best.kept_pct, 0)}% of the events. That combination is what makes it
+    worth doing rather than a length-for-quality trade: dropping the bottom
+    fifth of the book by liquidity removes trades that were adding noise, not
+    return. Higher floors keep raising the per-trade figure and start losing
+    the t-statistic as the sample thins, so the improvement is real but it is
+    not monotone and $${int(best.floor_musd)}M is where it stops paying.
+    Figure 1 draws the floored book against the unfloored one; most of the
+    difference is in the drawdown rather than the return.`);
+
+  /* The objection that has to be answered before the liquidity result can be
+     believed: liquid names are also the most written-about, so "the edge is in
+     liquid names" and "the model remembers liquid names" predict the same
+     table. They differ on one thing, and the out-of-training test measures it. */
+  const CQ = LQ.cost_by_quintile, RL = LQ.recall_by_liquidity, XD = XM.by_liquidity;
+  if (!CQ || !RL) {
+    absent("liq-contam-block", "the spread measurement or the memory probe is absent",
+           "The contamination check on this result");
+  } else {
+    const lo = RL[0], hiL = RL[RL.length - 1];
+    const q1 = CQ[0], q5 = CQ[CQ.length - 1];
+    table($("liq-cost-table"),
+      ["quintile", "$M/day", "quoted spread", "gross edge", "net of the spread"],
+      CQ.map((r, i) => ({ cls: (i === 0 || i === CQ.length - 1) ? "hl" : "", cells: [
+        r.q, `${int(r.lo_musd)}–${int(r.hi_musd)}`,
+        n1(r.spread_bp, 0) + "bp",
+        { v: sgn(r.gross_bp) + "bp", c: cls(r.gross_bp) },
+        { v: sgn(r.net_bp) + "bp", c: cls(r.net_bp) }] })));
+
+    setHTML("liq-contam-para", `<b>The concern is real and the answer is not the
+      obvious one.</b> Liquid names are the most written-about, so a model may
+      simply remember them better — and it does. Handed a ticker and a date and
+      no release at all, the memory probe volunteers a direction for
+      <b>${n1(hiL.volunteered_pct, 0)}%</b> of the most liquid tercile against
+      <b>${n1(lo.volunteered_pct, 0)}%</b> of the least. Recall really is
+      concentrated in the large caps.
+      <br><br>
+      <b>But that recall does not produce the edge.</b> If it did, the
+      in-corpus advantage of Section 5.9 would be larger in liquid names.
+      ${XD ? `Splitting that test at the median of dollar volume, it is
+        ${sgn(XD.high.estimate, 1)}bp in the more liquid half (se ${n1(XD.high.se, 1)})
+        against ${sgn(XD.low.estimate, 1)}bp in the less liquid half
+        (se ${n1(XD.low.se, 1)}) — no larger where the memory is, and on
+        directional accuracy the sign in the liquid half is
+        <em>negative</em>.` : `It is not.`}
+      Recall tracks liquidity; the memorisation <em>advantage</em> does not.
+      <br><br>
+      <b>The structural explanation is measurable, and most of it is the
+      spread.</b> The least liquid quintile pays <b>${n1(q1.spread_bp, 0)}bp</b>
+      of quoted spread against <b>${n1(q5.spread_bp, 0)}bp</b> for the most
+      liquid — ${n1(q1.spread_bp / q5.spread_bp, 1)}× — which turns a
+      ${sgn(q1.gross_bp)}bp gross edge into ${sgn(q1.net_bp)}bp net. The honest
+      caveat is that the gross edge is lower down there too
+      (${sgn(q1.gross_bp)}bp against ${sgn(q5.gross_bp)}bp), so cost is most of
+      the story and not all of it, and the split test above rests on about a
+      hundred events a side. It constrains the contamination reading; it does
+      not eliminate it.
+      <br><br>
+      <b>A third reading is open, and this study cannot close it.</b> Between
+      "remembers the outcome" and "pays a wider spread" sits a mechanism that is
+      neither: the model may simply <em>know more</em> about a large company —
+      its segments, its competitors, what a given metric means for this
+      particular issuer — and read the release better for it. That is not
+      contamination, because it is knowledge available before the event rather
+      than after it; but it is also not a property of the strategy that would
+      transfer to an unfamiliar name. The natural instrument is the identity
+      ablation of Section 5.7, which removes exactly that context — and it
+      cannot be used here, because the scrub fails: the model re-identifies the
+      issuer on <b>${n1(((D.arms || {}).blind || {}).ident_pct)}%</b> of scrubbed
+      releases regardless of size, so the arm measures a failed scrub rather
+      than an absence of company knowledge. Settling this needs a harder scrub
+      than the one this study ran, and it is listed in Section 8 rather than
+      answered here.`);
+  }
+
+  const RK = LQ.ranks_6_10;
+  if (!RK) {
+    absent("liq-rank-block", LQ.ranks_6_10_unavailable
+      || "those events have not been scored", "The rank-window test");
+  } else {
+    const weaker = RK.gated_bp < cur.gated_bp * 0.6;
+    setHTML("liq-rank-para", `<b>Does the edge reach past the five names a night
+      the study trades?</b> The live watchlist watches eight, and the top-five
+      rule discards the rest before the model ever reads them, so the question
+      needs verdicts that were never bought. Scoring the sixth through tenth
+      most liquid reporter on each night adds ${int(RK.n)} events at a median
+      $${int(RK.median_dv_musd)}M a day — a small set, because most nights do
+      not have six qualifying reporters, and the cap therefore rarely binds.
+      On those events the gate earns <b>${sgn(RK.gated_bp)}bp</b> across
+      ${int(RK.gated_n)} trades (t&nbsp;=&nbsp;${n1(RK.t, 2)}, win
+      ${n1(RK.win_pct, 0)}%) against ${sgn(RK.vetoed_bp)}bp for what it
+      refuses, a spread of ${sgn(RK.spread_bp)}bp.
+      ${weaker
+        ? `That is materially weaker than the ${sgn(cur.gated_bp)}bp the top
+           five earn, which is the same story the floor tells from the other
+           direction: the edge lives in the more liquid names, and widening the
+           net reaches the ones where it does not.`
+        : `That is in line with the ${sgn(cur.gated_bp)}bp the top five earn, so
+           the five-a-night cap is leaving events on the table rather than
+           protecting the book — though on ${int(RK.gated_n)} trades this is
+           suggestive rather than settled.`}`);
+  }
+}
+
 /* --------------------------------- 5.2 the two populations inside a year */
 const LF = D.late_filers || {};
 if (!LF.rows) {
@@ -2437,7 +2676,7 @@ function drawXModel() {
   setText("xm-figcap", `Same ${int(XM.n_events)} releases throughout; only the `
     + `reader changes. Read this figure with care — the in-corpus cells are `
     + `also the EARLIER cells, so the gap between the two colours is mostly `
-    + `calendar, not memory. Table 20 removes that; this figure is here to show `
+    + `calendar, not memory. Table 22 removes that; this figure is here to show `
     + `what the raw data looks like before it is removed.`);
 }
 
@@ -2467,7 +2706,7 @@ if (XM.unavailable || !XM.cells) {
   const AI = XM.accuracy_implied_bp || {};
   const didRows = [];
   // The naive row goes FIRST and is marked as wrong, because it is the number
-  // a reader would compute themselves from Table 19 and it is badly misleading.
+  // a reader would compute themselves from Table 21 and it is badly misleading.
   if (NV.diff_bp !== undefined) {
     didRows.push({ cls: "dim", cells: [
       "per-trade return, <b>no event effects</b>",
@@ -2692,7 +2931,7 @@ function drawDeployment() {
 
 function drawFillCharts() {
   if (!FC.cost_curve) return;
-  // Figure 8 — where the measured spreads actually sit, against the assumption.
+  // Figure 9 — where the measured spreads actually sit, against the assumption.
   const buckets = FC.hist || [];
   if (buckets.length) {
     const W = 720, H = 200, L = 54, R = 20, T = 10, B = 34;
@@ -2722,7 +2961,7 @@ function drawFillCharts() {
     `<span><span class="swatch" style="background:${cssv("--s1")}"></span>measured entry spread</span>`
     + `<span><span class="swatch" style="background:${cssv("--neg")}"></span>the flat assumption</span>`);
 
-  // Figure 9 — the edge as a function of assumed cost.
+  // Figure 10 — the edge as a function of assumed cost.
   const cc = FC.cost_curve;
   const W = 720, H = 230, L = 56, R = 24, T = 12, B = 34;
   const xs = cc.map((r) => r.cost_bp);
@@ -2918,6 +3157,7 @@ const repaint = () => { accHistRedraw(); drawCurve();
   if ((D.arms||{}).per_arm) drawArms();
   if ((D.holdout||{}).mutations) drawDecade();
   if (XM.cells) drawXModel();
+  drawHero();
   if (FC.cost_curve) drawFillCharts();
   if ((FC.deployment||{}).dates) drawDeployment(); };
 function accHistRedraw() {

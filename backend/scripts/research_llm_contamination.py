@@ -649,7 +649,9 @@ def universe_for(args) -> pd.DataFrame:
     """
     if getattr(args, "panel", "v2") == "v2":
         from research_event_panel import load_universe_v2
-        u = load_universe_v2(getattr(args, "windows", "ten"))
+        u = load_universe_v2(getattr(args, "windows", "ten"),
+                             rank_lo=getattr(args, "rank_lo", 1),
+                             rank_hi=getattr(args, "rank_hi", TOP_PER_DAY))
         return u.rename(columns={"edate": "_edate"})
     return load_universe()
 
@@ -1983,6 +1985,11 @@ def main() -> None:
     ap.add_argument("--panel", default="v2", choices=["v1", "v2"],
                     help="v2 = acceptance-relative reaction windows")
     ap.add_argument("--windows", default="ten", choices=["five", "ten"])
+    # The liquidity-rank window within each night. The default is the study's
+    # own universe; a window above it addresses names the live watchlist would
+    # have seen and this study never scored.
+    ap.add_argument("--rank-lo", dest="rank_lo", type=int, default=1)
+    ap.add_argument("--rank-hi", dest="rank_hi", type=int, default=TOP_PER_DAY)
     ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--sample", type=int, default=None,
                     help="year-stratified random subset; deterministic "

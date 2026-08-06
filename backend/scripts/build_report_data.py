@@ -334,6 +334,137 @@ def effort_test(p: pd.DataFrame, gross: np.ndarray) -> dict:
     return out
 
 
+def liquidity_study(p: pd.DataFrame, ret: np.ndarray, gated: np.ndarray) -> dict:
+    """Where the liquidity floor should sit, and whether the edge reaches
+    past the five names a night the study actually trades.
+
+    Two questions that look alike and are not. The FLOOR asks whether the
+    least liquid names the study already scores are worth scoring — answerable
+    from the events in hand, for nothing. The RANK WINDOW asks whether the
+    sixth through tenth most liquid reporter on a given night carries the same
+    edge, which needs verdicts that were never bought, because the top-five
+    rule discarded those events before the model ever saw them.
+
+    The second is the more interesting of the two and the smaller sample: most
+    nights do not have six qualifying reporters, so the cap rarely binds.
+    """
+    dvm = (p["dv"] / 1e6).to_numpy()
+    out: dict = {"floor_now_musd": MIN_DV / 1e6, "rows": []}
+    for floor in (50, 75, 100, 150, 200, 300, 500):
+        sel = dvm >= floor
+        gs, vs = sel & gated, sel & ~gated
+        if gs.sum() < 40 or vs.sum() < 40:
+            continue
+        gr = ret[gs]
+        out["rows"].append({
+            "floor_musd": floor, "n": int(sel.sum()), "gated_n": int(gs.sum()),
+            "kept_pct": _f(sel.mean() * 100),
+            "gated_bp": _f(gr.mean() * 1e4),
+            "t": _f(gr.mean() / (gr.std(ddof=1) / math.sqrt(len(gr)))),
+            "spread_bp": _f((gr.mean() - ret[vs].mean()) * 1e4)})
+
+    # Deciles, because the floor sweep is cumulative and hides where the
+    # weakness actually sits.
+    dec = pd.qcut(pd.Series(dvm).rank(method="first"), 10, labels=False).to_numpy()
+    out["deciles"] = []
+    for d in range(10):
+        sel = (dec == d) & gated
+        if sel.sum() < 20:
+            continue
+        out["deciles"].append({
+            "decile": d + 1,
+            "lo_musd": round(float(dvm[dec == d].min())),
+            "hi_musd": round(float(dvm[dec == d].max())),
+            "n": int(sel.sum()), "gated_bp": _f(ret[sel].mean() * 1e4)})
+
+    # --- is the liquidity effect really a CONTAMINATION effect? -------------
+    # The obvious objection to "the edge lives in liquid names" is that liquid
+    # names are also the most written-about, so the model may simply remember
+    # them better. That is a real mechanism and it is separately measurable.
+    # Three readings settle which story fits: whether recall tracks liquidity,
+    # whether the memorisation ADVANTAGE tracks liquidity, and whether the
+    # gross edge survives once the quoted spread is taken out separately.
+    try:
+        from research_spread_model import SPREADS
+        if SPREADS.exists():
+            sp = pd.read_parquet(SPREADS)[["symbol", "date", "entry_bp", "exit_bp"]]
+            q = p[["symbol", "date"]].merge(sp, on=["symbol", "date"], how="left")
+            for c in ("entry_bp", "exit_bp"):
+                q[c] = q[c].fillna(q[c].median())
+            half = 0.5 * (q["entry_bp"] + q["exit_bp"]).to_numpy()
+            gross = ret + COSTS_BP / 1e4
+            quint = pd.qcut(pd.Series(dvm).rank(method="first"), 5,
+                            labels=False).to_numpy()
+            out["cost_by_quintile"] = []
+            for i in range(5):
+                sel = (quint == i) & gated
+                if sel.sum() < 30:
+                    continue
+                out["cost_by_quintile"].append({
+                    "q": f"Q{i + 1}",
+                    "lo_musd": round(float(dvm[quint == i].min())),
+                    "hi_musd": round(float(dvm[quint == i].max())),
+                    "spread_bp": _f(half[sel].mean()),
+                    "gross_bp": _f(gross[sel].mean() * 1e4),
+                    "net_bp": _f((gross[sel] - half[sel] / 1e4).mean() * 1e4)})
+    except Exception as exc:                              # noqa: BLE001
+        out["cost_by_quintile_unavailable"] = f"{type(exc).__name__}: {exc}"
+
+    # Does the model recall the big names better? The no-text probe answers
+    # directly: a volunteered direction with no release in front of it IS the
+    # recall, so its rate against liquidity is the cleanest reading available.
+    try:
+        nt = _load_results_local()
+        nt = nt[(nt["arm"] == "notext") & (nt["effort"] == "medium")
+                & (nt["model"] == MODEL)]
+        nt = nt.merge(p[["symbol", "date", "dv"]], on=["symbol", "date"],
+                      how="inner")
+        if len(nt) >= 120:
+            nt["vol"] = nt["direction"] != "neutral"
+            terc = pd.qcut(nt["dv"].rank(method="first"), 3, labels=False)
+            out["recall_by_liquidity"] = [
+                {"tercile": ["least liquid", "middle", "most liquid"][t],
+                 "lo_musd": round(float(g["dv"].min() / 1e6)),
+                 "hi_musd": round(float(g["dv"].max() / 1e6)),
+                 "n": int(len(g)),
+                 "volunteered_pct": _f(g["vol"].mean() * 100)}
+                for t, g in nt.groupby(terc)]
+    except Exception as exc:                              # noqa: BLE001
+        out["recall_by_liquidity_unavailable"] = f"{type(exc).__name__}: {exc}"
+
+    # --- ranks 6-10: names the live watchlist sees and the study skipped ----
+    try:
+        from research_event_panel import load_universe_v2
+        ext = load_universe_v2("ten", rank_lo=6, rank_hi=10)
+        res = _load_results_local()
+        res = res[(res["effort"] == "medium") & (res["arm"] == "named")]
+        paths = pd.read_parquet(paths_file("v2"))
+        first = {(s, d): c[0] for s, d, c in
+                 zip(paths["symbol"], paths["date"], paths["closes"])}
+        ext["exit"] = [first.get((s, d), np.nan) for s, d
+                       in zip(ext["symbol"], ext["date"])]
+        ext = ext[ext["exit"].notna()]
+        e = res.merge(ext[["symbol", "date", "move_pct", "react", "exit", "dv"]],
+                      on=["symbol", "date"], how="inner")
+        if len(e) >= 60:
+            side = np.sign(e["move_pct"].to_numpy())
+            fwd = (e["exit"] / e["react"] - 1).to_numpy()
+            pnl = side * fwd - COSTS_BP / 1e4
+            k = _gate(e).to_numpy()
+            gr = pnl[k]
+            out["ranks_6_10"] = {
+                "n": int(len(e)), "gated_n": int(k.sum()),
+                "median_dv_musd": round(float(e["dv"].median() / 1e6)),
+                "gated_bp": _f(gr.mean() * 1e4),
+                "t": _f(gr.mean() / (gr.std(ddof=1) / math.sqrt(len(gr)))),
+                "vetoed_bp": _f(pnl[~k].mean() * 1e4),
+                "spread_bp": _f((gr.mean() - pnl[~k].mean()) * 1e4),
+                "win_pct": _f((gr > 0).mean() * 100)}
+    except Exception as exc:                              # noqa: BLE001
+        out["ranks_6_10_unavailable"] = f"{type(exc).__name__}: {exc}"
+    return out
+
+
 def contamination_estimate(panel: str = "v1") -> dict:
     """How much of the edge could be memorisation? Two estimators, both with
     their uncertainty attached, because the honest answer here is an interval
@@ -760,6 +891,7 @@ def main() -> None:
     # populations and a reader cannot tell a bad year from a differently
     # measured one.
     data["late_filers"] = late_filers(p, r1, g)
+    data["liquidity_study"] = liquidity_study(p, r1, g)
 
     q = pd.qcut(p["dv"] / 1e6, 5, labels=["Q1", "Q2", "Q3", "Q4", "Q5"])
     data["liquidity"] = []
