@@ -20,14 +20,26 @@ export default function CallsPanel({ analyses }: { analyses: Analysis[] }) {
   return (
     <div className="flex h-full flex-col">
       <div className="flex items-center justify-between border-b border-bb-border px-3 py-1.5">
-        <span className="text-[11px] uppercase tracking-widest text-bb-amber">LLM calls</span>
+        <span className="text-[11px] uppercase tracking-widest text-bb-amber">
+          LLM calls — <span className="text-bb-muted">engine only</span>
+        </span>
         <span className="mono text-[11px] text-bb-muted">
           {analyses.length} calls · {errors} failed
           {median !== null && ` · median ${(median / 1000).toFixed(1)}s`}
         </span>
       </div>
       <div className="min-h-0 flex-1 overflow-auto">
-        {analyses.length === 0 && <p className="p-3 text-bb-muted">no analyses journaled yet.</p>}
+        {analyses.length === 0 && (
+          <p className="p-3 text-bb-muted">
+            no analyses journaled yet — one per watched name per night, when a release actually crosses.
+          </p>
+        )}
+        {analyses.length > 0 && (
+          <p className="border-b border-bb-border/50 px-3 py-1 text-[10px] text-bb-muted">
+            These are the ENGINE's calls (one per release, via the configured backend). Offline research runs
+            go through the Batch API and are journaled to docs/notes — they never appear here.
+          </p>
+        )}
         {analyses.map((a) => {
           const err = a.payload?.error;
           const result = a.payload?.result as Record<string, string> | null | undefined;

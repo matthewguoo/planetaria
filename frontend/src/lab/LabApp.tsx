@@ -16,6 +16,48 @@ function merge<T extends { id: number }>(prev: T[], next: T[]): T[] {
   return [...next, ...prev.filter((r) => !seen.has(r.id))].slice(0, MAX_ROWS);
 }
 
+/** Proof the page is alive when the data is not. An idle engine emits
+ * nothing for hours; without this, "no new rows" and "the tab is frozen"
+ * look identical — which is exactly how it read at 01:20 ET. */
+function Heartbeat({
+  beat,
+  error,
+}: {
+  beat: { at: number; polls: number; lastNew: number; fresh: number };
+  error: string | null;
+}) {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 500);
+    return () => clearInterval(id);
+  }, []);
+  const since = beat.at ? Math.round((now - beat.at) / 1000) : null;
+  const stalled = since !== null && since > 10;
+  const tone = error || stalled ? "text-bb-loss" : "text-bb-profit";
+  const ago = (t: number) => {
+    const s = Math.round((now - t) / 1000);
+    if (s < 60) return `${s}s`;
+    if (s < 3600) return `${Math.round(s / 60)}m`;
+    return `${Math.round(s / 3600)}h`;
+  };
+  return (
+    <span className="flex items-baseline gap-1.5 border border-bb-border px-2 py-0.5">
+      <span
+        className={`inline-block h-1.5 w-1.5 self-center ${tone === "text-bb-profit" ? "bg-bb-profit" : "bg-bb-loss"}`}
+        style={{ opacity: beat.polls % 2 === 0 ? 1 : 0.25 }}
+      />
+      <span className="text-[10px] uppercase text-bb-muted">polled</span>
+      <span className={`mono text-[11px] ${tone}`}>
+        {error ? "ERROR" : since === null ? "…" : `${since}s ago · ${beat.polls}`}
+      </span>
+      <span className="text-[10px] uppercase text-bb-muted">last new</span>
+      <span className="mono text-[11px] text-white">
+        {beat.lastNew ? ago(beat.lastNew) : "—"}
+      </span>
+    </span>
+  );
+}
+
 function Badge({ label, value, tone }: { label: string; value: string; tone?: string }) {
   return (
     <span className="flex items-baseline gap-1.5 border border-bb-border px-2 py-0.5">
@@ -33,6 +75,10 @@ export default function LabApp() {
   const [equity, setEquity] = useState(100_000);
   const [flatPct, setFlatPct] = useState(10);
   const [error, setError] = useState<string | null>(null);
+  // Liveness, not decoration: an idle overnight engine produces no new rows
+  // for hours, and without a heartbeat that is indistinguishable from a
+  // frozen page. polls counts round trips; lastNew is when data last moved.
+  const [beat, setBeat] = useState({ at: 0, polls: 0, lastNew: 0, fresh: 0 });
   const cursor = useRef({ decision: 0, signal: 0 });
   const tick = useRef(0);
 
@@ -44,6 +90,13 @@ export default function LabApp() {
       setDecisions((prev) => merge(prev, data.decisions));
       setAnalyses((prev) => merge(prev, data.analyses));
       setError(null);
+      const fresh = data.decisions.length + data.analyses.length;
+      setBeat((b) => ({
+        at: Date.now(),
+        polls: b.polls + 1,
+        lastNew: fresh ? Date.now() : b.lastNew,
+        fresh,
+      }));
       if (tick.current % SIM_EVERY === 0) setSim(await fetchSim(equity, flatPct));
       tick.current += 1;
     } catch (e) {
@@ -103,7 +156,7 @@ export default function LabApp() {
               }
             />
           ))}
-          <Badge label="conn" value={error ? "ERROR" : "OK"} tone={error ? "text-bb-loss" : "text-bb-profit"} />
+          <Heartbeat beat={beat} error={error} />
         </div>
       </header>
 
