@@ -86,20 +86,51 @@ MAX_SESSIONS = 5
 FETCH_DAYS = 11          # calendar days: enough for 5 sessions over a holiday
 
 
-def scored_events(effort: str, all_events: bool = False) -> pd.DataFrame:
+def paths_file(panel: str = "v2") -> Path:
+    """Where the per-event minute paths live for a given panel."""
+    if panel == "v2":
+        from research_event_panel import PATHS_V2
+        return PATHS_V2
+    return PATHS
+
+
+def scored_events(effort: str, all_events: bool = False,
+                  panel: str = "v2", arm: str = "named") -> pd.DataFrame:
     """Every event the study scored — gated AND vetoed. The vetoed leg is
     needed to restate the gate spread on a corrected exit.
 
-    By default the 227 events whose 8-K was accepted outside [16:00, 16:20]
-    ET are dropped: 75 are not after-close releases at all and 152 were not
-    public at the price the study enters at. See timing_ok() for how that was
-    found and what it does not repair. `--all-events` restores the old
-    1,552-event behaviour for side-by-side comparison.
+    Two panels, both kept so the paper can show what the repair changed:
+
+      v1  the original fixed [16:00, 16:20] ET reaction window. Its `amc`
+          classification read a UTC timestamp as ET, so 227 of 1,552 events
+          are mis-timed; they are dropped unless `--all-events`.
+      v2  the reaction measured in the 15 minutes after EACH event's own
+          EDGAR acceptance (research_event_panel). No timing filter is needed
+          because the defect the filter worked around is gone, and the events
+          it discarded are measured properly instead of thrown away.
     """
+    res = _load_results()
+    res = res[(res["effort"] == effort) & (res["arm"] == arm)]
+    if panel == "v2":
+        from research_event_panel import load_universe_v2
+        universe = load_universe_v2()
+        # `exit` and `fwd_bp` live in the path cache for v2 — the next
+        # session's 15:55 close, re-derived rather than read off a stale
+        # column.
+        paths = pd.read_parquet(paths_file("v2"))
+        first_close = {(s, d): c[0] for s, d, c in
+                       zip(paths["symbol"], paths["date"], paths["closes"])}
+        universe["exit"] = [first_close.get((s, d), np.nan) for s, d
+                            in zip(universe["symbol"], universe["date"])]
+        universe["fwd_bp"] = (universe["exit"] / universe["react"] - 1) * 1e4
+        m = res.merge(universe, on=["symbol", "date"], how="inner")
+        m["side"] = np.sign(m["move_pct"]).astype(int)
+        m["gated"] = _gate(m)
+        m["timing_ok"] = True
+        return m[m["exit"].notna()].reset_index(drop=True)
+
     universe = load_universe().rename(columns={"date": "edate"})
     universe["date"] = universe["edate"].astype(str)
-    res = _load_results()
-    res = res[(res["effort"] == effort) & (res["arm"] == "named")]
     m = res.merge(universe, on=["symbol", "date"], how="inner")
     m["side"] = np.sign(m["move_pct"]).astype(int)
     m["gated"] = _gate(m)
@@ -119,7 +150,7 @@ def stage_paths(args) -> None:
 
     from app.config import get_settings
 
-    m = scored_events(args.effort, args.all_events)
+    m = scored_events(args.effort, args.all_events, args.panel)
     prior, have = pd.DataFrame(), set()
     if PATHS.exists():
         prior = pd.read_parquet(PATHS)
@@ -242,10 +273,11 @@ def resolve(paths: pd.DataFrame, horizon: np.ndarray,
 
 
 def stage_sweep(args) -> None:
-    if not PATHS.exists():
-        raise SystemExit("run the `paths` stage first")
-    paths = pd.read_parquet(PATHS)
-    meta = scored_events(args.effort, args.all_events)[
+    pf = paths_file(args.panel)
+    if not pf.exists():
+        raise SystemExit(f"no {pf.name} — run the `paths` stage first")
+    paths = pd.read_parquet(pf)
+    meta = scored_events(args.effort, args.all_events, args.panel)[
         ["symbol", "date", "year", "move_pct", "run5d", "confidence",
          "guidance", "quality_flags", "gated"]]
     p = paths.drop(columns=["gated"]).merge(meta, on=["symbol", "date"], how="inner")
@@ -415,10 +447,11 @@ def stage_best(args) -> None:
     scored on 2024-26, then compounded through the calendar."""
     from research_llm_contamination import _iso_return_leverage, _spy_daily
 
-    if not PATHS.exists():
-        raise SystemExit("run the `paths` stage first")
-    paths = pd.read_parquet(PATHS)
-    meta = scored_events(args.effort, args.all_events)[
+    pf = paths_file(args.panel)
+    if not pf.exists():
+        raise SystemExit(f"no {pf.name} — run the `paths` stage first")
+    paths = pd.read_parquet(pf)
+    meta = scored_events(args.effort, args.all_events, args.panel)[
         ["symbol", "date", "edate", "year", "move_pct", "run5d", "confidence",
          "guidance", "quality_flags", "gated"]]
     p = paths.drop(columns=["gated"]).merge(meta, on=["symbol", "date"], how="inner")
@@ -731,10 +764,11 @@ def stage_mutations(args) -> None:
     selection effect with a bibliography."""
     from research_llm_contamination import _spy_daily
 
-    if not PATHS.exists():
-        raise SystemExit("run the `paths` stage first")
-    paths = pd.read_parquet(PATHS)
-    meta = scored_events(args.effort, args.all_events)[
+    pf = paths_file(args.panel)
+    if not pf.exists():
+        raise SystemExit(f"no {pf.name} — run the `paths` stage first")
+    paths = pd.read_parquet(pf)
+    meta = scored_events(args.effort, args.all_events, args.panel)[
         ["symbol", "date", "edate", "year", "move_pct", "run5d", "direction",
          "confidence", "eps_vs_consensus", "revenue_vs_consensus", "guidance",
          "quality_flags", "gated"]]
@@ -913,10 +947,11 @@ def stage_trades(args) -> None:
     Each row carries the model's verdict, whether the gate let it through,
     why not when it didn't, and what the trade would have returned under each
     exit policy."""
-    if not PATHS.exists():
-        raise SystemExit("run the `paths` stage first")
-    paths = pd.read_parquet(PATHS)
-    meta = scored_events(args.effort, args.all_events)
+    pf = paths_file(args.panel)
+    if not pf.exists():
+        raise SystemExit(f"no {pf.name} — run the `paths` stage first")
+    paths = pd.read_parquet(pf)
+    meta = scored_events(args.effort, args.all_events, args.panel)
     p = paths.drop(columns=["gated"]).merge(
         meta[["symbol", "date", "edate", "year", "move_pct", "run5d", "dv",
               "direction", "confidence", "guidance", "quality_flags",
@@ -976,6 +1011,9 @@ def main() -> None:
     ap.add_argument("stage", choices=["paths", "sweep", "best", "trades",
                                       "mutations"])
     ap.add_argument("--effort", default="medium")
+    ap.add_argument("--panel", default="v2", choices=["v1", "v2"],
+                    help="v2 = acceptance-relative reaction windows "
+                         "(default); v1 = the original fixed 16:00-16:20 slice")
     ap.add_argument("--all-events", action="store_true",
                     help="keep events whose 8-K was accepted outside "
                          "[16:00, 16:20] ET (the pre-2026-08-06 behaviour)")

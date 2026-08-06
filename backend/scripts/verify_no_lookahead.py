@@ -54,16 +54,18 @@ from research_llm_contamination import (  # noqa: E402
     GATE,
     MIN_DV,
     SEC_UA,
+    SUBS,
     TEXTS,
     TOP_PER_DAY,
     _bars_for,
     _load_results,
+    acceptance_et,
     build_request,
     load_universe,
+    submissions,
     ticker_map,
 )
 
-SUBS = CACHE / "sec_submissions"
 DOC = Path(__file__).resolve().parents[2] / "docs" / "notes"
 
 # The entry print. research_pead_backtest measures the reaction as the last
@@ -77,69 +79,6 @@ OUTCOME_COLS = ("anchor", "react", "exit", "move_pct", "fwd_bp")
 
 def _http() -> httpx.Client:
     return httpx.Client(headers=SEC_UA, timeout=30, follow_redirects=True)
-
-
-def submissions(cik: int, http: httpx.Client) -> dict:
-    """Every 8-K in a filer's history, cached to disk. Walks the older shards
-    as well as `filings.recent` — `recent` holds ~1000 filings, which for a
-    prolific filer does not reach 2021."""
-    SUBS.mkdir(parents=True, exist_ok=True)
-    cache = SUBS / f"CIK{cik:010d}.json"
-    if cache.exists():
-        return json.loads(cache.read_text(encoding="utf-8"))
-    rows: list[dict] = []
-    try:
-        doc = http.get(f"https://data.sec.gov/submissions/CIK{cik:010d}.json").json()
-    except Exception:
-        return {"rows": rows}
-    shards = [doc["filings"]["recent"]]
-    for extra in doc["filings"].get("files") or []:
-        try:
-            shards.append(http.get(
-                f"https://data.sec.gov/submissions/{extra['name']}").json())
-        except Exception:
-            continue
-        _time.sleep(0.12)
-    for shard in shards:
-        items = shard.get("items") or [""] * len(shard["form"])
-        acc_dt = shard.get("acceptanceDateTime") or [""] * len(shard["form"])
-        for i in range(len(shard["form"])):
-            if not shard["form"][i].startswith("8-K"):
-                continue
-            rows.append({"form": shard["form"][i],
-                         "filingDate": shard["filingDate"][i],
-                         "acceptance": acc_dt[i],
-                         "items": items[i] or "",
-                         "acc": shard["accessionNumber"][i]})
-    payload = {"rows": rows}
-    cache.write_text(json.dumps(payload), encoding="utf-8")
-    return payload
-
-
-def _acceptance_et(raw: str):
-    """EDGAR's acceptanceDateTime, in ET.
-
-    The value is a real UTC instant with a real `Z`, contrary to the note in
-    research_leadup_account_sim.fetch_calendar_window ("ET-mislabeled-Z").
-    Two independent facts settle it, both reproducible from the cached
-    submissions under _leadup_cache/sec_submissions:
-
-      DST. The median post-15:00 acceptance sits at 20:17 in Apr-Oct and
-      21:15 in Nov-Feb — a 58-minute seasonal shift. Issuers do not
-      collectively file an hour later in winter; UTC-4 becoming UTC-5 does
-      exactly this. An ET timestamp would not move.
-
-      OPERATING HOURS. EDGAR accepts filings 06:00-22:00 ET. Read as UTC that
-      window is 10:00-02:00Z, and the histogram of 68,394 cached 8-Ks has its
-      dead zone at 03:00-09:00Z with 3 filings in the 03:00 hour. Read as ET
-      the same histogram puts 1,115 filings at midnight and 254 at 02:00,
-      when EDGAR is shut.
-    """
-    try:
-        return (datetime.fromisoformat(raw.replace("Z", "+00:00"))
-                .astimezone(ET))
-    except Exception:
-        return None
 
 
 def scored() -> pd.DataFrame:
@@ -259,7 +198,7 @@ def check_provenance(m: pd.DataFrame, args) -> tuple[bool, list[str]]:
                 continue
             if cik not in seen_cik:
                 before = (SUBS / f"CIK{cik:010d}.json").exists()
-                seen_cik[cik] = submissions(cik, http)
+                seen_cik[cik] = {"rows": submissions(cik, http)}
                 if not before:
                     _time.sleep(0.12)
             filings = seen_cik[cik]["rows"]
@@ -271,7 +210,7 @@ def check_provenance(m: pd.DataFrame, args) -> tuple[bool, list[str]]:
                 rows.append({"symbol": r["symbol"], "date": r["date"],
                              "status": "no 8-K matched"})
                 continue
-            et = _acceptance_et(hit["acceptance"])
+            et = acceptance_et(hit["acceptance"])
             rows.append({"symbol": r["symbol"], "date": r["date"],
                          "status": "ok", "form": hit["form"], "acc": hit["acc"],
                          "acceptance": hit["acceptance"][:19],

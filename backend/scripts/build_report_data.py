@@ -35,11 +35,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 
+from research_event_panel import load_universe_v2  # noqa: E402
 from research_holding_period import (  # noqa: E402
-    PATHS,
     _split_stats,
     account,
     mutation_sides,
+    paths_file,
     resolve,
     scored_events,
 )
@@ -178,7 +179,7 @@ def timing_cost() -> list[dict]:
         return []
     prov = pd.read_parquet(PROVENANCE)
     prov = prov[prov["status"] == "ok"][["symbol", "date", "acc_min"]]
-    m = scored_events("medium", all_events=True).merge(
+    m = scored_events("medium", all_events=True, panel="v1").merge(
         prov, on=["symbol", "date"], how="inner")
     m["mech_pnl"] = np.sign(m["move_pct"]) * m["fwd_bp"] - COSTS_BP
     rows = []
@@ -198,13 +199,104 @@ def timing_cost() -> list[dict]:
     return rows
 
 
+HOLDOUT_CUT = "2021-08"     # everything before this was never seen at design time
+
+
+def funnel_v2() -> list[dict]:
+    """The selection cascade on the acceptance-relative panel."""
+    from research_event_panel import react_path, windows
+
+    frames = []
+    for lo, hi in windows("ten"):
+        path = react_path(lo, hi)
+        if path.exists():
+            frames.append(pd.read_parquet(path))
+    if not frames:
+        return []
+    ev = pd.concat(frames, ignore_index=True)
+    ev["edate"] = pd.to_datetime(ev["date"]).dt.date
+    ev["move"] = (ev["react"] / ev["anchor"] - 1) * 100
+    years = (max(ev["edate"]) - min(ev["edate"])).days / 365.25
+    g5 = ev[np.abs(ev["move"]) >= GATE]
+    sel = load_universe_v2()
+    stages = [("after-close releases with a measurable reaction", len(ev)),
+              (f"|reaction| >= {GATE:.0f}% (the strategy's gate)", len(g5)),
+              (f"liquidity floor and top {TOP_PER_DAY}/day — scored", len(sel))]
+    return [{"stage": s, "total": n, "per_year": round(n / years)}
+            for s, n in stages]
+
+
+def panel_compare() -> list[dict]:
+    """What the acceptance-relative rebuild changed, headline for headline.
+
+    v1 with its timing filter is the phase-12 result; v1 unfiltered is what
+    the study reported before the defect was found; v2 measures every event
+    from its own acceptance instead of discarding the awkward ones.
+    """
+    rows = []
+    for label, kw in (("v1, all events (pre-audit)",
+                       dict(all_events=True, panel="v1")),
+                      ("v1, mis-timed events dropped",
+                       dict(all_events=False, panel="v1")),
+                      ("v2, acceptance-relative reaction",
+                       dict(all_events=False, panel="v2"))):
+        try:
+            f = scored_events("medium", **kw)
+            pf = pd.read_parquet(paths_file(kw["panel"]))
+            p = pf.drop(columns=["gated", "side"], errors="ignore").merge(
+                f[["symbol", "date", "move_pct", "gated"]],
+                on=["symbol", "date"], how="inner")
+            p["side"] = np.sign(p["move_pct"]).astype(int)
+            ret, _ = resolve(p, np.ones(len(p), int), None, None)
+            g = p["gated"].to_numpy()
+            rows.append({"panel": label, "n": len(p),
+                         "gated_n": int(g.sum()),
+                         "gated": _f(ret[g].mean() * 1e4),
+                         "vetoed": _f(ret[~g].mean() * 1e4),
+                         "spread": _f((ret[g].mean() - ret[~g].mean()) * 1e4)})
+        except SystemExit:
+            continue
+    return rows
+
+
+def holdout(p: pd.DataFrame, n: int, early_cut: str = HOLDOUT_CUT) -> dict:
+    """The decade extension scored as what it is: a holdout.
+
+    Every design decision in this study — the 5% gate, the top-5 rule, the
+    13bp cost, the horizon, the mutations — was made looking at 2021-08
+    onwards. 2016-01 to 2021-07 was never seen while any of that was chosen,
+    so it is the only genuinely out-of-sample evidence in the paper.
+    """
+    pre = (p["date"] < early_cut).to_numpy()
+    if pre.sum() < 30:
+        return {}
+    out = {"cut": early_cut, "holdout_n": int(pre.sum()),
+           "insample_n": int((~pre).sum()),
+           "holdout_span": [p.loc[pre, "date"].min(), p.loc[pre, "date"].max()],
+           "mutations": []}
+    sides = mutation_sides(p)
+    for label, side in sides.items():
+        row = {"mutation": label}
+        for tag, mask in (("holdout", pre), ("insample", ~pre)):
+            sub = np.where(mask, side, 0)
+            ret, _ = resolve(p.assign(side=side), np.ones(n, int), None, None)
+            s = _split_stats(ret, sub, np.zeros(n, bool))
+            row[tag] = {"n": s["n"], "bp": _f(s["all"]), "t": _f(s["t"]),
+                        "win": _f(s["win"])}
+        out["mutations"].append(row)
+    return out
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--all-events", action="store_true")
+    ap.add_argument("--panel", default="v2", choices=["v1", "v2"])
+    ap.add_argument("--effort", default="medium")
+    ap.add_argument("--windows", default="ten")
     args = ap.parse_args()
 
-    m = scored_events("medium", args.all_events)
-    paths = pd.read_parquet(PATHS)
+    m = scored_events("medium", args.all_events, args.panel)
+    paths = pd.read_parquet(paths_file(args.panel))
     p = paths.drop(columns=["gated", "side"]).merge(
         m[["symbol", "date", "edate", "year", "move_pct", "run5d", "dv",
            "direction", "confidence", "eps_vs_consensus",
@@ -227,8 +319,9 @@ def main() -> None:
         "gate_pct": GATE, "top_per_day": TOP_PER_DAY,
         "min_dv_musd": MIN_DV / 1e6, "costs_bp": COSTS_BP,
         "timing_corrected": not args.all_events,
-        "funnel": funnel(), "spec": spec(), "audit": audit(),
-        "timing_cost": timing_cost(),
+        "funnel": funnel(), "funnel_v2": funnel_v2(), "spec": spec(),
+        "audit": audit(), "timing_cost": timing_cost(),
+        "panel_compare": panel_compare(),
     }
 
     # --- headline, on CORRECTED per-session exits -------------------------
@@ -360,12 +453,13 @@ def main() -> None:
                    "max_dd_pct": _f((1 - spy_curve / peak).max() * 100)}
 
     # --- effort calibration (paired, same events, both efforts) -----------
-    both = scored_events("low", all_events=True)
+    both = scored_events("low", all_events=True, panel="v1", arm="named")
     # NOT "effort": that key already holds the string the study ran at, and
     # overwriting it with the calibration dict silently broke the paper.
     data["effort_cal"] = {}
     for eff, frame in (("low", both),
-                       ("medium", scored_events("medium", all_events=True))):
+                       ("medium", scored_events("medium", all_events=True,
+                                                panel="v1"))):
         f = frame.copy()
         f["pnl"] = np.sign(f["move_pct"]) * f["fwd_bp"] - COSTS_BP
         k = _gate(f)
@@ -375,7 +469,7 @@ def main() -> None:
             "out_tokens": int(f["out"].mean())}
     key = ["symbol", "date"]
     pair = both[[*key, "direction"]].merge(
-        scored_events("medium", all_events=True)[[*key, "direction"]],
+        scored_events("medium", all_events=True, panel="v1")[[*key, "direction"]],
         on=key, suffixes=("_low", "_med"))
     data["effort_cal"]["agreement_pct"] = _f(
         (pair["direction_low"] == pair["direction_med"]).mean() * 100)
@@ -386,6 +480,18 @@ def main() -> None:
         path = PUBLIC / name
         if path.exists():
             data[f"curve_{tag}"] = json.loads(path.read_text(encoding="utf-8"))
+
+    # The decade extension, framed as the holdout it is.
+    data["holdout"] = holdout(p, n)
+
+    # The two contamination arms, computed by the same function that writes
+    # the dated note so the paper and the note cannot disagree.
+    try:
+        from research_llm_contamination import compute_arms
+        arms = compute_arms(args)
+        data["arms"] = {k: v for k, v in arms.items() if k != "lines"}
+    except SystemExit as exc:
+        data["arms"] = {"unavailable": str(exc)}
 
     data["spend_usd"] = _f(json.loads(
         (CACHE / "llm_contam" / "usage.json").read_text())["usd"])

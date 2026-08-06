@@ -355,6 +355,26 @@ per-day top-five was ranked over a candidate pool that still contained the mis-t
 names, so selection on affected days is not what a corrected calendar would produce.
 Fixing that would change the universe and force the study to be re-scored.</p>
 
+<h3>4.5 The repair: acceptance-relative reaction windows</h3>
+
+<p>Dropping the mis-timed events was a workaround. The repair is to stop
+measuring every reaction in the same fixed slice and measure each one in the
+fifteen minutes following <em>its own</em> EDGAR acceptance, with the anchor left
+at the 16:05 post-auction print so <code>move_pct</code> keeps the meaning it has
+in the live engine. That recovers the late filers instead of discarding them,
+and it removes the need for a timing filter at all: an event cannot be
+mis-classified as after-close when its classification is its own timestamp.</p>
+
+<div class="scroll"><table id="panel-table">
+  <caption>Table 6 — the same gate on three panels, T+1, no bracket</caption>
+</table></div>
+
+<p id="panel-para"></p>
+
+<div class="scroll"><table id="funnel2-table">
+  <caption>Table 7 — selection cascade on the acceptance-relative panel</caption>
+</table></div>
+
 <h2><span class="n">5</span>Results</h2>
 
 <h3>5.1 The gate</h3>
@@ -362,7 +382,7 @@ Fixing that would change the universe and force the study to be re-scored.</p>
 <p id="head-para"></p>
 
 <div class="scroll"><table id="horizon-table">
-  <caption>Table 6 — holding period, basis points per trade, no bracket</caption>
+  <caption>Table 8 — holding period, basis points per trade, no bracket</caption>
 </table></div>
 
 <p id="horizon-para"></p>
@@ -370,13 +390,13 @@ Fixing that would change the universe and force the study to be re-scored.</p>
 <h3>5.2 By year and by liquidity</h3>
 
 <div class="scroll"><table id="year-table">
-  <caption>Table 7 — per calendar year</caption>
+  <caption>Table 9 — per calendar year</caption>
 </table></div>
 
 <p id="year-para"></p>
 
 <div class="scroll"><table id="liq-table">
-  <caption>Table 8 — by prior-session dollar-volume quintile</caption>
+  <caption>Table 10 — by prior-session dollar-volume quintile</caption>
 </table></div>
 
 <h3>5.3 The bracket is the problem</h3>
@@ -384,7 +404,7 @@ Fixing that would change the universe and force the study to be re-scored.</p>
 <p id="bracket-para"></p>
 
 <div class="scroll"><table id="bracket-table">
-  <caption>Table 9 — bracket surface, gated trades, T+1 time stop</caption>
+  <caption>Table 11 — bracket surface, gated trades, T+1 time stop</caption>
 </table></div>
 
 <h3>5.4 Gate mutations</h3>
@@ -405,7 +425,7 @@ the same train/test split. Every row is reported, including the failures.</p>
 </div>
 
 <div class="scroll"><table id="mut-table">
-  <caption>Table 10 — gate mutations. bp per trade; train 2021-23, test 2024-26</caption>
+  <caption>Table 12 — gate mutations. bp per trade; train 2021-23, test 2024-26</caption>
 </table></div>
 
 <p id="mut-para"></p>
@@ -427,14 +447,58 @@ silently commit more capital and win by leverage.</p>
 </div>
 
 <div class="scroll"><table id="curve-table">
-  <caption>Table 11 — account simulation against SPY, QQQ and 3× QQQ</caption>
+  <caption>Table 13 — account simulation against SPY, QQQ and 3× QQQ</caption>
 </table></div>
 
 <p id="iso-para"></p>
 
 <div class="scroll"><table id="iso-table">
-  <caption>Table 12 — iso-return leverage: the cheapest index exposure that ends where the strategy ends</caption>
+  <caption>Table 14 — iso-return leverage: the cheapest index exposure that ends where the strategy ends</caption>
 </table></div>
+
+<h3 id="arms-h3">5.6 Contamination arms: reading or remembering?</h3>
+
+<div id="arms-block">
+<p id="arms-intro"></p>
+
+<div class="scroll"><table id="arms-table">
+  <caption>Table 15 — the same gate, the same events, one input removed at a time</caption>
+</table></div>
+
+<div class="fig">
+  <div class="legend" id="arms-legend"></div>
+  <div id="arms-chart"></div>
+  <figcaption><b>Figure 3</b> — Gate spread by arm on the paired event set.
+  <span id="arms-figcap"></span></figcaption>
+</div>
+
+<p id="blind-para"></p>
+
+<div class="scroll"><table id="blind-table">
+  <caption>Table 16 — identity ablation: what the model thought it was reading</caption>
+</table></div>
+
+<p id="notext-para"></p>
+</div>
+
+<h3 id="decade-h3">5.7 Ten years: a genuine holdout</h3>
+
+<div id="decade-block">
+<p id="decade-intro"></p>
+
+<div class="fig">
+  <div class="legend"><span><span class="swatch" style="background:var(--s1)"></span>gate spread, bp per trade</span><span><span class="swatch" style="background:var(--muted)"></span>events scored</span></div>
+  <div id="decade-chart"></div>
+  <figcaption><b>Figure 4</b> — Gate spread by calendar year across the decade.
+  <span id="decade-figcap"></span></figcaption>
+</div>
+
+<div class="scroll"><table id="holdout-table">
+  <caption>Table 17 — key mutations, holdout years against the years the study was designed on</caption>
+</table></div>
+
+<p id="decade-para"></p>
+</div>
 
 <h2><span class="n">6</span>What the evidence supports</h2>
 
@@ -443,13 +507,13 @@ silently commit more capital and win by leverage.</p>
 <h2><span class="n">7</span>Limitations</h2>
 
 <ul class="tight">
-  <li><b>Two contamination arms were designed and not run.</b> An identity-ablation
-  arm (ticker, company name, exchange tags, URLs and every date scrubbed, with the
-  model asked to name the company it thinks it is reading, so the re-identification
-  rate is measured rather than assumed) and a memory-probe arm (ticker and date only,
-  no release text, so any edge is pure recall). Until they run, the evidence against
-  memorisation is indirect: the permutation null, the flat age gradient, and the
-  absence of a retrieval channel.</li>
+  <li id="lim-arms"><b>Two contamination arms were designed and not run.</b> An
+  identity-ablation arm (ticker, company name, exchange tags, URLs and every date
+  scrubbed, with the model asked to name the company it thinks it is reading, so the
+  re-identification rate is measured rather than assumed) and a memory-probe arm
+  (ticker and date only, no release text, so any edge is pure recall). Until they
+  run, the evidence against memorisation is indirect: the permutation null, the flat
+  age gradient, and the absence of a retrieval channel.</li>
   <li><b>Regime priors survive any scrub.</b> A model trained on text written after
   these events knows what kind of company this is even when it recalls no specific
   release. The ablation arm would bound this; nothing removes it.</li>
@@ -600,6 +664,37 @@ $("abstract").innerHTML = `A five-year, ${int(D.paths_n)}-event replication of a
   a timezone defect that admitted ${int(D.audit.early_n + D.audit.late_n)} mis-timed
   events, whose removal improves the headline, and the two direct
   training-contamination arms remain unrun.`;
+
+/* The abstract grows as the study does — the original five sentences stay put
+   and the new evidence is appended rather than rewritten over. */
+(() => {
+  const A = D.arms || {}, HO = D.holdout || {};
+  const extra = [];
+  if (A.per_arm && A.per_arm.length > 1) {
+    const by = Object.fromEntries(A.per_arm.map((r) => [r.arm, r]));
+    const bl = A.blind || {}, nt = A.notext || {};
+    extra.push(`Both direct contamination arms now run on a paired
+      ${int(A.paired_n)}-event sample: with the issuer's identity and every date
+      scrubbed out the gate still earns <b>${sgn(by.blind && by.blind.spread)}bp</b>
+      of spread${bl.ident_pct !== undefined ? ` while the model re-identifies the
+      company ${n1(bl.ident_pct)}% of the time` : ""}, and given a ticker and a date
+      with no release at all it earns
+      <b>${sgn(by.notext && by.notext.spread)}bp</b>${nt.acc_n ? ` with outcome
+      recall at ${n1(nt.acc_pct)}% against 50% chance (z = ${n1(nt.z, 2)})` : ""} —
+      so the edge is in the reading, and memorisation is bounded near zero rather
+      than argued away.`);
+  }
+  if (HO.mutations) {
+    const full = HO.mutations.find((r) => r.mutation.startsWith("FULL POLICY")) || {};
+    const gate = HO.mutations.find((r) => r.mutation.startsWith("SHIPPED gate")) || {};
+    extra.push(`Extending the panel back to ${HO.holdout_span[0]} adds
+      ${int(HO.holdout_n)} sampled events from five and a half years that no design
+      decision ever saw; the gate earns ${sgn(gate.holdout && gate.holdout.bp)}bp
+      there and never standing down earns
+      ${sgn(full.holdout && full.holdout.bp)}bp.`);
+  }
+  if (extra.length) $("abstract").innerHTML += " " + extra.join(" ");
+})();
 
 /* --------------------------------------------------------------- key figures */
 const KEY = [
@@ -873,6 +968,187 @@ for (const k of ["best", "alt", "t1plain", "shipped"]) {
   }
 }
 table($("iso-table"), ["configuration vs index", "exposure needed", "its max DD", "its vol", "strategy max DD"], ISOROWS);
+
+/* ---------------------------------------------- 4.5 the panel repair */
+if ((D.panel_compare || []).length) {
+  table($("panel-table"), ["panel", "events", "gated", "gated bp", "refused bp", "spread"],
+    D.panel_compare.map((r, i) => ({ cls: i === D.panel_compare.length - 1 ? "hl" : "", cells: [
+      r.panel, int(r.n), int(r.gated_n),
+      { v: sgn(r.gated), c: cls(r.gated) }, { v: sgn(r.vetoed), c: cls(r.vetoed) },
+      { v: sgn(r.spread), c: cls(r.spread) }] })));
+  const v1 = D.panel_compare[1] || D.panel_compare[0], v2 = D.panel_compare[D.panel_compare.length - 1];
+  $("panel-para").innerHTML = `Measuring each reaction from its own acceptance
+    recovers the events the filter had to throw away and moves the gate from
+    ${sgn(v1.gated)}bp on ${int(v1.n)} events to ${sgn(v2.gated)}bp on
+    ${int(v2.n)}. The spread ${v2.spread >= v1.spread ? "widens" : "narrows"} to
+    ${sgn(v2.spread)}bp. Everything from here on uses this panel; the earlier
+    tables are kept as they were so the two are comparable.`;
+}
+if ((D.funnel_v2 || []).length) {
+  table($("funnel2-table"), ["selection stage", "events", "per year"],
+    D.funnel_v2.map((f, i) => ({ cls: i === D.funnel_v2.length - 1 ? "hl" : "", cells: [f.stage, int(f.total), int(f.per_year)] })));
+}
+
+/* ------------------------------------------------ 5.6 contamination arms */
+const A = D.arms || {};
+if (!A.per_arm || !A.per_arm.length) {
+  $("arms-block").innerHTML = `<p class="kv">The contamination arms have not been
+    run on this panel yet.</p>`;
+} else {
+  const byArm = Object.fromEntries(A.per_arm.map((r) => [r.arm, r]));
+  const NAMES = { named: "named — the live prompt", blind: "blind — identity and dates scrubbed", notext: "notext — ticker and date only, no release" };
+  $("arms-intro").innerHTML = `The <em class="term">named</em> arm cannot separate
+    reading from remembering: the model is handed the ticker, and most of this
+    sample sits inside its training corpus. These two arms separate them by
+    removing one input at a time, scored on the ${int(A.paired_n)} events every
+    arm covers, through the same exit machinery.`;
+  table($("arms-table"), ["arm", "events", "ungated", "gated", "refused", "spread", "keeps", "t"],
+    ["named", "blind", "notext"].filter((k) => byArm[k]).map((k) => ({
+      cls: k === "notext" ? "hl" : "", cells: [NAMES[k], int(byArm[k].n),
+        { v: sgn(byArm[k].mech), c: cls(byArm[k].mech) },
+        { v: sgn(byArm[k].gated), c: cls(byArm[k].gated) },
+        { v: sgn(byArm[k].vetoed), c: cls(byArm[k].vetoed) },
+        { v: sgn(byArm[k].spread), c: cls(byArm[k].spread) },
+        n1(byArm[k].keeps, 0) + "%", n1(byArm[k].t, 2)] })));
+
+  drawArms();
+  const bl = A.blind || {}, nt = A.notext || {};
+  if (bl.n) {
+    const notId = (bl.subsets || []).find((s) => s.label.startsWith("could NOT"));
+    $("blind-para").innerHTML = `The blind arm is also its own leak gauge: it is
+      asked to name the company it thinks it is reading. It gets the issuer right
+      on <b>${n1(bl.ident_pct)}%</b> of ${int(bl.n)} scrubbed releases, which is
+      the honest measure of how much identity survives a regex — a large issuer is
+      often recognisable from its own segment names and revenue scale, and no
+      scrub fixes that. It agrees with the named arm's direction on
+      ${n1(bl.agree_pct)}% of ${int(bl.agree_n)} paired events.
+      ${notId ? `Re-scoring the gate on only the events the model could <em>not</em>
+      place gives a spread of <b>${sgn(notId.spread)}bp</b> on ${int(notId.n)}
+      events — the cleanest reading-not-remembering estimate this design can
+      produce.` : ""}`;
+    const rows = (bl.by_conf || []).map((c) => [c.conf, int(c.n), n1(c.right_pct) + "%"]);
+    (bl.subsets || []).forEach((s) => rows.push([{ v: `<b>${s.label}</b> — gate spread`, c: "" },
+      int(s.n), { v: sgn(s.spread) + "bp", c: cls(s.spread) }]));
+    table($("blind-table"), ["self-reported identification confidence", "events", "actually right / spread"], rows);
+  }
+  if (nt.n) {
+    const memo = byArm.notext || {};
+    $("notext-para").innerHTML = `The memory probe is the direct upper bound. Given
+      only a ticker and a date, the model claimed to recall the report on
+      <b>${n1(nt.recall_pct)}%</b> of ${int(nt.n)} events and volunteered a
+      next-session direction on ${int(nt.guessed_n)}.
+      ${nt.acc_n ? `Those guesses were right ${n1(nt.acc_pct)}% of the time against
+      50% chance (n = ${int(nt.acc_n)}, binomial SE ${n1(nt.se_pp)}pp,
+      z = ${n1(nt.z, 2)}) — ${Math.abs(nt.z) < 2 ? "indistinguishable from a coin" : "distinguishable from chance, which is exactly what a memorisation control is meant to catch"}.` : ""}
+      Gating on memory alone yields a spread of <b>${sgn(memo.spread)}bp</b>
+      against the named arm's ${sgn(byArm.named.spread)}bp. There is no
+      information in that prompt, so whatever it earns is what recall is worth.`;
+  }
+}
+
+/* The unrun-arms limitation is only true until the arms run. Rewrite it from
+   what actually happened rather than leaving a false sentence standing. */
+if (A.per_arm && A.per_arm.length > 1) {
+  const bl = A.blind || {}, nt = A.notext || {};
+  const byArm = Object.fromEntries(A.per_arm.map((r) => [r.arm, r]));
+  $("lim-arms").innerHTML = `<b>The contamination arms bound memorisation; they do
+    not eliminate it.</b> Both now run (Section 5.6), and neither is clean. The
+    identity scrub still leaves the issuer recognisable
+    ${bl.ident_pct !== undefined ? `${n1(bl.ident_pct)}% of the time` : ""} — a
+    large company is identifiable from its own segment names and revenue scale,
+    and no regex fixes that, so the blind arm is an upper bound on ablation
+    rather than a true one. The memory probe measures recall of the OUTCOME, not
+    of the regime priors a model carries about a company it has read a decade of
+    coverage about; those survive every control here. And both arms run on a
+    ${int(A.paired_n)}-event sample rather than the full panel, so their
+    confidence intervals are wider than the named arm's.`;
+}
+
+/* -------------------------------------------------------- 5.7 the decade */
+const HO = D.holdout || {};
+if (!HO.mutations) {
+  $("decade-block").innerHTML = `<p class="kv">The decade extension has not been
+    built on this panel yet.</p>`;
+} else {
+  const keyMut = ["SHIPPED gate", "pure tape", "anti-tape baseline", "FULL POLICY",
+                  "fade every non-agreement", "neutral verdicts, traded against"];
+  $("decade-intro").innerHTML = `Every design decision in this paper — the 5% gate,
+    the top-${D.top_per_day} rule, the flat ${D.costs_bp}bp cost, the holding
+    period, all fifteen mutations — was made looking at ${HO.cut} onwards.
+    ${HO.holdout_span[0]} to ${HO.holdout_span[1]} was never seen while any of it
+    was chosen, which makes those ${int(HO.holdout_n)} events the only genuinely
+    out-of-sample evidence here. They are sampled, not exhaustive: the selection
+    rule is identical and a uniform random subset of qualifying events was kept,
+    because verdicts cost money and a sparse decade tests more than a dense
+    five years tested twice.`;
+  table($("holdout-table"),
+    ["mutation", "holdout n", "holdout bp", "t", "in-sample n", "in-sample bp", "t"],
+    HO.mutations.filter((r) => keyMut.some((k) => r.mutation.startsWith(k))).map((r) => ({
+      cls: r.mutation.startsWith("FULL POLICY") ? "hl" : "", cells: [
+        r.mutation.replace(/^FULL POLICY: .*/, "never stand down"),
+        int(r.holdout.n), { v: sgn(r.holdout.bp), c: cls(r.holdout.bp) }, n1(r.holdout.t, 2),
+        int(r.insample.n), { v: sgn(r.insample.bp), c: cls(r.insample.bp) }, n1(r.insample.t, 2)] })));
+  const full = HO.mutations.find((r) => r.mutation.startsWith("FULL POLICY")) || {};
+  const gate = HO.mutations.find((r) => r.mutation.startsWith("SHIPPED gate")) || {};
+  $("decade-para").innerHTML = `Read the two halves against each other rather than
+    either alone. The gate earns ${sgn(gate.holdout && gate.holdout.bp)}bp on the
+    holdout against ${sgn(gate.insample && gate.insample.bp)}bp in sample, and
+    never standing down earns ${sgn(full.holdout && full.holdout.bp)}bp against
+    ${sgn(full.insample && full.insample.bp)}bp. A rule that survives five and a
+    half years it was never shown is a different kind of evidence from one that
+    fits the years it was built on.`;
+  drawDecade();
+}
+
+function drawArms() {
+  const rows = (D.arms.per_arm || []);
+  if (!rows.length) return;
+  const W = 720, H = 40 + rows.length * 52, L = 200, R = 70, T = 8;
+  const span = Math.max(...rows.map((r) => Math.abs(r.spread)), 1);
+  const zero = L + (W - L - R) * 0.12;
+  const scale = (W - L - R) * 0.85 / span;
+  const NAMES = { named: "named (the live prompt)", blind: "blind (identity scrubbed)", notext: "notext (no release at all)" };
+  const bars = rows.map((r, i) => {
+    const y = T + i * 52, w = Math.abs(r.spread) * scale;
+    const x = r.spread >= 0 ? zero : zero - w;
+    const col = cssv(S[i]);
+    return `<rect x="${x}" y="${y + 8}" width="${Math.max(w, 1)}" height="26" fill="${col}" opacity=".9"></rect>
+      <text x="${L - 12}" y="${y + 26}" text-anchor="end" font-size="11" fill="${cssv("--ink")}" font-family="${cssv("--mono")}">${NAMES[r.arm] || r.arm}</text>
+      <text x="${(r.spread >= 0 ? x + w + 8 : x - 8)}" y="${y + 26}" text-anchor="${r.spread >= 0 ? "start" : "end"}" font-size="11" fill="${col}" font-family="${cssv("--mono")}">${sgn(r.spread)}bp</text>`;
+  }).join("");
+  $("arms-chart").innerHTML = svg(W, H,
+    `<line x1="${zero}" x2="${zero}" y1="${T}" y2="${H - 8}" stroke="${cssv("--rule")}"></line>` + bars,
+    `aria-label="Gate spread by arm: ${rows.map((r) => r.arm + " " + r.spread + " bp").join(", ")}"`);
+  $("arms-legend").innerHTML = rows.map((r, i) =>
+    `<span><span class="swatch" style="background:${cssv(S[i])}"></span>${r.arm}</span>`).join("");
+  $("arms-figcap").textContent = `Paired on ${D.arms.paired_n} events. `
+    + `A bar near zero means that arm's verdicts carry no event-specific information.`;
+}
+
+function drawDecade() {
+  const ys = D.years || [];
+  if (!ys.length) return;
+  const W = 720, H = 210, L = 42, R = 12, T = 10, B = 40;
+  const span = Math.max(...ys.map((y) => Math.abs(y.spread || 0)), 1);
+  const bw = (W - L - R) / ys.length;
+  const zeroY = T + (H - T - B) / 2;
+  const scale = (H - T - B) / 2 / span;
+  const cut = (D.holdout || {}).cut || "2021-08";
+  const bars = ys.map((y, i) => {
+    const x = L + i * bw + bw * 0.18, w = bw * 0.64;
+    const v = y.spread || 0, h = Math.abs(v) * scale;
+    const isHold = `${y.year}-12` < cut;
+    const col = isHold ? cssv("--s1") : cssv("--s4");
+    return `<rect x="${x}" y="${v >= 0 ? zeroY - h : zeroY}" width="${w}" height="${Math.max(h, 1)}" fill="${col}" opacity="${isHold ? .95 : .65}"></rect>
+      <text x="${x + w / 2}" y="${H - 24}" text-anchor="middle" font-size="10" fill="${cssv("--muted")}" font-family="${cssv("--mono")}">${y.year}</text>
+      <text x="${x + w / 2}" y="${H - 12}" text-anchor="middle" font-size="9" fill="${cssv("--faint")}" font-family="${cssv("--mono")}">${y.n}</text>`;
+  }).join("");
+  $("decade-chart").innerHTML = svg(W, H,
+    `<line x1="${L}" x2="${W - R}" y1="${zeroY}" y2="${zeroY}" stroke="${cssv("--ink")}" stroke-width="1"></line>` + bars,
+    `aria-label="Gate spread by year: ${ys.map((y) => y.year + " " + (y.spread || 0).toFixed(0) + " bp on " + y.n + " events").join(", ")}"`);
+  $("decade-figcap").textContent = `Solid bars are holdout years (before ${cut}); `
+    + `faded bars are the years the study was designed on. Event count under each year.`;
+}
 
 $("conc-para").innerHTML = `The gate is real and it is not the tape. Verdict labels
   shuffled within month never reproduce the spread; the edge does not grow with how

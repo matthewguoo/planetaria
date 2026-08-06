@@ -161,6 +161,62 @@ def load_universe() -> pd.DataFrame:
 
 # ------------------------------------------------------- acceptance timing
 
+SUBS = CACHE / "sec_submissions"
+
+
+def acceptance_et(raw: str) -> datetime | None:
+    """EDGAR's acceptanceDateTime, in ET.
+
+    The value is a real UTC instant with a real `Z`, contrary to the note that
+    stood in research_leadup_account_sim until 2026-08-06 ("ET-mislabeled-Z").
+    Two facts settle it, both reproducible from the cached submissions: the
+    median post-15:00 acceptance shifts 58 minutes between Apr-Oct and Nov-Feb
+    (a DST boundary, which issuer behaviour cannot produce), and read as ET the
+    histogram of 68,394 cached 8-Ks puts filings at midnight and 02:00, when
+    EDGAR is shut.
+    """
+    try:
+        return (datetime.fromisoformat(raw.replace("Z", "+00:00"))
+                .astimezone(ET))
+    except Exception:
+        return None
+
+
+def submissions(cik: int, http: httpx.Client) -> list[dict]:
+    """Every 8-K in a filer's history, cached to disk. Walks the older shards
+    as well as `filings.recent`, which holds only ~1000 filings and for a
+    prolific filer does not reach back ten years."""
+    SUBS.mkdir(parents=True, exist_ok=True)
+    cache = SUBS / f"CIK{cik:010d}.json"
+    if cache.exists():
+        return json.loads(cache.read_text(encoding="utf-8"))["rows"]
+    rows: list[dict] = []
+    try:
+        doc = http.get(f"https://data.sec.gov/submissions/CIK{cik:010d}.json").json()
+    except Exception:
+        return rows
+    shards = [doc["filings"]["recent"]]
+    for extra in doc["filings"].get("files") or []:
+        try:
+            shards.append(http.get(
+                f"https://data.sec.gov/submissions/{extra['name']}").json())
+        except Exception:
+            continue
+        _time.sleep(0.12)
+    for shard in shards:
+        items = shard.get("items") or [""] * len(shard["form"])
+        acc_dt = shard.get("acceptanceDateTime") or [""] * len(shard["form"])
+        for i in range(len(shard["form"])):
+            if not shard["form"][i].startswith("8-K"):
+                continue
+            rows.append({"form": shard["form"][i],
+                         "filingDate": shard["filingDate"][i],
+                         "acceptance": acc_dt[i], "items": items[i] or "",
+                         "acc": shard["accessionNumber"][i]})
+    cache.write_text(json.dumps({"rows": rows}), encoding="utf-8")
+    return rows
+
+
 PROVENANCE = CACHE / "lookahead_provenance.parquet"
 ENTRY_MIN = 16 * 60 + 20    # the entry print, ET
 CLOSE_MIN = 16 * 60         # the closing bell, ET
@@ -514,8 +570,24 @@ def client():
 
 # ------------------------------------------------------------------ stages
 
+def universe_for(args) -> pd.DataFrame:
+    """The event set a stage operates on.
+
+    v2 is the acceptance-relative panel (research_event_panel) and is the
+    default from 2026-08-06: its reaction is measured 15 minutes after each
+    event's OWN EDGAR acceptance, so the mis-timed events the v1 panel had to
+    discard are measured properly instead. v1 stays reachable because the
+    paper reports what the repair changed.
+    """
+    if getattr(args, "panel", "v2") == "v2":
+        from research_event_panel import load_universe_v2
+        u = load_universe_v2(getattr(args, "windows", "ten"))
+        return u.rename(columns={"edate": "_edate"})
+    return load_universe()
+
+
 def stage_texts(args) -> None:
-    universe = load_universe()
+    universe = universe_for(args)
     print(f"{len(universe)} selected events "
           f"{universe['date'].min()}..{universe['date'].max()}")
     with httpx.Client(headers=SEC_UA, timeout=30, follow_redirects=True) as http:
@@ -572,10 +644,38 @@ def _completed_ids() -> set[str]:
     return done
 
 
+def stratified_sample(universe: pd.DataFrame, n: int,
+                      seed: int = 20260806) -> pd.DataFrame:
+    """A year-stratified random subset, DETERMINISTIC in (n, seed).
+
+    The contamination arms cost real money, so they run on a sample rather
+    than the full panel — but blind and notext must land on the SAME events
+    or the three-arm comparison is three different studies. Same n, same seed,
+    same universe gives the same rows every time, which is why this is a pure
+    function rather than a flag that shuffles per invocation.
+    """
+    if n <= 0 or len(universe) <= n:
+        return universe
+    rng = np.random.default_rng(seed)
+    years = sorted(universe["year"].unique())
+    per = max(1, n // len(years))
+    keep = []
+    for year in years:
+        g = universe[universe["year"] == year]
+        take = min(len(g), per)
+        keep.append(g.iloc[sorted(rng.choice(len(g), take, replace=False))])
+    return pd.concat(keep).sort_values(["date", "symbol"])
+
+
 def stage_submit(args) -> None:
-    universe = load_universe()
+    universe = universe_for(args)
     if args.window:
         universe = universe[universe["year"].isin(args.window.split(","))]
+    if args.sample:
+        before = len(universe)
+        universe = stratified_sample(universe, args.sample, args.seed)
+        print(f"stratified sample: {len(universe)} of {before} events "
+              f"(seed {args.seed}, year-balanced)")
     requests = _requests_for(args.arm, universe, args.effort, args.limit)
     if not requests:
         print("nothing to submit (all done, or no texts)")
@@ -850,6 +950,239 @@ def stage_score(args) -> None:
     doc = (Path(__file__).resolve().parent.parent.parent / "docs" / "notes"
            / f"llm_contamination_{stamp}.md")
     doc.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    print(f"\nwrote {doc}")
+
+
+def _identified(guess: str, symbol: str, company: str) -> bool:
+    """Did the blind arm work out who it was reading?
+
+    Counted as identified if the guess contains the ticker as a standalone
+    token, or any distinctive word from the registered company name. Generous
+    on purpose: this number is the leak gauge, and a leak gauge that flatters
+    the scrub is worthless.
+    """
+    g = str(guess or "").upper()
+    if not g or g in ("UNKNOWN", "N/A", "NONE", ""):
+        return False
+    if re.search(rf"(?<![A-Z0-9]){re.escape(symbol.upper())}(?![A-Z0-9])", g):
+        return True
+    for token in re.split(r"[^A-Za-z0-9']+", str(company or "")):
+        if len(token) > 3 and token.upper() not in _STOP and token.upper() in g:
+            return True
+    return False
+
+
+def compute_arms(args) -> dict:
+    """The two direct contamination controls, scored against the live arm.
+
+    THE QUESTION. `named` cannot separate reading from remembering: the model
+    is told the ticker and four of the five years are inside its corpus. The
+    two arms here separate them by removing one input at a time.
+
+      blind   the same release with identity and time scrubbed out. If the
+              edge survives here it came from reading the numbers, because
+              there is nothing left to remember them BY. The arm also reports
+              which company it thinks it is reading, so the scrub's failure
+              rate is measured rather than assumed — and the edge can be
+              re-scored on just the events it could NOT identify, which is
+              the cleanest reading-not-remembering estimate available.
+      notext  ticker and date, no release. There is no information in this
+              prompt, so any edge is pure recall. It is the direct upper
+              bound on what memorisation can be worth.
+    """
+    from research_holding_period import paths_file, resolve
+
+    universe = universe_for(args)
+    res = _load_results()
+    res = res[res["effort"] == args.effort]
+    if res.empty:
+        raise SystemExit(f"no results at effort={args.effort}")
+    with httpx.Client(headers=SEC_UA, timeout=30, follow_redirects=True) as http:
+        _, names = ticker_map(http)
+
+    paths = pd.read_parquet(paths_file("v2" if args.panel == "v2" else "v1"))
+    lines: list[str] = []
+    data: dict = {"effort": args.effort, "panel": args.panel}
+
+    def emit(text: str = "") -> None:
+        print(text)
+        lines.append(text)
+
+    arms = {}
+    for arm, g in res.groupby("arm"):
+        m = g.merge(universe, on=["symbol", "date"], how="inner")
+        if not m.empty:
+            arms[arm] = m
+    if "named" not in arms:
+        raise SystemExit("no named results on this panel")
+
+    # Score every arm on ONE shared event set, resolved through the same
+    # per-session exit machinery — otherwise an arm that happens to cover
+    # easier events looks better for a reason that has nothing to do with
+    # what it was given.
+    shared = set(zip(arms["named"]["symbol"], arms["named"]["date"]))
+    for arm, m in arms.items():
+        shared &= set(zip(m["symbol"], m["date"]))
+    emit(f"# Contamination arms — {MODEL}, effort {args.effort}, panel "
+         f"{args.panel}")
+    emit()
+    emit("arms present: " + ", ".join(f"{a} n={len(m)}" for a, m in arms.items()))
+    emit(f"paired subset scored below: {len(shared)} events covered by every arm")
+    emit()
+    data["paired_n"] = len(shared)
+    data["arm_n"] = {a: len(m) for a, m in arms.items()}
+
+    def scored(m: pd.DataFrame) -> pd.DataFrame:
+        m = m[[(s, d) in shared for s, d in zip(m["symbol"], m["date"])]].copy()
+        p = paths.drop(columns=["side"], errors="ignore").merge(
+            m[["symbol", "date", "move_pct", "direction", "confidence"]],
+            on=["symbol", "date"], how="inner")
+        p["side"] = np.sign(p["move_pct"]).astype(int)
+        ret, _ = resolve(p, np.ones(len(p), int), None, None)
+        p["ret_bp"] = ret * 1e4
+        p["gated"] = _gate(p)
+        return p
+
+    emit("| arm | n | ungated | gated | vetoed | spread | keeps |")
+    emit("|---|---|---|---|---|---|---|")
+    per_arm, data["per_arm"] = {}, []
+    for arm in ("named", "blind", "notext"):
+        if arm not in arms:
+            continue
+        p = scored(arms[arm])
+        per_arm[arm] = p
+        k = p["gated"]
+        g, v = p.loc[k, "ret_bp"].mean(), p.loc[~k, "ret_bp"].mean()
+        t = (p.loc[k, "ret_bp"].mean()
+             / (p.loc[k, "ret_bp"].std(ddof=1) / np.sqrt(max(int(k.sum()), 1))))
+        data["per_arm"].append({
+            "arm": arm, "n": len(p), "gated_n": int(k.sum()),
+            "mech": round(float(p["ret_bp"].mean()), 1),
+            "gated": round(float(g), 1), "vetoed": round(float(v), 1),
+            "spread": round(float(g - v), 1), "keeps": round(float(k.mean()) * 100, 1),
+            "t": round(float(t), 2)})
+        emit(f"| {arm} | {len(p)} | {p['ret_bp'].mean():+.1f} | {g:+.1f} | "
+             f"{v:+.1f} | {g - v:+.1f} | {k.mean() * 100:.0f}% |")
+    emit()
+
+    if "blind" in arms:
+        b = arms["blind"]
+        b = b[[(s, d) in shared for s, d in zip(b["symbol"], b["date"])]].copy()
+        b["ident"] = [
+            _identified(gc, sym, names.get(sym, ""))
+            for gc, sym in zip(b.get("guessed_company", ""), b["symbol"])]
+        emit("## Identity ablation — how leaky is the scrub?")
+        emit()
+        emit(f"named the right issuer on {b['ident'].mean() * 100:.1f}% of "
+             f"{len(b)} scrubbed releases.")
+        data["blind"] = {"n": len(b),
+                         "ident_pct": round(float(b["ident"].mean()) * 100, 1),
+                         "by_conf": [], "subsets": []}
+        emit()
+        emit("| self-reported identification confidence | n | actually right |")
+        emit("|---|---|---|")
+        for conf in ("none", "low", "medium", "high"):
+            g = b[b["identification_confidence"] == conf]
+            if len(g):
+                emit(f"| {conf} | {len(g)} | {g['ident'].mean() * 100:.1f}% |")
+                data["blind"]["by_conf"].append({
+                    "conf": conf, "n": len(g),
+                    "right_pct": round(float(g["ident"].mean()) * 100, 1)})
+        emit()
+        # THE MEASUREMENT THAT MATTERS. Re-score the gate on only the events
+        # the model could not place. If the edge holds there, it is reading.
+        p = per_arm["blind"]
+        ident = dict(zip(zip(b["symbol"], b["date"]), b["ident"]))
+        p = p.assign(ident=[ident.get((s, d), False)
+                            for s, d in zip(p["symbol"], p["date"])])
+        emit("| blind subset | n | gated | vetoed | spread |")
+        emit("|---|---|---|---|---|")
+        for label, sub in (("could NOT identify the issuer", p[~p["ident"]]),
+                           ("identified the issuer", p[p["ident"]])):
+            if not len(sub):
+                continue
+            k = sub["gated"]
+            if k.sum() == 0 or (~k).sum() == 0:
+                continue
+            gg, vv = sub.loc[k, "ret_bp"].mean(), sub.loc[~k, "ret_bp"].mean()
+            emit(f"| {label} | {len(sub)} | {gg:+.1f} | {vv:+.1f} | "
+                 f"{gg - vv:+.1f} |")
+            data["blind"]["subsets"].append({
+                "label": label, "n": len(sub), "gated_n": int(k.sum()),
+                "gated": round(float(gg), 1), "vetoed": round(float(vv), 1),
+                "spread": round(float(gg - vv), 1)})
+        emit()
+        # Does the blind model reach the same verdict as the named one?
+        pair = arms["named"][["symbol", "date", "direction"]].merge(
+            b[["symbol", "date", "direction"]], on=["symbol", "date"],
+            suffixes=("_named", "_blind"))
+        agree = float((pair["direction_named"] == pair["direction_blind"]).mean())
+        data["blind"]["agree_pct"] = round(agree * 100, 1)
+        data["blind"]["agree_n"] = len(pair)
+        emit(f"named and blind agree on direction for {agree * 100:.1f}% "
+             f"of {len(pair)} paired events.")
+        emit()
+
+    if "notext" in arms:
+        nt = arms["notext"]
+        nt = nt[[(s, d) in shared for s, d in zip(nt["symbol"], nt["date"])]].copy()
+        p = per_arm["notext"]
+        fwd = dict(zip(zip(paths["symbol"], paths["date"]),
+                       [c[0] for c in paths["closes"]]))
+        emit("## Memory probe — the upper bound on what recall can be worth")
+        emit()
+        recalled = nt[nt["recalls_event"] == "yes"]
+        guessed = nt[nt["recalled_next_session_direction"] != "unknown"]
+        data["notext"] = {
+            "n": len(nt), "recall_n": len(recalled),
+            "recall_pct": round(len(recalled) / max(len(nt), 1) * 100, 1),
+            "guessed_n": len(guessed)}
+        emit(f"claimed to recall the report on {len(recalled)}/{len(nt)} events "
+             f"({len(recalled) / max(len(nt), 1) * 100:.1f}%); volunteered a "
+             f"next-session direction on {len(guessed)}.")
+        if len(guessed):
+            up = []
+            for _, r in guessed.iterrows():
+                nxt = fwd.get((r["symbol"], r["date"]))
+                if nxt is None:
+                    continue
+                up.append(((nxt / r["react"] - 1) > 0,
+                           r["recalled_next_session_direction"] == "up"))
+            if up:
+                acc = float(np.mean([a == b for a, b in up]))
+                se = np.sqrt(0.25 / len(up))
+                z = (acc - 0.5) / se
+                data["notext"].update(acc_pct=round(acc * 100, 1),
+                                      acc_n=len(up),
+                                      se_pp=round(float(se) * 100, 1),
+                                      z=round(float(z), 2))
+                emit(f"outcome-recall accuracy {acc * 100:.1f}% on {len(up)} "
+                     f"volunteered directions, against 50% chance "
+                     f"(binomial SE {se * 100:.1f}pp, z = {z:+.2f}).")
+        k = p["gated"]
+        if k.any() and (~k).any():
+            emit(f"gate on memory alone: n={int(k.sum())} "
+                 f"{p.loc[k, 'ret_bp'].mean():+.1f}bp vs vetoed "
+                 f"{p.loc[~k, 'ret_bp'].mean():+.1f}bp -> spread "
+                 f"{p.loc[k, 'ret_bp'].mean() - p.loc[~k, 'ret_bp'].mean():+.1f}bp.")
+        emit("There is no information in this prompt. Whatever this spread is, "
+             "it is what memorisation alone buys.")
+        emit()
+
+    emit(f"measured API spend for the whole study: ${_spent_so_far():.2f}")
+    data["spend_usd"] = round(_spent_so_far(), 2)
+    data["lines"] = lines
+    return data
+
+
+def stage_arms(args) -> None:
+    """Render compute_arms() to a dated note. build_report_data reads the same
+    dict, so the note and the paper cannot disagree about a number."""
+    data = compute_arms(args)
+    stamp = datetime.now(ET).strftime("%Y%m%d_%H%M")
+    doc = (Path(__file__).resolve().parents[2] / "docs" / "notes"
+           / f"contamination_arms_{stamp}.md")
+    doc.write_text("\n".join(data["lines"]) + "\n", encoding="utf-8")
     print(f"\nwrote {doc}")
 
 
@@ -1412,7 +1745,7 @@ def stage_calibrate(args) -> None:
     """Effort A/B on the most recent slice, where a fable result already
     exists to compare against. Run this BEFORE spending the 5-year budget:
     if low matches medium here, the whole study runs at low."""
-    universe = load_universe()
+    universe = universe_for(args)
     universe = universe[universe["date"].astype(str) >= args.since]
     print(f"calibration slice: {len(universe)} events since {args.since}")
     plans = []
@@ -1451,11 +1784,19 @@ def stage_calibrate(args) -> None:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("stage", choices=["texts", "scrub", "calibrate", "submit",
-                                      "collect", "watch", "score", "curve", "brackets"])
+                                      "collect", "watch", "score", "curve",
+                                      "brackets", "arms"])
     ap.add_argument("--arm", default="named", choices=["named", "blind", "notext"])
     ap.add_argument("--effort", default="low", choices=["low", "medium", "high"])
     ap.add_argument("--window", default="", help="comma-separated years")
+    ap.add_argument("--panel", default="v2", choices=["v1", "v2"],
+                    help="v2 = acceptance-relative reaction windows")
+    ap.add_argument("--windows", default="ten", choices=["five", "ten"])
     ap.add_argument("--limit", type=int, default=None)
+    ap.add_argument("--sample", type=int, default=None,
+                    help="year-stratified random subset; deterministic "
+                         "in (sample, seed) so two arms share events")
+    ap.add_argument("--seed", type=int, default=20260806)
     ap.add_argument("--since", default="2026-02-01")
     ap.add_argument("--budget", type=float, default=50.0)
     ap.add_argument("--poll-s", type=float, default=30.0)
@@ -1466,7 +1807,8 @@ def main() -> None:
     args = ap.parse_args()
     {"texts": stage_texts, "scrub": stage_scrub, "calibrate": stage_calibrate,
      "submit": stage_submit, "collect": stage_collect, "watch": stage_watch,
-     "score": stage_score, "curve": stage_curve, "brackets": stage_brackets}[args.stage](args)
+     "score": stage_score, "curve": stage_curve, "brackets": stage_brackets,
+     "arms": stage_arms}[args.stage](args)
 
 
 if __name__ == "__main__":
