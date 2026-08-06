@@ -292,16 +292,27 @@ def _accessions(cik: int, http: httpx.Client) -> list[dict]:
     return rows
 
 
-def fetch_release_text(sym: str, cik: int, day: str,
-                       http: httpx.Client) -> str | None:
+def fetch_release_text(sym: str, cik: int, day: str, http: httpx.Client,
+                       acc: str | None = None) -> str | None:
     """8-K EX-99 text for the event date (the live feed's own resolution
     logic). Cached; an empty cache file means 'looked, found nothing' and is
-    not retried."""
+    not retried.
+
+    Pass `acc` when the caller already knows the accession — the v2 calendar
+    stores it per event. That is not just a speed-up: the fallback below
+    matches on EDGAR's `filingDate`, and for anything accepted after 17:30 ET
+    the filing date is the NEXT business day, so a date-keyed lookup silently
+    finds nothing for exactly the late filers the acceptance-relative panel
+    exists to recover.
+    """
     TEXTS.mkdir(parents=True, exist_ok=True)
     cache = TEXTS / f"{sym}_{day}.txt"
     if cache.exists():
         return cache.read_text(encoding="utf-8", errors="replace") or None
-    acc = next((r["acc"] for r in _accessions(cik, http) if r["date"] == day), None)
+    if acc is None:
+        acc = next((r["acc"] for r in submissions(cik, http)
+                    if r["form"] == "8-K" and "2.02" in r["items"]
+                    and r["filingDate"] == day), None)
     if acc is None:
         cache.write_text("", encoding="utf-8")
         return None
@@ -390,7 +401,18 @@ def anonymise(text: str, symbol: str, company: str) -> tuple[str, int]:
     # Contact furniture: URLs, emails, phone numbers, IR boilerplate.
     text = sub(r"https?://\S+|www\.\S+", "[url]", text)
     text = sub(r"[\w.+-]+@[\w-]+\.[\w.]+", "[email]", text)
+    # Named IR/press contacts are a strong identity signal — "Investor Contact:
+    # Ahmed Pasha" is one search away from the issuer — and they survived the
+    # company-name pass because a person's name is not the company's. Bounded
+    # to two capitalised words after the label so it cannot run away.
+    text = sub(r"(?:Investor|Media|Press|Analyst|Corporate)\s+"
+               r"(?:Relations\s+)?Contacts?\s*:?\s*"
+               r"(?:[A-Z][A-Za-z.'-]+\s+){1,3}", "Contact: [name] ", text)
+    # US numbers are usually written bare (703-682-6451), and the old pattern
+    # required a 1-2 digit country code first, so it matched almost nothing.
+    # At least one separator between groups keeps it off financial tables.
     text = sub(r"\+?\d{1,2}[\s.\-(]*\d{3}[\s.\-)]*\d{3}[\s.\-]*\d{4}\b", "[phone]", text)
+    text = sub(r"\(?\b\d{3}\)?[\s.\-]{1,2}\d{3}[\s.\-]{1,2}\d{4}\b", "[phone]", text)
     return text, n
 
 
@@ -590,6 +612,18 @@ def stage_texts(args) -> None:
     universe = universe_for(args)
     print(f"{len(universe)} selected events "
           f"{universe['date'].min()}..{universe['date'].max()}")
+    # The v2 calendar already resolved which accession each event came from,
+    # so hand it straight to the fetcher instead of re-deriving it from a
+    # filing DATE that is wrong for every filer past 17:30 ET.
+    acc_of: dict[tuple[str, str], str] = {}
+    if getattr(args, "panel", "v2") == "v2":
+        from research_event_panel import cal_path, windows
+        for lo, hi in windows(getattr(args, "windows", "ten")):
+            if cal_path(lo, hi).exists():
+                cal = pd.read_parquet(cal_path(lo, hi))
+                acc_of.update({(s, d): a for s, d, a
+                               in zip(cal["symbol"], cal["date"], cal["acc"])})
+        print(f"{len(acc_of)} accessions available from the v2 calendars")
     with httpx.Client(headers=SEC_UA, timeout=30, follow_redirects=True) as http:
         cik, _ = ticker_map(http)
         have = miss = 0
@@ -598,12 +632,16 @@ def stage_texts(args) -> None:
             if c is None:
                 miss += 1
                 continue
-            text = fetch_release_text(row["symbol"], c, str(row["date"]), http)
+            day = str(row["date"])
+            cached = (TEXTS / f"{row['symbol']}_{day}.txt").exists()
+            text = fetch_release_text(row["symbol"], c, day, http,
+                                      acc_of.get((row["symbol"], day)))
             have += bool(text)
             miss += not text
-            if n % 50 == 0:
+            if n % 100 == 0:
                 print(f"  texts {n}/{len(universe)} have={have} miss={miss}")
-            _time.sleep(0.12)
+            if not cached:
+                _time.sleep(0.12)
     print(f"release texts: {have} have / {miss} missing of {len(universe)}")
 
 

@@ -371,6 +371,8 @@ mis-classified as after-close when its classification is its own timestamp.</p>
 
 <p id="panel-para"></p>
 
+<p id="shape-para"></p>
+
 <div class="scroll"><table id="funnel2-table">
   <caption>Table 7 — selection cascade on the acceptance-relative panel</caption>
 </table></div>
@@ -988,6 +990,23 @@ if ((D.funnel_v2 || []).length) {
   table($("funnel2-table"), ["selection stage", "events", "per year"],
     D.funnel_v2.map((f, i) => ({ cls: i === D.funnel_v2.length - 1 ? "hl" : "", cells: [f.stage, int(f.total), int(f.per_year)] })));
 }
+const RS = D.reaction_shape || {};
+if (RS.n) {
+  const mm = (v) => `${Math.floor(v / 60)}:${String(v % 60).padStart(2, "0")}`;
+  $("shape-para").innerHTML = `Storing both anchors makes a distinction the fixed
+    window could not. Measured from the 16:05 close — what the live engine does —
+    the median absolute move across ${int(RS.n)} events is
+    <b>${n1(RS.median_move, 2)}%</b>; measured from the last print before the 8-K
+    actually crossed, it is <b>${n1(RS.median_move_pre, 2)}%</b>. The difference is
+    drift, leak or a peer's earlier print — movement that had already happened
+    when the news went public, and that the strategy cannot claim as a reaction to
+    it. On the events that clear the ${D.gate_pct}% gate the two read
+    ${n1(RS.gated_median_move, 2)}% and ${n1(RS.gated_median_move_pre, 2)}%. The
+    median release is accepted at ${mm(RS.median_acc_min)} ET —
+    <b>${n1(RS.pct_after_1620, 0)}%</b> of them after the old window had already
+    closed, which is why the fixed slice was not merely mistimed but
+    systematically selecting the issuers that file earliest.`;
+}
 
 /* ------------------------------------------------ 5.6 contamination arms */
 const A = D.arms || {};
@@ -1072,15 +1091,25 @@ if (!HO.mutations) {
 } else {
   const keyMut = ["SHIPPED gate", "pure tape", "anti-tape baseline", "FULL POLICY",
                   "fade every non-agreement", "neutral verdicts, traded against"];
-  $("decade-intro").innerHTML = `Every design decision in this paper — the 5% gate,
+  const samp = HO.sampling || [];
+  const capped = samp.filter((s) => s.capped);
+  const qual = samp.reduce((a, s) => a + s.qualifying, 0);
+  $("decade-intro").innerHTML = `Every design decision in this paper — the ${D.gate_pct}% gate,
     the top-${D.top_per_day} rule, the flat ${D.costs_bp}bp cost, the holding
     period, all fifteen mutations — was made looking at ${HO.cut} onwards.
     ${HO.holdout_span[0]} to ${HO.holdout_span[1]} was never seen while any of it
     was chosen, which makes those ${int(HO.holdout_n)} events the only genuinely
-    out-of-sample evidence here. They are sampled, not exhaustive: the selection
-    rule is identical and a uniform random subset of qualifying events was kept,
-    because verdicts cost money and a sparse decade tests more than a dense
-    five years tested twice.`;
+    out-of-sample evidence here. The selection rule is identical, and the
+    extension is thinner than the recent years for a reason that is mostly not
+    sampling: after-hours tape was sparse before 2019, so many releases have no
+    measurable reaction at all.
+    ${samp.length ? (capped.length
+      ? `Of ${int(qual)} qualifying events, ${int(HO.holdout_n)} are scored — the
+         per-year cap bound in ${capped.length} of ${samp.length} years
+         (${capped.map((s) => s.year).join(", ")}), where a uniform random subset
+         was kept.`
+      : `All ${int(qual)} qualifying events in the period are scored; the per-year
+         cap never bound, so nothing was discarded.`) : ""}`;
   table($("holdout-table"),
     ["mutation", "holdout n", "holdout bp", "t", "in-sample n", "in-sample bp", "t"],
     HO.mutations.filter((r) => keyMut.some((k) => r.mutation.startsWith(k))).map((r) => ({

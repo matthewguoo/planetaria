@@ -239,7 +239,17 @@ def stage_react(args) -> None:
 
 # ----------------------------------------------------------------- universe
 
-def load_universe_v2(which: str = "ten", sample_per_year: int | None = None,
+# The decade extension's sparsity, as a MODULE CONSTANT rather than a
+# per-call argument. Every consumer — the path fetcher, the verdict submitter,
+# the scorer, the report builder — must see exactly the same universe, and a
+# default that lives in one function's signature is a default that eventually
+# disagrees with itself. Buying a verdict for an event with no price path is
+# the failure mode this prevents.
+SAMPLE_PER_YEAR = 110
+
+
+def load_universe_v2(which: str = "ten",
+                     sample_per_year: int | None = SAMPLE_PER_YEAR,
                      seed: int = 20260806) -> pd.DataFrame:
     """Same selection rule as the original study — gate, liquidity floor,
     top-N per day — applied to acceptance-relative reactions.
@@ -313,7 +323,8 @@ def stage_paths(args) -> None:
     from alpaca.data.requests import StockBarsRequest
     from alpaca.data.timeframe import TimeFrame
 
-    m = load_universe_v2(args.windows, args.sample_per_year)
+    m = load_universe_v2(args.windows,
+                         args.sample_per_year or SAMPLE_PER_YEAR)
     print(f"{len(m)} selected events {m['date'].min()}..{m['date'].max()}")
     prior, have = pd.DataFrame(), set()
     if PATHS_V2.exists():
@@ -385,7 +396,8 @@ def main() -> None:
     ap.add_argument("stage", choices=["calendar", "react", "paths"])
     ap.add_argument("--windows", default="ten", choices=["five", "ten"])
     ap.add_argument("--sample-per-year", type=int, default=None,
-                    help="cap qualifying events per pre-2021 year")
+                    help=f"cap qualifying events per pre-2021 year "
+                         f"(default {SAMPLE_PER_YEAR}, shared by every stage)")
     ap.add_argument("--refresh", action="store_true")
     args = ap.parse_args()
     {"calendar": stage_calendar, "react": stage_react,

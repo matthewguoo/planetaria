@@ -226,6 +226,38 @@ def funnel_v2() -> list[dict]:
             for s, n in stages]
 
 
+def reaction_shape() -> dict:
+    """How much of the measured move is the release, and how much preceded it.
+
+    `anchor` is the 16:05 post-auction print, which is what the live engine
+    anchors to, so `move` = anticipation + reaction. `anchor_pre` is the last
+    print before the 8-K crossed, so the move measured from it is the reaction
+    alone. The gap between the two medians is the part of the "reaction" that
+    had already happened before the news was public — drift, leakage, or a
+    peer's earlier print — and it is not something the strategy can trade.
+    """
+    from research_event_panel import react_path, windows
+
+    frames = [pd.read_parquet(react_path(lo, hi))
+              for lo, hi in windows("ten") if react_path(lo, hi).exists()]
+    if not frames:
+        return {}
+    ev = pd.concat(frames, ignore_index=True)
+    ev["move"] = np.abs(ev["react"] / ev["anchor"] - 1) * 100
+    ev["move_pre"] = np.abs(ev["react"] / ev["anchor_pre"] - 1) * 100
+    g = ev[ev["move"] >= GATE]
+    return {
+        "n": len(ev),
+        "median_move": _f(ev["move"].median()),
+        "median_move_pre": _f(ev["move_pre"].median()),
+        "gated_median_move": _f(g["move"].median()),
+        "gated_median_move_pre": _f(g["move_pre"].median()),
+        "median_acc_min": int(ev["acc_min"].median()),
+        "median_react_lag": int((ev["react_min"] - ev["acc_min"]).median()),
+        "pct_after_1620": _f((ev["acc_min"] > 16 * 60 + 20).mean() * 100),
+    }
+
+
 def panel_compare() -> list[dict]:
     """What the acceptance-relative rebuild changed, headline for headline.
 
@@ -274,13 +306,27 @@ def holdout(p: pd.DataFrame, n: int, early_cut: str = HOLDOUT_CUT) -> dict:
            "insample_n": int((~pre).sum()),
            "holdout_span": [p.loc[pre, "date"].min(), p.loc[pre, "date"].max()],
            "mutations": []}
-    sides = mutation_sides(p)
-    for label, side in sides.items():
+    # How much did the sparsity cap actually bind? For most early years the
+    # answer is "not at all" — after-hours tape coverage was thin in 2016-18,
+    # so the qualifying set is already below the cap. Saying "sampled" where
+    # nothing was dropped would overstate the sparsity; saying nothing where
+    # it did bind would understate it. Report per year.
+    full = load_universe_v2(sample_per_year=None)
+    kept = set(zip(p["symbol"], p["date"]))
+    out["sampling"] = []
+    for year, g in full[full["date"] < early_cut].groupby("year"):
+        n_kept = sum((s, d) in kept for s, d in zip(g["symbol"], g["date"]))
+        out["sampling"].append({"year": year, "qualifying": len(g),
+                                "scored": n_kept,
+                                "capped": bool(len(g) > n_kept)})
+    no_split = np.zeros(n, bool)      # _split_stats' train/test axis is unused
+    for label, side in mutation_sides(p).items():
+        # One resolve per mutation; the two periods are masks over the same
+        # per-event returns, not two different resolutions of them.
+        ret, _ = resolve(p.assign(side=side), np.ones(n, int), None, None)
         row = {"mutation": label}
         for tag, mask in (("holdout", pre), ("insample", ~pre)):
-            sub = np.where(mask, side, 0)
-            ret, _ = resolve(p.assign(side=side), np.ones(n, int), None, None)
-            s = _split_stats(ret, sub, np.zeros(n, bool))
+            s = _split_stats(ret, np.where(mask, side, 0), no_split)
             row[tag] = {"n": s["n"], "bp": _f(s["all"]), "t": _f(s["t"]),
                         "win": _f(s["win"])}
         out["mutations"].append(row)
@@ -322,6 +368,7 @@ def main() -> None:
         "funnel": funnel(), "funnel_v2": funnel_v2(), "spec": spec(),
         "audit": audit(), "timing_cost": timing_cost(),
         "panel_compare": panel_compare(),
+        "reaction_shape": reaction_shape(),
     }
 
     # --- headline, on CORRECTED per-session exits -------------------------
