@@ -922,16 +922,32 @@ $("abstract").innerHTML = `A ${int(D.paths_n)}-event replication, over ${SPAN_TE
   if (A.per_arm && A.per_arm.length > 1) {
     const by = Object.fromEntries(A.per_arm.map((r) => [r.arm, r]));
     const bl = A.blind || {}, nt = A.notext || {};
+    // The verdict here is COMPUTED, not written. An earlier draft asserted
+    // "the edge is in the reading, and memorisation is bounded near zero"
+    // before the arms had run; the arms then returned the opposite and the
+    // sentence would have shipped as a falsehood. Whatever the ratio says is
+    // what the abstract says.
+    const share = (by.notext && by.named && by.named.spread)
+      ? by.notext.spread / by.named.spread : null;
+    const failed = share !== null && share > 0.5;
     extra.push(`Both direct contamination arms now run on a paired
-      ${int(A.paired_n)}-event sample: with the issuer's identity and every date
-      scrubbed out the gate still earns <b>${sgn(by.blind && by.blind.spread)}bp</b>
-      of spread${bl.ident_pct !== undefined ? ` while the model re-identifies the
-      company ${n1(bl.ident_pct)}% of the time` : ""}, and given a ticker and a date
-      with no release at all it earns
-      <b>${sgn(by.notext && by.notext.spread)}bp</b>${nt.acc_n ? ` with outcome
-      recall at ${n1(nt.acc_pct)}% against 50% chance (z = ${n1(nt.z, 2)})` : ""} —
-      so the edge is in the reading, and memorisation is bounded near zero rather
-      than argued away.`);
+      ${int(A.paired_n)}-event sample, and <b>they do not clear the
+      strategy</b>. With the issuer's identity and every date scrubbed the gate
+      still earns <b>${sgn(by.blind && by.blind.spread)}bp</b> of spread, but
+      that arm is not a real ablation: the model re-identifies the company on
+      <b>${n1(bl.ident_pct)}%</b> of scrubbed releases. The memory probe is the
+      decisive one — given a ticker and a date and <em>no release text at
+      all</em>, the same gate earns
+      <b>${sgn(by.notext && by.notext.spread)}bp</b>,
+      ${failed ? `statistically indistinguishable from the
+      ${sgn(by.named.spread)}bp the full prompt earns on the same events`
+      : `against ${sgn(by.named.spread)}bp for the full prompt`}${nt.acc_n
+      ? `, with next-session outcome recall at <b>${n1(nt.acc_pct)}%</b> against
+      50% chance (n = ${int(nt.acc_n)}, z = ${n1(nt.z, 2)})` : ""}.
+      ${failed ? `There is no information in that prompt, so on this sample the
+      edge is not distinguishable from recall, and the headline above should be
+      read as an upper bound on skill rather than a measurement of it.`
+      : `Recall therefore accounts for a minority of the measured edge.`}`);
   }
   if (HO.mutations) {
     const full = HO.mutations.find((r) => r.mutation.startsWith("FULL POLICY")) || {};
@@ -1476,10 +1492,15 @@ if (!A.per_arm || A.per_arm.length < 2) {
       often recognisable from its own segment names and revenue scale, and no
       scrub fixes that. It agrees with the named arm's direction on
       ${n1(bl.agree_pct)}% of ${int(bl.agree_n)} paired events.
-      ${notId ? `Re-scoring the gate on only the events the model could <em>not</em>
-      place gives a spread of <b>${sgn(notId.spread)}bp</b> on ${int(notId.n)}
-      events — the cleanest reading-not-remembering estimate this design can
-      produce.` : ""}`;
+      ${notId ? `Re-scoring on only the events it could <em>not</em> place would
+      be the cleanest reading-not-remembering estimate this design can produce,
+      but at ${int(notId.n)} events there is nothing to estimate from — the
+      ${sgn(notId.spread)}bp it reports is noise, shown in the table below only
+      so the sample size sits next to it.` : ""}
+      ${bl.ident_pct > 50 ? `<b>At this re-identification rate the arm is not an
+      ablation.</b> Scrubbing the ticker, the company name and every date did not
+      stop the model working out who it was reading, so its spread cannot be read
+      as "the edge survives without identity" — only as "the scrub failed".` : ""}`;
     const rows = (bl.by_conf || []).map((c) => [c.conf, int(c.n), n1(c.right_pct) + "%"]);
     (bl.subsets || []).forEach((s) => rows.push([{ v: `<b>${s.label}</b> — gate spread`, c: "" },
       int(s.n), { v: sgn(s.spread) + "bp", c: cls(s.spread) }]));
@@ -1487,16 +1508,32 @@ if (!A.per_arm || A.per_arm.length < 2) {
   }
   if (nt.n) {
     const memo = byArm.notext || {};
-    $("notext-para").innerHTML = `The memory probe is the direct upper bound. Given
-      only a ticker and a date, the model claimed to recall the report on
-      <b>${n1(nt.recall_pct)}%</b> of ${int(nt.n)} events and volunteered a
-      next-session direction on ${int(nt.guessed_n)}.
-      ${nt.acc_n ? `Those guesses were right ${n1(nt.acc_pct)}% of the time against
-      50% chance (n = ${int(nt.acc_n)}, binomial SE ${n1(nt.se_pp)}pp,
-      z = ${n1(nt.z, 2)}) — ${Math.abs(nt.z) < 2 ? "indistinguishable from a coin" : "distinguishable from chance, which is exactly what a memorisation control is meant to catch"}.` : ""}
+    const share = (byArm.named && byArm.named.spread)
+      ? memo.spread / byArm.named.spread : null;
+    $("notext-para").innerHTML = `The memory probe is the decisive control, and it
+      is the one that fails. Given only a ticker and a date, the model claimed to
+      recall the report on <b>${n1(nt.recall_pct)}%</b> of ${int(nt.n)} events and
+      volunteered a next-session direction on ${int(nt.guessed_n)}.
+      ${nt.acc_n ? `Those guesses were right <b>${n1(nt.acc_pct)}%</b> of the time
+      against 50% chance (n = ${int(nt.acc_n)}, binomial SE ${n1(nt.se_pp)}pp,
+      <b>z = ${n1(nt.z, 2)}</b>) — ${Math.abs(nt.z) < 2
+        ? "indistinguishable from a coin"
+        : "far outside what chance produces, which is exactly what a memorisation control exists to catch"}.` : ""}
       Gating on memory alone yields a spread of <b>${sgn(memo.spread)}bp</b>
-      against the named arm's ${sgn(byArm.named.spread)}bp. There is no
-      information in that prompt, so whatever it earns is what recall is worth.`;
+      against the named arm's <b>${sgn(byArm.named.spread)}bp</b> on the same
+      events${share !== null ? `, or ${n1(share * 100, 0)}% of it` : ""}.
+      ${share !== null && share > 0.5
+        ? `There is no information in that prompt. A model handed nothing but a
+           ticker and a date reproduces essentially the entire gate, so on this
+           sample the strategy's edge cannot be separated from recall of what
+           actually happened next. Two things keep this from being a proof that
+           the released-text edge is fake: the notext arm trades a different and
+           smaller book — keeping ${n1(memo.keeps, 0)}% of events against
+           ${n1(byArm.named.keeps, 0)}% — and its gated leg rests on
+           ${int(memo.gated_n)} events. But it removes this study's central
+           defence, and Section 5.7's observational bound should be read against
+           it rather than instead of it.`
+        : `Recall therefore accounts for a minority of the measured edge.`}`;
   }
 }
 
@@ -1505,17 +1542,31 @@ if (!A.per_arm || A.per_arm.length < 2) {
 if (A.per_arm && A.per_arm.length > 1) {
   const bl = A.blind || {}, nt = A.notext || {};
   const byArm = Object.fromEntries(A.per_arm.map((r) => [r.arm, r]));
-  $("lim-arms").innerHTML = `<b>The contamination arms bound memorisation; they do
-    not eliminate it.</b> Both now run (Section 5.7), and neither is clean. The
-    identity scrub still leaves the issuer recognisable
-    ${bl.ident_pct !== undefined ? `${n1(bl.ident_pct)}% of the time` : ""} — a
-    large company is identifiable from its own segment names and revenue scale,
-    and no regex fixes that, so the blind arm is an upper bound on ablation
-    rather than a true one. The memory probe measures recall of the OUTCOME, not
-    of the regime priors a model carries about a company it has read a decade of
-    coverage about; those survive every control here. And both arms run on a
-    ${int(A.paired_n)}-event sample rather than the full panel, so their
-    confidence intervals are wider than the named arm's.`;
+  const share = (byArm.named && byArm.named.spread && byArm.notext)
+    ? byArm.notext.spread / byArm.named.spread : null;
+  const failed = share !== null && share > 0.5;
+  $("lim-arms").innerHTML = failed
+    ? `<b>Contamination is not controlled — it is now measured, and it is
+       large.</b> Both arms ran (Section 5.7) and both came back against the
+       study. The memory probe, handed a ticker and a date and no release,
+       reproduces ${n1(share * 100, 0)}% of the gate's spread and calls the next
+       session correctly ${n1(nt.acc_pct)}% of the time (z = ${n1(nt.z, 2)}), so
+       on this sample the edge cannot be separated from recall. The identity
+       ablation cannot rescue it either: the model re-identified the issuer on
+       ${n1(bl.ident_pct)}% of scrubbed releases, so that arm measures a failed
+       scrub rather than an ablation. Every headline in this paper should be read
+       as an upper bound on skill. What would separate them is an
+       out-of-corpus sample — releases published after the model's training
+       cutoff, of which this study has ${int((D.contamination || {}).post_cutoff
+         ? D.contamination.post_cutoff.n : 0)}, far too few to decide it.`
+    : `<b>The contamination arms bound memorisation; they do not eliminate it.</b>
+       Both ran (Section 5.7) and neither is clean. The identity scrub still
+       leaves the issuer recognisable ${n1(bl.ident_pct)}% of the time, so the
+       blind arm is an upper bound on ablation rather than a true one, and the
+       memory probe measures recall of the outcome rather than the regime priors
+       a model carries about a company it has read years of coverage about.
+       Both run on a ${int(A.paired_n)}-event sample, so their intervals are
+       wider than the named arm's.`;
 }
 
 
@@ -1666,21 +1717,52 @@ function drawDecade() {
         : `No year was subsampled — every qualifying event is scored, and the thin early years are thin because after-hours tape was sparse before 2019, not because data was dropped.`);
 }
 
-$("conc-para").innerHTML = `The gate is real and it is not the tape. Verdict labels
-  shuffled within month never reproduce the spread; the edge does not grow with how
-  long an event has sat in a training corpus; the model had no retrieval channel; and
-  six of seven mechanical lookahead checks pass, with the seventh's failure making
-  the result better rather than worse. What the study does <em>not</em> support is
-  the framing it started with. Refusal was described as the source of the value, and
-  on these numbers refusal is merely the cheapest way to spend a directional signal:
-  the refused events pay ${sgn(mut("fade every non-agreement").t1.all)}bp when traded
-  against the tape instead of skipped, and never standing down beats the gate on
-  every axis measured — ${sgn(full.t1.all)}bp against ${sgn(H.gated)}bp per trade,
-  ${sgn((full.account || {}).total_pct, 1)}% against ${sgn(st("t1plain").total_pct, 1)}%
-  compounded. The strategy as shipped is the weakest configuration in this paper,
-  and the reason is its bracket, not its gate. None of this has been traded, the
-  after-hours fill it depends on has never been demonstrated on the live account,
-  and the two arms that would directly bound memorisation remain unrun.`;
+(() => {
+  const byArm = Object.fromEntries(((D.arms || {}).per_arm || []).map((r) => [r.arm, r]));
+  const share = (byArm.named && byArm.notext && byArm.named.spread)
+    ? byArm.notext.spread / byArm.named.spread : null;
+  const contaminated = share !== null && share > 0.5;
+  const nt = (D.arms || {}).notext || {};
+
+  const mechanics = `Three things this study does establish, and they survive the
+    contamination question because they are statements about mechanics rather
+    than about edge. The strategy as shipped is the weakest configuration in the
+    paper: its ${sgn(D.shipped_bracket.mean_bp)}bp per trade comes from a 5% stop
+    sitting inside the whipsaw band of a name that just moved 5%, and removing
+    the bracket entirely does better. Refusal is not where the value is —
+    the refused events pay ${sgn(mut("fade every non-agreement").t1.all)}bp when
+    traded against the tape rather than skipped, and never standing down beats
+    the gate at ${sgn(full.t1.all)}bp against ${sgn(H.gated)}bp. And the
+    reaction window has to be keyed to each release's own acceptance, because a
+    fixed clock slice systematically selects the issuers that file earliest.`;
+
+  $("conc-para").innerHTML = contaminated
+    ? `<b>The honest conclusion is that this study cannot tell skill from
+       recall.</b> The gate is not the tape — shuffled verdicts never reproduce
+       the spread, and six of seven mechanical lookahead checks pass with the
+       seventh's failure improving the result. But a model given a ticker, a
+       date and no release at all reproduces ${n1(share * 100, 0)}% of the
+       gate's spread and calls the next session right ${n1(nt.acc_pct)}% of the
+       time (z = ${n1(nt.z, 2)}). Whatever that is, it is not reading. The
+       identity ablation cannot arbitrate, because the scrub failed on
+       ${n1(((D.arms || {}).blind || {}).ident_pct)}% of releases. So every
+       return figure here is an upper bound on what a model without the
+       benefit of hindsight would have earned, and the observational bound in
+       Section 5.7 — at most ${n1(((D.contamination || {}).gradient || {}).max_share_of_gated_pct, 0)}%
+       of the gated edge attributable to age — should be read as being in
+       tension with the memory probe rather than as settling it. Resolving this
+       needs releases the model was never trained on, and the sample has
+       ${int(((D.contamination || {}).post_cutoff || {}).n || 0)} of them.
+       ${mechanics} None of it has been traded, and the after-hours fill it all
+       depends on has never been demonstrated on the live account.`
+    : `The gate is real and it is not the tape. Verdict labels shuffled within
+       month never reproduce the spread; the edge does not grow with how long an
+       event has sat in a training corpus; the model had no retrieval channel;
+       six of seven mechanical lookahead checks pass; and both direct
+       contamination arms came back with recall worth a minority of the measured
+       edge. ${mechanics} None of it has been traded, and the after-hours fill it
+       all depends on has never been demonstrated on the live account.`;
+})();
 
 /* ------------------------------------------------------------ trade appendix */
 const TR = D.trades, TC = TR.cols;
