@@ -226,6 +226,193 @@ def funnel_v2() -> list[dict]:
             for s, n in stages]
 
 
+SIX_MONTHS = "2026-02-01"
+CORPUS_CUT = "2026-05"      # Opus 5's stated knowledge boundary
+
+
+def contamination_estimate(panel: str = "v1") -> dict:
+    """How much of the edge could be memorisation? Two estimators, both with
+    their uncertainty attached, because the honest answer here is an interval
+    and not a number.
+
+    STEP TEST. Split the gate at the model's knowledge boundary. If the edge
+    is recall, it should be present before the cutoff and absent after it, so
+    the contamination effect is spread(in-corpus) - spread(post-cutoff). The
+    difficulty is power: the study ends weeks after the boundary, so the
+    post-cutoff leg is small and its interval is wide enough to be nearly
+    uninformative on its own. Reported anyway, with the interval, because a
+    wide interval IS the finding.
+
+    GRADIENT TEST. The continuous version, and much better powered: regress
+    gated P&L on event age over the whole sample. Memorisation is not a step
+    function — older events are more discussed, more repeated and more
+    recallable — so a recalled edge should RISE with age. The slope's sign is
+    the informative part, and every gated event contributes to it rather than
+    only the handful past the boundary.
+    """
+    m = scored_events("medium", all_events=False, panel=panel)
+    paths = pd.read_parquet(paths_file(panel))
+    p = paths.drop(columns=["gated", "side"], errors="ignore").merge(
+        m[["symbol", "date", "move_pct", "direction"]],
+        on=["symbol", "date"], how="inner")
+    if p.empty:
+        return {}
+    p["side"] = np.sign(p["move_pct"]).astype(int)
+    ret, _ = resolve(p, np.ones(len(p), int), None, None)
+    p["bp"] = ret * 1e4
+    p["gated"] = _gate(p)
+
+    def leg(sub):
+        k = sub["gated"]
+        if k.sum() < 5 or (~k).sum() < 5:
+            return None
+        g, v = sub.loc[k, "bp"], sub.loc[~k, "bp"]
+        se_g = g.std(ddof=1) / math.sqrt(len(g))
+        se_v = v.std(ddof=1) / math.sqrt(len(v))
+        return {"n": len(sub), "gated_n": int(k.sum()),
+                "gated": _f(g.mean()), "gated_se": _f(se_g),
+                "vetoed": _f(v.mean()), "vetoed_se": _f(se_v),
+                "spread": _f(g.mean() - v.mean()),
+                "spread_se": _f(math.sqrt(se_g ** 2 + se_v ** 2))}
+
+    pre, post = leg(p[p["date"] < CORPUS_CUT]), leg(p[p["date"] >= CORPUS_CUT])
+    out = {"cut": CORPUS_CUT, "in_corpus": pre, "post_cutoff": post}
+    if pre and post:
+        d = pre["spread"] - post["spread"]
+        se = math.sqrt(pre["spread_se"] ** 2 + post["spread_se"] ** 2)
+        out["step"] = {
+            "delta_spread": _f(d), "se": _f(se), "t": _f(d / se if se else 0),
+            "ci95": [_f(d - 1.96 * se), _f(d + 1.96 * se)],
+            # The number that actually answers the question: how much of the
+            # in-corpus edge could be memorisation, at the top of the interval?
+            "max_share_pct": _f(min(100.0, max(0.0, (d + 1.96 * se))
+                                    / pre["spread"] * 100)),
+        }
+    # Gradient, on the gated leg only — that is the leg the alpha comes from.
+    g = p[p["gated"]]
+    if len(g) > 50:
+        x = (pd.Timestamp("2026-08-06") - pd.to_datetime(g["date"])).dt.days.to_numpy(float)
+        y = g["bp"].to_numpy(float)
+        slope, intercept = np.polyfit(x, y, 1)
+        resid = y - (slope * x + intercept)
+        se = float(np.sqrt((resid @ resid) / (len(x) - 2)
+                           / ((x - x.mean()) @ (x - x.mean()))))
+        span_yrs = float((x.max() - x.min()) / 365.25)
+        out["gradient"] = {
+            "bp_per_year": _f(slope * 365), "se": _f(se * 365),
+            "t": _f(slope / se if se else 0), "n": len(g),
+            "span_years": _f(span_yrs),
+            # End-to-end implied difference between the oldest and newest
+            # events, which is the memorisation story's own prediction.
+            "oldest_vs_newest_bp": _f(slope * 365 * span_yrs),
+            "ci95_per_year": [_f((slope - 1.96 * se) * 365),
+                              _f((slope + 1.96 * se) * 365)]}
+        # THE BOUND. Take the 95% upper end of the age slope and assume the
+        # worst case it describes: memorisation contributes nothing at the
+        # corpus edge and grows linearly into the past. Then the end-to-end
+        # difference is slope_hi x span, and the AVERAGE contribution across
+        # the sample is half of that. Expressed against the gated mean, which
+        # is the leg the alpha actually comes from.
+        hi = (slope + 1.96 * se) * 365
+        end_to_end = max(0.0, hi * span_yrs)
+        gated_mean = float(g["bp"].mean())
+        out["gradient"]["max_avg_bp"] = _f(end_to_end / 2)
+        out["gradient"]["max_share_of_gated_pct"] = _f(
+            min(100.0, end_to_end / 2 / gated_mean * 100) if gated_mean > 0 else None)
+        out["gradient"]["gated_mean"] = _f(gated_mean)
+    return out
+
+
+def model_compare() -> dict:
+    """Opus at medium, Opus at low, and Fable — same events, same entries.
+
+    Scored on the six months from 2026-02, which is the only window where all
+    three arms overlap AND the one boundary that matters for Fable: its
+    knowledge cutoff. Everything before it is in-corpus for that model and
+    cannot separate reading from recall; everything after is genuinely out of
+    sample for it.
+
+    This slice is scored on the v1 panel deliberately. The Fable and CLI arms
+    were generated against v1's entry prices, and a model comparison only
+    needs the entry to be COMMON across arms, not to match the rest of the
+    paper — re-entering them on v2 would drop 94 of the 180 paired events for
+    no gain in what is being compared.
+    """
+    ab_dir = CACHE / "llm_ab"
+    if not ab_dir.exists():
+        return {}
+
+    def arm(fn: str) -> pd.DataFrame:
+        path = ab_dir / fn
+        if not path.exists():
+            return pd.DataFrame()
+        rows = [json.loads(x) for x in
+                path.read_text(encoding="utf-8").splitlines() if x.strip()]
+        return pd.DataFrame([{"symbol": r["symbol"], "date": r["date"],
+                              **r["verdict"]} for r in rows])
+
+    res = _load_results_local()
+    arms = {
+        "Opus 5 · medium": res[(res["effort"] == "medium") & (res["arm"] == "named")],
+        "Opus 5 · low": res[(res["effort"] == "low") & (res["arm"] == "named")],
+        "Fable 5 · default": pd.concat(
+            [arm("claude-fable-5.jsonl"), arm("claude-fable-5_2022.jsonl")],
+            ignore_index=True),
+    }
+    arms = {k: v[v["date"] >= SIX_MONTHS] for k, v in arms.items() if len(v)}
+    if len(arms) < 2:
+        return {}
+    paired = None
+    for v in arms.values():
+        keys = set(zip(v["symbol"], v["date"]))
+        paired = keys if paired is None else (paired & keys)
+    if not paired or len(paired) < 30:
+        return {}
+
+    paths = pd.read_parquet(paths_file("v1"))
+    base = scored_events("medium", all_events=True, panel="v1")[
+        ["symbol", "date", "move_pct"]]
+    out = {"since": SIX_MONTHS, "paired_n": len(paired), "arms": []}
+    ref = None
+    for label, v in arms.items():
+        v = v[[(s, d) in paired for s, d in zip(v["symbol"], v["date"])]]
+        v = v.drop_duplicates(subset=["symbol", "date"])
+        p = paths.drop(columns=["side", "gated"], errors="ignore").merge(
+            base, on=["symbol", "date"], how="inner").merge(
+            v[["symbol", "date", "direction", "confidence"]],
+            on=["symbol", "date"], how="inner")
+        if p.empty:
+            continue
+        p["side"] = np.sign(p["move_pct"]).astype(int)
+        ret, _ = resolve(p, np.ones(len(p), int), None, None)
+        p["ret_bp"] = ret * 1e4
+        k = _gate(p)
+        if k.sum() == 0 or (~k).sum() == 0:
+            continue
+        g, ve = p.loc[k, "ret_bp"].mean(), p.loc[~k, "ret_bp"].mean()
+        t = g / (p.loc[k, "ret_bp"].std(ddof=1) / math.sqrt(int(k.sum())))
+        row = {"model": label, "n": len(p), "gated_n": int(k.sum()),
+               "keeps": _f(k.mean() * 100), "mech": _f(p["ret_bp"].mean()),
+               "gated": _f(g), "vetoed": _f(ve), "spread": _f(g - ve),
+               "t": _f(t),
+               "mix": {kk: _f(vv * 100) for kk, vv
+                       in p["direction"].value_counts(normalize=True).items()}}
+        keyed = dict(zip(zip(p["symbol"], p["date"]), p["direction"]))
+        if ref is None:
+            ref = keyed
+        else:
+            shared = [kk for kk in keyed if kk in ref]
+            row["agree_pct"] = _f(
+                sum(keyed[kk] == ref[kk] for kk in shared) / max(len(shared), 1) * 100)
+        out["arms"].append(row)
+    return out
+
+
+def _load_results_local():
+    from research_llm_contamination import _load_results
+    return _load_results()
+
+
 def reaction_shape() -> dict:
     """How much of the measured move is the release, and how much preceded it.
 
@@ -343,7 +530,7 @@ def main() -> None:
 
     m = scored_events("medium", args.all_events, args.panel)
     paths = pd.read_parquet(paths_file(args.panel))
-    p = paths.drop(columns=["gated", "side"]).merge(
+    p = paths.drop(columns=["gated", "side"], errors="ignore").merge(
         m[["symbol", "date", "edate", "year", "move_pct", "run5d", "dv",
            "direction", "confidence", "eps_vs_consensus",
            "revenue_vs_consensus", "guidance", "quality_flags", "gated"]],
@@ -369,6 +556,8 @@ def main() -> None:
         "audit": audit(), "timing_cost": timing_cost(),
         "panel_compare": panel_compare(),
         "reaction_shape": reaction_shape(),
+        "model_compare": model_compare(),
+        "contamination": contamination_estimate("v1"),
     }
 
     # --- headline, on CORRECTED per-session exits -------------------------

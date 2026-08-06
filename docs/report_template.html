@@ -121,6 +121,19 @@ svg { display:block; width:100%; overflow:visible; }
 .callout p:last-child { margin-bottom:0; }
 .callout.fail { border-left-color:var(--neg); }
 .callout.fail .label { color:var(--neg); }
+.callout.thesis { border-left-width:3px; font-size:1em; background:var(--panel); }
+.callout.thesis p { margin:0; }
+
+ol.steps { counter-reset:s; list-style:none; padding-left:0; margin:1.2rem 0 1.6rem; }
+ol.steps li { counter-increment:s; position:relative; padding-left:2.6rem;
+              margin-bottom:.85rem; font-size:.97em; }
+ol.steps li::before {
+  content:counter(s); position:absolute; left:0; top:.1em;
+  font-family:var(--mono); font-size:.68rem; font-weight:600; color:var(--accent);
+  border:1px solid var(--rule); width:1.7rem; height:1.35rem;
+  display:flex; align-items:center; justify-content:center;
+}
+ol.steps li b { font-family:var(--mono); font-size:.86em; letter-spacing:.01em; }
 
 ol.refs { font-size:.78rem; line-height:1.6; padding-left:0; list-style:none; counter-reset:r; }
 ol.refs li { counter-increment:r; padding-left:2.6rem; text-indent:-2.6rem; margin-bottom:.6rem; }
@@ -214,22 +227,89 @@ describes what was done about it; Section 7 describes what could not be.</p>
   transcribed by hand: the page renders from the same JSON the harness emits.</p>
 </div>
 
-<h2><span class="n">2</span>The strategy under test</h2>
+<h2><span class="n">2</span>The strategy, stated exactly</h2>
+
+<div class="callout thesis">
+  <span class="label">The thesis in one paragraph</span>
+  <p>When a company releases earnings after the close, the tape reprices it within
+  the minute — by the time anyone has read the release, the move has happened. What
+  is left to trade is not the move but <b>whether it continues</b> into the next
+  session. Taking every large after-hours move mechanically does not work: it pays
+  in trending regimes and loses in stressed ones. The claim under test is that a
+  language model reading the release text at announcement time — before the outcome
+  is known, and without being shown the move it is judging — can tell the
+  continuations from the reversals.</p>
+</div>
+
+<h3>2.1 The rule, step by step</h3>
+
+<ol class="steps">
+  <li><b>15:30 ET — freeze the watchlist.</b> Of the companies reporting after
+  today's close, take the <span id="sp-names"></span> most liquid by prior-session
+  dollar volume. Snapshot each one's price, its move so far today, and its
+  five-session run-up.</li>
+  <li><b>16:04 ET — re-anchor.</b> Replace each snapshot with the post-auction
+  price, so the reaction is measured against the official close rather than
+  against 15:30 drift. Names that have already moved past the gate keep their
+  original anchor — a move that size before the release means the news is already
+  out, and re-anchoring would erase exactly the signal being traded.</li>
+  <li><b>The release crosses.</b> The first results-bearing document for a watched
+  name — an EDGAR 8-K, or a single-ticker numbers headline, whichever lands first
+  — starts the clock.</li>
+  <li><b>Wait <span id="sp-confirm"></span>.</b> The minutes right after a release
+  are the worst microstructure of the day: price discovery, the widest spreads,
+  dip-then-spike whipsaw. The tape must <em>still</em> clear the gate when the
+  delay elapses.</li>
+  <li><b>Read the release once.</b> One model call on the release text, returning
+  a fixed schema: EPS and revenue against consensus, guidance direction, quality
+  flags, an overall direction, a confidence, and one line of prose. No tools, no
+  conversation history, no cross-event state — and <b>the tape's move is not in
+  the prompt</b>.</li>
+  <li><b>The gate.</b> Trade only if the model's direction agrees with the sign of
+  the tape's move <em>and</em> that move is at least
+  <span id="sp-gate"></span>. Long if both are up, short if both are down.
+  Anything else is journalled and skipped.</li>
+  <li><b>Size by risk, not by conviction alone.</b> Risk
+  <span id="sp-risk"></span> of equity at the stop, so notional = risk ÷ stop
+  distance; then scale by the model's confidence, shrink on quality flags, and
+  halve when the move is already outsized.</li>
+  <li><b>Exit.</b> Whichever comes first: the vol-scaled stop, the target at twice
+  that distance, or the time stop at <span id="sp-hold"></span>.</li>
+</ol>
+
+<div class="fig">
+  <div id="timeline"></div>
+  <figcaption><b>Figure 1</b> — One night, in order. Everything left of the entry
+  is information available at decision time; everything right of it is outcome.
+  The release can cross anywhere in the shaded band — Section 4.5 shows that where
+  it lands turned out to matter a great deal.</figcaption>
+</div>
+
+<h3>2.2 What is deliberately <em>not</em> traded</h3>
+
+<p>The gate is an <em>agreement</em> rule, and the refusals are most of what it
+does: a bullish read against a falling tape is a no-trade, and so is a neutral
+read against any tape. Roughly a third of qualifying events are declined on
+these grounds. Section 5.4 asks whether that refusal is the right use of the
+information, and finds it is not.</p>
+
+<p>Two further vetoes fire after the gate passes: an after-hours spread cap, and a
+guard against shorting a name that has already been crushed into the print. Both
+are listed in the table below.</p>
+
+<h3>2.3 The production configuration</h3>
 
 <p>The specification below is read out of the production strategy class, not
 paraphrased from it. This is the configuration the live engine runs today, in
-note-mode: it forms decisions, journals them, and submits nothing.</p>
+note-mode: it forms decisions, journals them, and submits nothing. The bracket is
+a vol-scaled stop with a target at twice its distance, which the study measures
+separately from the raw round trip because the two answer different questions —
+whether the gate picks direction, and what the strategy as configured would have
+returned.</p>
 
 <div class="scroll"><table id="spec-table">
   <caption>Table 1 — production configuration, <code>app/strategies/earnings_reaction.py</code></caption>
 </table></div>
-
-<p>Two details matter for reading everything that follows. The gate is an
-<em>agreement</em> rule: the model's direction must match the sign of the tape's
-reaction, and any disagreement is a no-trade. And the bracket is a vol-scaled stop
-with a target at twice its distance, which the study measures separately from the
-raw round trip because the two answer different questions — whether the gate picks
-direction, and what the strategy as configured would have returned.</p>
 
 <h2><span class="n">3</span>Data and universe</h2>
 
@@ -325,7 +405,7 @@ merely looks innocuous.</p>
 <div class="fig">
   <div class="legend"><span>EDGAR acceptance time, converted to Eastern</span></div>
   <div id="acc-hist"></div>
-  <figcaption><b>Figure 1</b> — Acceptance time of the 8-K behind each scored event.
+  <figcaption><b>Figure 2</b> — Acceptance time of the 8-K behind each scored event.
   The two bands outside 16:00–16:20 are the contaminated ones.</figcaption>
 </div>
 
@@ -443,7 +523,7 @@ silently commit more capital and win by leverage.</p>
 <div class="fig">
   <div class="legend" id="curve-legend"></div>
   <div id="curve"></div>
-  <figcaption><b>Figure 2</b> — Equity curves, log scale, <span id="curve-span"></span>.
+  <figcaption><b>Figure 3</b> — Equity curves, log scale, <span id="curve-span"></span>.
   Dashed series are baselines rather than search results.
   <span id="curve-note"></span></figcaption>
 </div>
@@ -458,32 +538,64 @@ silently commit more capital and win by leverage.</p>
   <caption>Table 14 — iso-return leverage: the cheapest index exposure that ends where the strategy ends</caption>
 </table></div>
 
-<h3 id="arms-h3">5.6 Contamination arms: reading or remembering?</h3>
+<h3 id="model-h3">5.6 Which model, and how much reasoning?</h3>
+
+<div id="model-block">
+<p id="model-intro"></p>
+
+<div class="fig">
+  <div class="legend" id="model-legend"></div>
+  <div id="model-chart"></div>
+  <figcaption><b>Figure 4</b> — Gated and refused returns by model arm on the
+  shared six-month slice. <span id="model-figcap"></span></figcaption>
+</div>
+
+<div class="scroll"><table id="model-table">
+  <caption>Table 15 — model and effort, identical events and identical entries</caption>
+</table></div>
+
+<p id="model-para"></p>
+</div>
+
+<h3 id="arms-h3">5.7 Contamination: how much of this could be memorisation?</h3>
+
+<p>Four of these years sit inside the model's training corpus, so the question
+is unavoidable: is the gate reading these releases, or recalling what happened
+next? Two estimates below bound it from the observed data, and then two arms
+measure it directly by removing an input at a time.</p>
+
+<div class="scroll"><table id="contam-table">
+  <caption>Table 16 — the gate either side of the model's knowledge boundary</caption>
+</table></div>
+
+<p id="contam-para"></p>
+
+<h4 style="font-family:var(--mono);font-size:.72rem;text-transform:uppercase;letter-spacing:.1em;color:var(--muted);margin:1.8rem 0 .5rem">Direct ablation</h4>
 
 <div id="arms-block">
 <p id="arms-intro"></p>
 
 <div class="scroll"><table id="arms-table">
-  <caption>Table 15 — the same gate, the same events, one input removed at a time</caption>
+  <caption>Table 17 — the same gate, the same events, one input removed at a time</caption>
 </table></div>
 
 <div class="fig">
   <div class="legend" id="arms-legend"></div>
   <div id="arms-chart"></div>
-  <figcaption><b>Figure 3</b> — Gate spread by arm on the paired event set.
+  <figcaption><b>Figure 5</b> — Gate spread by arm on the paired event set.
   <span id="arms-figcap"></span></figcaption>
 </div>
 
 <p id="blind-para"></p>
 
 <div class="scroll"><table id="blind-table">
-  <caption>Table 16 — identity ablation: what the model thought it was reading</caption>
+  <caption>Table 18 — identity ablation: what the model thought it was reading</caption>
 </table></div>
 
 <p id="notext-para"></p>
 </div>
 
-<h3 id="decade-h3">5.7 Ten years: a genuine holdout</h3>
+<h3 id="decade-h3">5.8 Ten years: a genuine holdout</h3>
 
 <div id="decade-block">
 <p id="decade-intro"></p>
@@ -491,12 +603,12 @@ silently commit more capital and win by leverage.</p>
 <div class="fig">
   <div class="legend"><span><span class="swatch" style="background:var(--s1)"></span>gate spread, bp per trade</span><span><span class="swatch" style="background:var(--muted)"></span>events scored</span></div>
   <div id="decade-chart"></div>
-  <figcaption><b>Figure 4</b> — Gate spread by calendar year across the decade.
+  <figcaption><b>Figure 6</b> — Gate spread by calendar year across the decade.
   <span id="decade-figcap"></span></figcaption>
 </div>
 
 <div class="scroll"><table id="holdout-table">
-  <caption>Table 17 — key mutations, holdout years against the years the study was designed on</caption>
+  <caption>Table 19 — key mutations, holdout years against the years the study was designed on</caption>
 </table></div>
 
 <p id="decade-para"></p>
@@ -865,6 +977,59 @@ function svg(w, h, inner, extra = "") {
   return `<svg viewBox="0 0 ${w} ${h}" role="img" ${extra}>${inner}</svg>`;
 }
 
+/* Figure 1 — one night, in order. A diagram of the RULE, not of data, so the
+   only numbers in it come from the spec table and cannot drift from it. */
+(function timeline() {
+  const spec = Object.fromEntries((D.spec || []).map((r) => [r.parameter, r.value]));
+  const set = (id, v) => { const e = $(id); if (e) e.textContent = v; };
+  set("sp-names", spec["names watched"] || "8");
+  set("sp-confirm", (spec["confirmation delay"] || "10 min").replace(" min", " minutes"));
+  set("sp-gate", (spec["tape gate"] || "|move| >= 5.0%").replace("|move| >= ", ""));
+  set("sp-risk", spec["risk per name"] || "0.5% of equity");
+  set("sp-hold", spec["time stop"] || "T+1 at 15:55 ET");
+
+  const W = 760, H = 168, L = 8, R = 8, axis = 104;
+  const x = (f) => L + f * (W - L - R);
+  const marks = [
+    [0.00, "15:30", "watchlist frozen", "pre"],
+    [0.17, "16:00", "close · anchor", "pre"],
+    [0.31, "16:04", "re-anchor", "pre"],
+    [0.50, "release", "8-K crosses", "band"],
+    [0.66, "+delay", "tape re-checked", "band"],
+    [0.75, "decide", "model reads · gate", "entry"],
+    [1.00, "T+1 15:55", "exit", "post"],
+  ];
+  const col = { pre: "var(--muted)", band: "var(--accent)", entry: "var(--accent)", post: "var(--s1)" };
+  // The shaded band is where a release can actually land — the finding of 4.5.
+  const band = `<rect x="${x(0.42)}" y="${axis - 26}" width="${x(0.72) - x(0.42)}" height="52"
+      fill="var(--accent)" opacity=".09"></rect>`;
+  const line = `<line x1="${x(0)}" x2="${x(1)}" y1="${axis}" y2="${axis}"
+      stroke="var(--rule)" stroke-width="2"></line>`;
+  const entryX = x(0.75);
+  const split = `<line x1="${entryX}" x2="${entryX}" y1="18" y2="${H - 14}"
+      stroke="var(--ink)" stroke-width="1" stroke-dasharray="3 3"></line>
+    <text x="${entryX - 8}" y="28" text-anchor="end" font-size="10"
+      fill="var(--muted)" font-family="var(--mono)">known at decision time</text>
+    <text x="${entryX + 8}" y="28" font-size="10"
+      fill="var(--muted)" font-family="var(--mono)">outcome</text>`;
+  const pts = marks.map(([f, t, sub, kind]) => {
+    const cx = x(f), c = col[kind];
+    const anchor = f === 0 ? "start" : (f === 1 ? "end" : "middle");
+    const dx = f === 0 ? 0 : (f === 1 ? 0 : 0);
+    return `<circle cx="${cx}" cy="${axis}" r="${kind === "entry" ? 6 : 4}"
+        fill="${kind === "entry" ? "var(--accent)" : "var(--paper)"}"
+        stroke="${c}" stroke-width="2"></circle>
+      <text x="${cx + dx}" y="${axis - 16}" text-anchor="${anchor}" font-size="11"
+        fill="var(--ink)" font-family="var(--mono)">${t}</text>
+      <text x="${cx + dx}" y="${axis + 26}" text-anchor="${anchor}" font-size="10"
+        fill="var(--muted)" font-family="var(--mono)">${sub}</text>`;
+  }).join("");
+  const legend = `<text x="${x(0.5)}" y="${H - 4}" text-anchor="middle" font-size="10"
+      fill="var(--faint)" font-family="var(--mono)">shaded: the window in which a release can cross</text>`;
+  $("timeline").innerHTML = svg(W, H, band + line + split + pts + legend,
+    `aria-label="Timeline of one trading night: watchlist frozen 15:30, close and anchor 16:00, re-anchor 16:04, 8-K crosses, tape re-checked after the confirmation delay, model reads and the gate decides, exit at T+1 15:55."`);
+})();
+
 /* Figure 1 — acceptance histogram */
 (function accHist() {
   const b = D.audit.acceptance_et.filter((x) => x.n > 0);
@@ -1008,9 +1173,127 @@ if (RS.n) {
     systematically selecting the issuers that file earliest.`;
 }
 
-/* ------------------------------------------------ 5.6 contamination arms */
+/* --------------------------------------------------- 5.6 model and effort */
+const MC = D.model_compare || {};
+if (!MC.arms || MC.arms.length < 2) {
+  $("model-block").innerHTML = `<p class="kv">The model comparison is unavailable
+    on this panel.</p>`;
+} else {
+  const best = MC.arms[0];
+  $("model-intro").innerHTML = `Everything above runs on one model at one
+    reasoning effort. This slice asks what that choice was worth, on the
+    ${int(MC.paired_n)} events since ${MC.since} where three arms overlap:
+    Opus at the shipped <em class="term">medium</em> effort, the same model at
+    <em class="term">low</em>, and the smaller Fable model at its default. Same
+    events, same entries, same exits — the only thing that varies is what read
+    the release. Six months is also the window that matters most for Fable: its
+    knowledge cutoff falls at the start of it, so this is the one stretch that is
+    genuinely out of corpus for that model.`;
+  table($("model-table"),
+    ["model", "events", "keeps", "ungated", "gated", "refused", "spread", "t", "agrees with medium"],
+    MC.arms.map((a, i) => ({ cls: i === 0 ? "hl" : "", cells: [
+      a.model, int(a.n), n1(a.keeps, 0) + "%",
+      { v: sgn(a.mech), c: cls(a.mech) }, { v: sgn(a.gated), c: cls(a.gated) },
+      { v: sgn(a.vetoed), c: cls(a.vetoed) },
+      { v: sgn(a.spread), c: cls(a.spread) }, n1(a.t, 2),
+      a.agree_pct === undefined ? "—" : n1(a.agree_pct, 0) + "%"] })));
+  drawModels();
+  const low = MC.arms.find((a) => /low/.test(a.model)) || {};
+  const fab = MC.arms.find((a) => /Fable/i.test(a.model)) || {};
+  $("model-para").innerHTML = `The ordering is monotone and it is the one you
+    would hope for: more reasoning buys more separation. Opus at medium splits
+    the book by <b>${sgn(best.spread)}bp</b>, Fable at default by
+    ${sgn(fab.spread)}bp, and Opus at low by only ${sgn(low.spread)}bp — the
+    same model, thinking less, giving back most of the edge. The arms disagree
+    with medium on ${n1(100 - (low.agree_pct || 0), 0)}% (low) and
+    ${n1(100 - (fab.agree_pct || 0), 0)}% (Fable) of individual calls, and those
+    marginal reads are where the difference lives.
+    <b>Read the t-statistics before drawing a conclusion.</b> Six months is
+    ${int(MC.paired_n)} events, and none of these arms separates from zero at
+    conventional significance (best t = ${n1(best.t, 2)}). The ranking is
+    consistent with the five-year result and with the effort calibration in
+    Table 3, but on this slice alone it is suggestive, not established.`;
+}
+
+function drawModels() {
+  const rows = MC.arms || [];
+  if (!rows.length) return;
+  const W = 720, H = 46 + rows.length * 64, L = 176, R = 96, T = 12;
+  const span = Math.max(...rows.flatMap((r) => [Math.abs(r.gated), Math.abs(r.vetoed)]), 1);
+  const zero = L + (W - L - R) * 0.42;
+  const scale = (W - L - R) * 0.55 / span;
+  const bars = rows.map((r, i) => {
+    const y = T + i * 64;
+    const seg = (v, dy, col, label) => {
+      const w = Math.abs(v) * scale, x0 = v >= 0 ? zero : zero - w;
+      return `<rect x="${x0}" y="${y + dy}" width="${Math.max(w, 1)}" height="20"
+          fill="${col}" opacity=".9"></rect>
+        <text x="${v >= 0 ? x0 + w + 7 : x0 - 7}" y="${y + dy + 14}"
+          text-anchor="${v >= 0 ? "start" : "end"}" font-size="10" fill="${col}"
+          font-family="${cssv("--mono")}">${sgn(v)}</text>`;
+    };
+    return seg(r.gated, 2, cssv("--s3"), "gated")
+      + seg(r.vetoed, 26, cssv("--s2"), "refused")
+      + `<text x="${L - 14}" y="${y + 20}" text-anchor="end" font-size="11"
+           fill="${cssv("--ink")}" font-family="${cssv("--mono")}">${r.model}</text>
+         <text x="${L - 14}" y="${y + 34}" text-anchor="end" font-size="9.5"
+           fill="${cssv("--faint")}" font-family="${cssv("--mono")}">spread ${sgn(r.spread)}bp</text>`;
+  }).join("");
+  $("model-chart").innerHTML = svg(W, H,
+    `<line x1="${zero}" x2="${zero}" y1="${T - 4}" y2="${H - 10}" stroke="${cssv("--rule")}"></line>`
+    + bars,
+    `aria-label="Gated and refused returns by model: ${rows.map((r) => `${r.model} gated ${r.gated} refused ${r.vetoed} spread ${r.spread}`).join("; ")}"`);
+  $("model-legend").innerHTML =
+    `<span><span class="swatch" style="background:${cssv("--s3")}"></span>taken (gate passed)</span>`
+    + `<span><span class="swatch" style="background:${cssv("--s2")}"></span>refused</span>`;
+  $("model-figcap").textContent = `bp per trade, T+1, no bracket. `
+    + `The gap between the two bars is the spread — what the model's judgement is worth.`;
+}
+
+/* ------------------------------- 5.7 contamination, estimated then measured */
+const CT = D.contamination || {};
+if (CT.in_corpus && CT.post_cutoff) {
+  const pre = CT.in_corpus, post = CT.post_cutoff, st = CT.step, gr = CT.gradient || {};
+  table($("contam-table"),
+    ["events", "n", "gated", "± SE", "refused", "spread", "± SE"],
+    [["in corpus (before " + CT.cut + ")", pre], ["past the cutoff", post]].map(
+      ([label, x], i) => ({ cls: i ? "hl" : "", cells: [
+        label, int(x.n), { v: sgn(x.gated), c: cls(x.gated) }, n1(x.gated_se),
+        { v: sgn(x.vetoed), c: cls(x.vetoed) },
+        { v: sgn(x.spread), c: cls(x.spread) }, n1(x.spread_se)] })));
+  $("contam-para").innerHTML = `<b>The step test cannot answer this.</b> The
+    spreads either side of the boundary differ by ${sgn(st.delta_spread)}bp, but
+    the study ends only weeks after the cutoff, so the post-cutoff leg is
+    ${int(post.n)} events with a 95% interval of
+    [${sgn(st.ci95[0])}, ${sgn(st.ci95[1])}]bp. That interval contains zero, the
+    entire measured edge, and its negation. Anyone quoting the point estimate
+    from this split — in either direction — is quoting noise.
+    <br><br>
+    <b>The age gradient can, and it is the better test anyway.</b> Memorisation
+    is not a step: older events are more discussed, more repeated and more
+    recallable, so a recalled edge should <em>rise</em> with age, and every one
+    of the ${int(gr.n)} gated events contributes to estimating that slope rather
+    than only the handful past the boundary. The slope is
+    <b>${sgn(gr.bp_per_year)}bp per year of age</b> (SE ${n1(gr.se)},
+    t = ${n1(gr.t, 2)}), with a 95% interval of
+    [${sgn(gr.ci95_per_year[0])}, ${sgn(gr.ci95_per_year[1])}]bp/yr — the point
+    estimate has the <em>wrong sign</em> for a memorisation story.
+    Taking the top of that interval and assuming the worst case it describes —
+    recall contributing nothing at the corpus edge and growing linearly into the
+    past — bounds the average memorised component at
+    <b>${n1(gr.max_avg_bp, 0)}bp</b>, or <b>${n1(gr.max_share_of_gated_pct, 0)}%</b>
+    of the ${sgn(gr.gated_mean)}bp gated return. That is the honest ceiling from
+    observational data: not proof of nothing, but an upper bound well short of
+    the whole effect.`;
+} else {
+  $("contam-table").innerHTML = "";
+}
+
+/* ------------------------------------------------ 5.7 contamination arms */
 const A = D.arms || {};
-if (!A.per_arm || !A.per_arm.length) {
+// One arm is not a comparison. Until blind or notext lands, the honest render
+// is the placeholder, not a single-row table that looks like a result.
+if (!A.per_arm || A.per_arm.length < 2) {
   $("arms-block").innerHTML = `<p class="kv">The contamination arms have not been
     run on this panel yet.</p>`;
 } else {
@@ -1157,26 +1440,61 @@ function drawArms() {
 function drawDecade() {
   const ys = D.years || [];
   if (!ys.length) return;
-  const W = 720, H = 210, L = 42, R = 12, T = 10, B = 40;
+  const HO = D.holdout || {};
+  const cut = HO.cut || "2021-08";
+  const capped = new Set((HO.sampling || []).filter((s) => s.capped).map((s) => s.year));
+  const qual = Object.fromEntries((HO.sampling || []).map((s) => [s.year, s.qualifying]));
+  const W = 760, H = 268, L = 46, R = 14, T = 14, B = 74;
   const span = Math.max(...ys.map((y) => Math.abs(y.spread || 0)), 1);
   const bw = (W - L - R) / ys.length;
   const zeroY = T + (H - T - B) / 2;
   const scale = (H - T - B) / 2 / span;
-  const cut = (D.holdout || {}).cut || "2021-08";
+  const nMax = Math.max(...ys.map((y) => y.n), 1);
+
+  // Shade the holdout half so "designed on" versus "never seen" is a region,
+  // not something the reader has to reconstruct from the bar colours.
+  const lastHold = ys.filter((y) => `${y.year}-12` < cut).length;
+  const shade = lastHold ? `<rect x="${L}" y="${T}" width="${lastHold * bw}"
+      height="${H - T - B}" fill="${cssv("--accent")}" opacity=".06"></rect>
+    <text x="${L + 6}" y="${T + 12}" font-size="10" fill="${cssv("--muted")}"
+      font-family="${cssv("--mono")}">holdout — never seen at design time</text>` : "";
+
   const bars = ys.map((y, i) => {
-    const x = L + i * bw + bw * 0.18, w = bw * 0.64;
+    const x = L + i * bw + bw * 0.16, w = bw * 0.68;
     const v = y.spread || 0, h = Math.abs(v) * scale;
     const isHold = `${y.year}-12` < cut;
     const col = isHold ? cssv("--s1") : cssv("--s4");
-    return `<rect x="${x}" y="${v >= 0 ? zeroY - h : zeroY}" width="${w}" height="${Math.max(h, 1)}" fill="${col}" opacity="${isHold ? .95 : .65}"></rect>
-      <text x="${x + w / 2}" y="${H - 24}" text-anchor="middle" font-size="10" fill="${cssv("--muted")}" font-family="${cssv("--mono")}">${y.year}</text>
-      <text x="${x + w / 2}" y="${H - 12}" text-anchor="middle" font-size="9" fill="${cssv("--faint")}" font-family="${cssv("--mono")}">${y.n}</text>`;
+    // Sample density as its own row of marks: a spread computed on 84 events
+    // is not the same claim as one computed on 300, and a bar chart hides that.
+    const dh = 16 * (y.n / nMax);
+    const denom = qual[y.year];
+    const star = capped.has(y.year) ? "*" : "";
+    return `<rect x="${x}" y="${v >= 0 ? zeroY - h : zeroY}" width="${w}"
+        height="${Math.max(h, 1)}" fill="${col}" opacity="${isHold ? .95 : .6}"></rect>
+      <text x="${x + w / 2}" y="${v >= 0 ? zeroY - h - 5 : zeroY + h + 12}"
+        text-anchor="middle" font-size="9.5" fill="${col}"
+        font-family="${cssv("--mono")}">${v >= 0 ? "+" : ""}${v.toFixed(0)}</text>
+      <text x="${x + w / 2}" y="${H - B + 44}" text-anchor="middle" font-size="10"
+        fill="${cssv("--muted")}" font-family="${cssv("--mono")}">${y.year}</text>
+      <rect x="${x + w / 2 - 5}" y="${H - B + 52 - dh}" width="10" height="${Math.max(dh, 1)}"
+        fill="${cssv("--muted")}" opacity=".45"></rect>
+      <text x="${x + w / 2}" y="${H - B + 64}" text-anchor="middle" font-size="9"
+        fill="${cssv("--faint")}" font-family="${cssv("--mono")}">${y.n}${star}</text>`;
   }).join("");
-  $("decade-chart").innerHTML = svg(W, H,
-    `<line x1="${L}" x2="${W - R}" y1="${zeroY}" y2="${zeroY}" stroke="${cssv("--ink")}" stroke-width="1"></line>` + bars,
-    `aria-label="Gate spread by year: ${ys.map((y) => y.year + " " + (y.spread || 0).toFixed(0) + " bp on " + y.n + " events").join(", ")}"`);
-  $("decade-figcap").textContent = `Solid bars are holdout years (before ${cut}); `
-    + `faded bars are the years the study was designed on. Event count under each year.`;
+  const axis = `<line x1="${L}" x2="${W - R}" y1="${zeroY}" y2="${zeroY}"
+      stroke="${cssv("--ink")}" stroke-width="1"></line>
+    <text x="${L - 8}" y="${zeroY + 3}" text-anchor="end" font-size="10"
+      fill="${cssv("--faint")}" font-family="${cssv("--mono")}">0</text>
+    <text x="${L - 8}" y="${H - B + 52}" text-anchor="end" font-size="9"
+      fill="${cssv("--faint")}" font-family="${cssv("--mono")}">events</text>`;
+  $("decade-chart").innerHTML = svg(W, H, shade + axis + bars,
+    `aria-label="Gate spread by calendar year, basis points, with events per year: ${ys.map((y) => `${y.year}: ${(y.spread || 0).toFixed(0)} bp on ${y.n} events`).join("; ")}"`);
+  $("decade-figcap").textContent =
+    `Bars are gate spread in bp; the grey row beneath is events scored that year, `
+    + `which is the density the bar above it rests on. Shaded years are the holdout. `
+    + (capped.size
+        ? `A star marks a year where the per-year cap bound and a random subset was kept (${[...capped].join(", ")}).`
+        : `No year was subsampled — every qualifying event is scored, and the thin early years are thin because after-hours tape was sparse before 2019, not because data was dropped.`);
 }
 
 $("conc-para").innerHTML = `The gate is real and it is not the tape. Verdict labels
@@ -1289,7 +1607,10 @@ applyFilters();
 
 /* Redraw the SVGs when the viewer flips theme — the charts read CSS custom
    properties at draw time, so a theme change needs a repaint. */
-const repaint = () => { accHistRedraw(); drawCurve(); };
+const repaint = () => { accHistRedraw(); drawCurve();
+  if ((D.model_compare||{}).arms) drawModels();
+  if ((D.arms||{}).per_arm) drawArms();
+  if ((D.holdout||{}).mutations) drawDecade(); };
 function accHistRedraw() {
   const b = D.audit.acceptance_et.filter((x) => x.n > 0);
   const W = 720, H = 190, L = 96, R = 46, T = 6, B = 26;

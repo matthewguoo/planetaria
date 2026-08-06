@@ -280,7 +280,7 @@ def stage_sweep(args) -> None:
     meta = scored_events(args.effort, args.all_events, args.panel)[
         ["symbol", "date", "year", "move_pct", "run5d", "confidence",
          "guidance", "quality_flags", "gated"]]
-    p = paths.drop(columns=["gated"]).merge(meta, on=["symbol", "date"], how="inner")
+    p = paths.drop(columns=["gated"], errors="ignore").merge(meta, on=["symbol", "date"], how="inner")
     n = len(p)
     g = p["gated"].to_numpy()
     early = p["year"].isin(["2021", "2022", "2023"]).to_numpy()
@@ -454,7 +454,7 @@ def stage_best(args) -> None:
     meta = scored_events(args.effort, args.all_events, args.panel)[
         ["symbol", "date", "edate", "year", "move_pct", "run5d", "confidence",
          "guidance", "quality_flags", "gated"]]
-    p = paths.drop(columns=["gated"]).merge(meta, on=["symbol", "date"], how="inner")
+    p = paths.drop(columns=["gated"], errors="ignore").merge(meta, on=["symbol", "date"], how="inner")
     p = p[p["gated"]].reset_index(drop=True)
     n = len(p)
     early = p["year"].isin(["2021", "2022", "2023"]).to_numpy()
@@ -772,7 +772,7 @@ def stage_mutations(args) -> None:
         ["symbol", "date", "edate", "year", "move_pct", "run5d", "direction",
          "confidence", "eps_vs_consensus", "revenue_vs_consensus", "guidance",
          "quality_flags", "gated"]]
-    p = paths.drop(columns=["gated", "side"]).merge(
+    p = paths.drop(columns=["gated", "side"], errors="ignore").merge(
         meta, on=["symbol", "date"], how="inner").reset_index(drop=True)
     n = len(p)
     early = p["year"].isin(["2021", "2022", "2023"]).to_numpy()
@@ -952,7 +952,7 @@ def stage_trades(args) -> None:
         raise SystemExit(f"no {pf.name} — run the `paths` stage first")
     paths = pd.read_parquet(pf)
     meta = scored_events(args.effort, args.all_events, args.panel)
-    p = paths.drop(columns=["gated"]).merge(
+    p = paths.drop(columns=["gated"], errors="ignore").merge(
         meta[["symbol", "date", "edate", "year", "move_pct", "run5d", "dv",
               "direction", "confidence", "guidance", "quality_flags",
               "summary", "gated", "anchor", "react"]],
