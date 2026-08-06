@@ -4,6 +4,7 @@ import CallsPanel from "./CallsPanel";
 import DecisionTape from "./DecisionTape";
 import EquityCurves from "./EquityCurves";
 import StudyPanel from "./StudyPanel";
+import TradeExplorer from "./TradeExplorer";
 import TradesPanel from "./TradesPanel";
 import { fetchSim, fetchStream, type Analysis, type Decision, type Sim, type Stream } from "./api";
 
@@ -226,6 +227,9 @@ export default function LabApp() {
           </div>
           <div className="min-h-[220px] shrink-0 bg-bb-panel">
             <TradesPanel sim={sim} plans={stream?.plans ?? []} />
+          </div>
+          <div className="h-[520px] shrink-0 bg-bb-panel">
+            <TradeExplorer />
           </div>
         </div>
       </div>

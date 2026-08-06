@@ -38,6 +38,7 @@ Run: .venv/Scripts/python.exe scripts/research_holding_period.py paths
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 import time as _time
 from datetime import datetime
@@ -278,7 +279,7 @@ def stage_sweep(args) -> None:
 
     rules = {
         "always T+1 (shipped horizon)": np.zeros(n, bool),
-        "always T+3": np.ones(n, bool),
+        "always extend (unconditional)": np.ones(n, bool),
         "|reaction| >= 10%": move >= 10,
         "high confidence": conf == "high",
         "guidance raised or lowered": np.isin(guid, ["raised", "lowered"]),
@@ -318,34 +319,44 @@ def stage_sweep(args) -> None:
 
 
 def account(p: pd.DataFrame, ret: np.ndarray, horizon: np.ndarray,
-            sessions: list, spy_close: np.ndarray, weight: float = 0.10,
-            gross_cap: float = 1.0) -> dict:
-    """Compound the trades through a real calendar with real capital limits.
+            sessions: list, spy_close: np.ndarray, target_gross: float = 0.30,
+            max_weight: float = 0.20) -> dict:
+    """Compound the trades through a real calendar at constant deployed capital.
 
-    Per-trade basis points cannot answer whether a longer hold is better,
-    because a multi-session hold TIES UP the slot: hold five names for three
-    days each and the sixth signal has nowhere to go. So exposure is tracked
-    per session and a trade that would breach the gross cap is skipped, not
-    silently taken. That penalty is exactly what a longer horizon has to pay
-    for, and leaving it out is how holding-period studies flatter themselves.
+    A multi-session hold ties up the slot: hold five names for three days each
+    and the account is three times as committed as the same book held one day.
+    Comparing horizons at a FIXED per-name weight therefore compares two
+    different amounts of risk, and skipping the overflow (the first version of
+    this) just converts that into a hidden coverage penalty.
+
+    So size the chunks instead. Measure the average number of concurrent
+    positions the schedule actually produces, then set the per-name weight to
+    gross_cap / that. A T+3 book holds ~3x as many names at once and each is
+    ~1/3 the size, so average deployed capital is equal across horizons and
+    every signal is taken. The comparison is then about the RETURN of the
+    horizon, not about how much capital it happened to commit.
     """
     index = {d: i for i, d in enumerate(sessions)}
-    order = np.argsort([index.get(d, 10 ** 9) for d in p["edate"]])
-    gross = np.zeros(len(sessions))
+    entries = np.array([index.get(d, -1) for d in p["edate"]])
+    live = entries >= 0
+    exits = np.minimum(entries + horizon.astype(int), len(sessions) - 1)
+
+    # Pass 1: how many positions are open on an average session?
+    occupancy = np.zeros(len(sessions))
+    for j in np.where(live)[0]:
+        occupancy[entries[j]:exits[j] + 1] += 1
+    active = occupancy[occupancy > 0]
+    avg_concurrent = float(active.mean()) if len(active) else 1.0
+    # target_gross is the AVERAGE deployed capital every horizon is held to.
+    # It has to sit below max_weight x avg_concurrent or the per-name cap
+    # binds and the normalisation silently stops happening — which is what
+    # made the first run report a 100% CAGR off a 20%-per-name book.
+    weight = min(target_gross / avg_concurrent, max_weight)
+
+    # Pass 2: P&L lands on the session the position is closed in.
     daily = np.zeros(len(sessions))
-    taken = skipped = 0
-    for j in order:
-        entry = index.get(p["edate"].iloc[j])
-        if entry is None:
-            continue
-        exit_i = min(entry + int(horizon[j]), len(sessions) - 1)
-        span = slice(entry, exit_i + 1)
-        if gross[span].max(initial=0.0) + weight > gross_cap:
-            skipped += 1
-            continue
-        gross[span] += weight
-        daily[exit_i] += weight * ret[j]
-        taken += 1
+    for j in np.where(live)[0]:
+        daily[exits[j]] += weight * ret[j]
     equity = np.cumprod(1 + daily)
     peak = np.maximum.accumulate(equity)
     mdd = float((1 - equity / peak).max())
@@ -353,7 +364,9 @@ def account(p: pd.DataFrame, ret: np.ndarray, horizon: np.ndarray,
     beta, alpha_d = np.polyfit(spy_ret, daily, 1)
     years = len(sessions) / 252
     return {
-        "taken": taken, "skipped": skipped,
+        "taken": int(live.sum()), "avg_concurrent": round(avg_concurrent, 2),
+        "weight_pct": round(weight * 100, 2),
+        "peak_concurrent": int(occupancy.max()),
         "total_pct": (equity[-1] - 1) * 100,
         "cagr_pct": (equity[-1] ** (1 / years) - 1) * 100,
         "max_dd_pct": mdd * 100,
@@ -395,6 +408,13 @@ def stage_best(args) -> None:
     HORIZONS["T+1, T+3 if confirmed & high conf"] = np.where(
         (base1 > 0) & (conf == "high"), 3, 1)
     HORIZONS["T+1, T+5 if confirmed"] = np.where(base1 > 0, 5, 1)
+    # The sweep's best conditional rule: guidance is the forward-looking part
+    # of a release, and PEAD says drift persists where the surprise is about
+    # future earnings rather than the quarter just reported.
+    guid = p["guidance"].to_numpy()
+    moved_guidance = np.isin(guid, ["raised", "lowered"])
+    HORIZONS["T+1, T+3 if guidance moved"] = np.where(moved_guidance, 3, 1)
+    HORIZONS["T+1, T+2 if guidance moved"] = np.where(moved_guidance, 2, 1)
 
     rows = []
     for hname, horizon in HORIZONS.items():
@@ -433,8 +453,8 @@ def stage_best(args) -> None:
 
     print("\n=== account simulation, 10% notional per name, 100% gross cap ===")
     print(f"{'config':44s}{'total':>9}{'CAGR':>8}{'maxDD':>8}{'Sharpe':>8}"
-          f"{'alpha':>8}{'beta':>7}{'skipped':>9}")
-    print("-" * 101)
+          f"{'alpha':>8}{'beta':>7}{'conc':>6}{'wt%':>6}")
+    print("-" * 104)
     picks = list(df.head(3).index) + list(shipped.index[:1])
     results = {}
     for i in picks:
@@ -445,44 +465,155 @@ def stage_best(args) -> None:
         print(f"{label:44s}{acct['total_pct']:>+8.1f}%{acct['cagr_pct']:>7.2f}%"
               f"{acct['max_dd_pct']:>7.1f}%{acct['sharpe']:>8.2f}"
               f"{acct['alpha_pct']:>+7.2f}%{acct['beta']:>7.3f}"
-              f"{acct['skipped']:>9d}")
+              f"{acct['avg_concurrent']:>6.1f}{acct['weight_pct']:>6.1f}")
     spy_curve = spy_close / spy_close[0]
     peak = np.maximum.accumulate(spy_curve)
     print(f"{'SPY buy & hold':44s}{(spy_curve[-1] - 1) * 100:>+8.1f}%"
           f"{((spy_curve[-1]) ** (252 / len(sessions)) - 1) * 100:>7.2f}%"
           f"{(1 - spy_curve / peak).max() * 100:>7.1f}%")
 
+    # Publish the corrected curves for the deck. The old study-curve.json was
+    # built on the mislabeled 2-4 session exit; this replaces it.
+    curve_file = (Path(__file__).resolve().parents[2] / "frontend" / "public"
+                  / "study-curve.json")
+    spy_curve = (spy_close / spy_close[0]).tolist()
+    series, stats_out = {"spy": [round(v, 5) for v in spy_curve]}, {}
+    names = {}
+    for rank, i in enumerate(picks):
+        r = df.loc[i]
+        key = "best" if rank == 0 else ("alt" if rank < 3 else "shipped")
+        if key in series:
+            continue
+        _, a = results[f"{r['horizon']} / {r['stop']} / {r['target']}"]
+        series[key] = [round(v, 5) for v in a["equity"]]
+        names[key] = f"{r['horizon']} / stop {r['stop']} / target {r['target']}"
+        stats_out[key] = {k: v for k, v in a.items() if k != "equity"}
+    peak = np.maximum.accumulate(np.asarray(spy_curve))
+    stats_out["spy"] = {
+        "total_pct": (spy_curve[-1] - 1) * 100,
+        "cagr_pct": (spy_curve[-1] ** (252 / len(sessions)) - 1) * 100,
+        "max_dd_pct": float((1 - np.asarray(spy_curve) / peak).max()) * 100,
+        "sharpe": float(np.mean(np.diff(spy_close) / spy_close[:-1])
+                        / np.std(np.diff(spy_close) / spy_close[:-1], ddof=1)
+                        * np.sqrt(252)),
+        "alpha_pct": 0.0, "beta": 1.0}
+    names["spy"] = "SPY buy & hold"
+    curve_file.write_text(json.dumps({
+        "updated": datetime.now(ET).isoformat(), "model": "claude-opus-5",
+        "effort": args.effort, "corrected": True,
+        "span": [str(sessions[0]), str(sessions[-1])],
+        "note": ("corrected next-session exits; 30% average deployed capital, "
+                 "chunk-normalised across horizons; 13bp round trip"),
+        "dates": [str(d) for d in sessions],
+        "labels": names, "series": series, "stats": stats_out,
+    }), encoding="utf-8")
+    print(f"wrote {curve_file}")
+
     stamp = datetime.now(ET).strftime("%Y%m%d_%H%M")
     out = df.drop(columns=["_ret", "_h"])
     out.to_parquet(CACHE / "holding_bracket_grid.parquet")
     lines = [f"# Best-configuration search — {stamp}", "",
              f"{n} gated events. Chosen on 2021-23, scored on 2024-26. "
-             f"Account: 10% notional per name, 100% gross cap, skips signals "
-             f"that would breach it (the cost a longer hold has to pay).", "",
+             f"Account: per-name weight set to 100% gross / average "
+             f"concurrent positions, so every horizon deploys the same "
+             f"average capital and no signal is skipped.", "",
              "| horizon | stop | target | train | test | all | win% |",
              "|---|---|---|---|---|---|---|"]
     for _, r in out.head(15).iterrows():
         lines.append(f"| {r['horizon']} | {r['stop']} | {r['target']} | "
                      f"{r['train']:+.1f} | {r['test']:+.1f} | {r['all']:+.1f} | "
                      f"{r['win']:.1f} |")
-    lines += ["", "| config | total | CAGR | maxDD | Sharpe | alpha | beta | skipped |",
-              "|---|---|---|---|---|---|---|---|"]
+    lines += ["", "| config | total | CAGR | maxDD | Sharpe | alpha | beta | "
+              "avg concurrent | weight |",
+              "|---|---|---|---|---|---|---|---|---|"]
     for label, (r, a) in results.items():
         lines.append(f"| {label} | {a['total_pct']:+.1f}% | {a['cagr_pct']:.2f}% | "
                      f"{a['max_dd_pct']:.1f}% | {a['sharpe']:.2f} | "
-                     f"{a['alpha_pct']:+.2f}% | {a['beta']:.3f} | {a['skipped']} |")
+                     f"{a['alpha_pct']:+.2f}% | {a['beta']:.3f} | "
+                     f"{a['avg_concurrent']:.1f} | {a['weight_pct']:.1f}% |")
     (DOC / f"best_config_{stamp}.md").write_text("\n".join(lines) + "\n",
                                                  encoding="utf-8")
     print(f"\nwrote {DOC / f'best_config_{stamp}.md'}")
 
 
+TRADES_FILE = (Path(__file__).resolve().parents[2] / "frontend" / "public"
+               / "study-trades.json")
+
+
+def stage_trades(args) -> None:
+    """Export every scored event — taken AND declined — for the LAB deck's
+    trade explorer.
+
+    The declined ones are the point. This strategy's value is refusal, so a
+    view that only shows executed trades hides the thing that makes money.
+    Each row carries the model's verdict, whether the gate let it through,
+    why not when it didn't, and what the trade would have returned under each
+    exit policy."""
+    if not PATHS.exists():
+        raise SystemExit("run the `paths` stage first")
+    paths = pd.read_parquet(PATHS)
+    meta = scored_events(args.effort)
+    p = paths.drop(columns=["gated"]).merge(
+        meta[["symbol", "date", "edate", "year", "move_pct", "run5d", "dv",
+              "direction", "confidence", "guidance", "quality_flags",
+              "summary", "gated", "anchor", "react"]],
+        on=["symbol", "date"], how="inner")
+    n = len(p)
+
+    policies = {
+        "t1": (np.ones(n, int), None, None),
+        "t3": (np.full(n, 3), None, None),
+        "shipped": (np.ones(n, int), np.full(n, 5.0), np.full(n, 10.0)),
+    }
+    out = {}
+    for name, (h, s, t) in policies.items():
+        ret, why = resolve(p, h, s, t)
+        out[name] = (ret * 1e4, why)
+
+    def reason_not_taken(row) -> str:
+        if row["direction"] == "neutral":
+            return "verdict neutral — no directional call"
+        return ("verdict bullish, tape down" if row["direction"] == "bullish"
+                else "verdict bearish, tape up")
+
+    rows = []
+    for i, (_, r) in enumerate(p.iterrows()):
+        rows.append({
+            "sym": r["symbol"], "date": r["date"], "year": r["year"],
+            "side": int(r["side"]), "move": round(float(r["move_pct"]), 2),
+            "run5d": (None if pd.isna(r["run5d"]) else round(float(r["run5d"]), 2)),
+            "dvM": (None if pd.isna(r["dv"]) else round(float(r["dv"]) / 1e6)),
+            "anchor": round(float(r["anchor"]), 2), "entry": round(float(r["react"]), 2),
+            "dir": r["direction"], "conf": r["confidence"], "guid": r["guidance"],
+            "flags": list(r["quality_flags"] or []),
+            "summary": str(r["summary"])[:400],
+            "gated": bool(r["gated"]),
+            "why": "" if r["gated"] else reason_not_taken(r),
+            "ret": {k: round(float(v[0][i]), 1) for k, v in out.items()},
+            "exit": {k: str(v[1][i]) for k, v in out.items()},
+        })
+    rows.sort(key=lambda x: (x["date"], x["sym"]))
+    payload = {
+        "updated": datetime.now(ET).isoformat(),
+        "effort": args.effort, "costs_bp": COSTS_BP,
+        "policies": {"t1": "hold to T+1 close", "t3": "hold to T+3 close",
+                     "shipped": "T+1 with the shipped 5% stop / 2x target"},
+        "n": len(rows), "gated": int(sum(r["gated"] for r in rows)),
+        "trades": rows,
+    }
+    TRADES_FILE.parent.mkdir(parents=True, exist_ok=True)
+    TRADES_FILE.write_text(json.dumps(payload), encoding="utf-8")
+    print(f"wrote {TRADES_FILE} ({TRADES_FILE.stat().st_size / 1024:.0f} KB) — "
+          f"{payload['n']} events, {payload['gated']} taken")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("stage", choices=["paths", "sweep", "best"])
+    ap.add_argument("stage", choices=["paths", "sweep", "best", "trades"])
     ap.add_argument("--effort", default="medium")
     args = ap.parse_args()
     {"paths": stage_paths, "sweep": stage_sweep,
-     "best": stage_best}[args.stage](args)
+     "best": stage_best, "trades": stage_trades}[args.stage](args)
 
 
 if __name__ == "__main__":

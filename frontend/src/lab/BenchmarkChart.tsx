@@ -4,31 +4,37 @@ import { useEffect, useMemo, useState } from "react";
  * buy-and-hold, with the daily-return regression that separates "it went
  * up" from alpha. Static asset, same reasoning as StudyPanel. */
 type Stats = {
-  total_return_pct: number;
+  total_pct: number;
   cagr_pct: number;
-  alpha_annual_pct: number;
+  alpha_pct: number;
   beta: number;
   sharpe: number;
-  max_drawdown_pct: number;
-  days_traded: number;
-  trades: number;
+  max_dd_pct: number;
+  avg_concurrent?: number;
+  weight_pct?: number;
+  taken?: number;
 };
 
 type Curve = {
   updated: string;
   model: string;
   effort: string;
+  corrected?: boolean;
   span: [string, string];
   note: string;
   dates: string[];
-  series: { vol: number[]; flat: number[]; spy: number[] };
+  labels?: Record<string, string>;
+  series: Record<string, number[]>;
   stats: Record<string, Stats>;
 };
 
+/** Fixed order, fixed hues — a series never changes colour because another
+ * one appeared or was filtered out. */
 const SERIES = [
-  { key: "vol", label: "VOL-WEIGHTED", color: "#FFB000" },
-  { key: "flat", label: "FLAT 10%/NAME", color: "#00C853" },
-  { key: "spy", label: "SPY BUY & HOLD", color: "#2196F3" },
+  { key: "best", color: "#FFB000" },
+  { key: "alt", color: "#00C853" },
+  { key: "shipped", color: "#FF1744" },
+  { key: "spy", color: "#2196F3" },
 ] as const;
 
 export default function BenchmarkChart() {
@@ -48,7 +54,8 @@ export default function BenchmarkChart() {
 
   const geom = useMemo(() => {
     if (!data) return null;
-    const all = [...data.series.vol, ...data.series.flat, ...data.series.spy];
+    const keys = SERIES.filter((s) => data.series[s.key]).map((s) => s.key);
+    const all = keys.flatMap((k) => data.series[k]);
     const lo = Math.min(...all);
     const hi = Math.max(...all);
     const W = 1000;
@@ -57,8 +64,8 @@ export default function BenchmarkChart() {
     const [yLo, yHi] = [tx(lo), tx(hi)];
     const x = (i: number) => (i / (data.dates.length - 1)) * W;
     const y = (v: number) => H - ((tx(v) - yLo) / (yHi - yLo || 1)) * H;
-    const paths = SERIES.map((s) =>
-      data.series[s.key].map((v, i) => `${i ? "L" : "M"}${x(i)},${y(v)}`).join(" "),
+    const paths = keys.map((k) =>
+      data.series[k].map((v, i) => `${i ? "L" : "M"}${x(i)},${y(v)}`).join(" "),
     );
     // One gridline per calendar year so the shape is readable in time.
     const ticks: { x: number; label: string }[] = [];
@@ -69,7 +76,7 @@ export default function BenchmarkChart() {
         ticks.push({ x: x(i), label: year });
       }
     });
-    return { paths, W, H, ticks, baseY: y(1) };
+    return { paths, keys, W, H, ticks, baseY: y(1) };
   }, [data, logScale]);
 
   if (!data || !geom)
@@ -87,7 +94,8 @@ export default function BenchmarkChart() {
         <span className="text-[11px] uppercase tracking-widest text-bb-amber">
           5-year study vs S&amp;P 500 —{" "}
           <span className="text-bb-muted">
-            {data.model} · {data.effort} · {data.stats.vol.trades} gated trades
+            {data.model} · {data.effort}
+            {data.corrected ? " · corrected exits" : ""}
           </span>
         </span>
         <div className="flex items-center gap-2">
@@ -110,10 +118,10 @@ export default function BenchmarkChart() {
         <line x1="0" x2={geom.W} y1={geom.baseY} y2={geom.baseY} stroke="#555" strokeDasharray="4 6" />
         {geom.paths.map((d, i) => (
           <path
-            key={SERIES[i].key}
+            key={geom.keys[i]}
             d={d}
             fill="none"
-            stroke={SERIES[i].color}
+            stroke={SERIES.find((s) => s.key === geom.keys[i])!.color}
             strokeWidth="1.6"
             vectorEffect="non-scaling-stroke"
           />
@@ -128,7 +136,7 @@ export default function BenchmarkChart() {
       <table className="w-full text-[11px]">
         <thead className="text-[10px] uppercase text-bb-muted">
           <tr>
-            {["", "total", "cagr", "alpha p.a.", "beta", "sharpe", "max dd", "days in"].map((h) => (
+            {["", "total", "cagr", "alpha p.a.", "beta", "sharpe", "max dd", "size/name"].map((h) => (
               <th key={h} className="px-2 py-1 text-right font-normal first:text-left">
                 {h}
               </th>
@@ -143,21 +151,19 @@ export default function BenchmarkChart() {
               <tr key={s.key} className="border-t border-bb-border/40">
                 <td className="px-2 py-0.5">
                   <span className="mr-1.5 inline-block h-2 w-3 align-middle" style={{ background: s.color }} />
-                  <span className="text-white">{s.label}</span>
+                  <span className="text-white">{data.labels?.[s.key] ?? s.key}</span>
                 </td>
-                <td className="px-2 py-0.5 text-right text-white">{fmt(st.total_return_pct)}</td>
+                <td className="px-2 py-0.5 text-right text-white">{fmt(st.total_pct)}</td>
                 <td className="px-2 py-0.5 text-right text-white">{fmt(st.cagr_pct)}</td>
-                <td
-                  className={`px-2 py-0.5 text-right ${
-                    st.alpha_annual_pct > 0 ? "text-bb-profit" : "text-bb-muted"
-                  }`}
-                >
-                  {s.key === "spy" ? "—" : fmt(st.alpha_annual_pct)}
+                <td className={`px-2 py-0.5 text-right ${st.alpha_pct > 0 ? "text-bb-profit" : "text-bb-muted"}`}>
+                  {s.key === "spy" ? "—" : fmt(st.alpha_pct)}
                 </td>
                 <td className="px-2 py-0.5 text-right text-white">{st.beta.toFixed(3)}</td>
                 <td className="px-2 py-0.5 text-right text-white">{st.sharpe.toFixed(2)}</td>
-                <td className="px-2 py-0.5 text-right text-bb-loss">-{st.max_drawdown_pct.toFixed(1)}%</td>
-                <td className="px-2 py-0.5 text-right text-bb-muted">{st.days_traded}</td>
+                <td className="px-2 py-0.5 text-right text-bb-loss">-{st.max_dd_pct.toFixed(1)}%</td>
+                <td className="px-2 py-0.5 text-right text-bb-muted">
+                  {st.weight_pct ? `${st.weight_pct.toFixed(1)}%` : "—"}
+                </td>
               </tr>
             );
           })}
