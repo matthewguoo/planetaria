@@ -874,10 +874,19 @@ RISK_PCT = 0.5           # % of equity at the stop
 SL_MULT, SL_FLOOR, SL_CAP = 2.5, 0.05, 0.12
 
 
-def _spy_daily(start: date, end: date) -> pd.DataFrame:
-    """SPY daily closes, cached. The benchmark has to come from the same
-    adjusted source as everything else, not from memory."""
-    cache = CACHE / f"spy_{start}_{end}.parquet"
+BENCHMARKS = ("SPY", "QQQ", "TQQQ")
+
+
+def _spy_daily(start: date, end: date, symbol: str = "SPY") -> pd.DataFrame:
+    """Daily closes for a benchmark, cached. Split/dividend adjusted from the
+    same source as everything else, not from memory.
+
+    QQQ is here because "is this just market exposure?" is not answered by
+    SPY alone — earnings reactions concentrate in tech, so the NASDAQ-100 is
+    the benchmark the strategy could plausibly be a proxy for. TQQQ (3x QQQ)
+    is the leverage control: if the returns were levered beta, TQQQ is what
+    they would look like, drawdown included."""
+    cache = CACHE / f"bench_{symbol}_{start}_{end}.parquet"
     if cache.exists():
         return pd.read_parquet(cache)
     from alpaca.data.enums import Adjustment
@@ -890,11 +899,11 @@ def _spy_daily(start: date, end: date) -> pd.DataFrame:
     s = get_settings()
     api = StockHistoricalDataClient(s.alpaca_api_key, s.alpaca_secret_key)
     out = api.get_stock_bars(StockBarsRequest(
-        symbol_or_symbols="SPY", timeframe=TimeFrame.Day,
+        symbol_or_symbols=symbol, timeframe=TimeFrame.Day,
         start=datetime.combine(start, datetime.min.time(), ET),
         end=datetime.combine(end, datetime.min.time(), ET),
         feed="sip", adjustment=Adjustment.ALL, limit=None))
-    bars = out.data["SPY"]
+    bars = out.data[symbol]
     df = pd.DataFrame({"date": [b.timestamp.astimezone(ET).date() for b in bars],
                        "close": [float(b.close) for b in bars]})
     df.to_parquet(cache)
@@ -936,6 +945,112 @@ def _load_avg_cache() -> None:
                 _AVG_CACHE[sym] = (keys, np.array([merged[k] for k in keys]))
 
 
+BRACKETS = CACHE / "brackets_gated.parquet"
+
+
+def stage_brackets(args) -> None:
+    """Walk the engine's ACTUAL brackets on per-event minute bars.
+
+    Everything else in this study measures the raw round trip — enter at the
+    reaction print, exit next session 15:55 — because that is what the
+    cached event panel stores. The live strategy does not trade that way: it
+    arms a stop at clamp(2.5 x avg|daily ret|, 5%, 12%) and a take-profit at
+    2x that, and the exit enforcer can fire either one after hours. Ignoring
+    them makes the drawdown look better than it is (a stop that never fires
+    cannot hurt you) and the winners smaller than they are (a TP that never
+    fires gives the gain back into the close).
+
+    So: refetch minute bars for the gated events and resolve each one
+    properly. Costs nothing — historical SIP minute data is free-tier-fine
+    — just wall clock. Stop-first on same-bar touches, matching the account
+    sims. Cached, so this runs once."""
+    from alpaca.data.historical.stock import StockHistoricalDataClient
+    from alpaca.data.requests import StockBarsRequest
+    from alpaca.data.timeframe import TimeFrame
+
+    from app.config import get_settings
+
+    universe = load_universe()
+    universe = universe.rename(columns={"date": "edate"})
+    universe["date"] = universe["edate"].astype(str)
+    results = _load_results()
+    results = results[(results["effort"] == args.effort)
+                      & (results["arm"] == "named")]
+    m = results.merge(universe, on=["symbol", "date"], how="inner")
+    m = m[_gate(m)].copy()
+    _load_avg_cache()
+
+    have: set[tuple[str, str]] = set()
+    if BRACKETS.exists():
+        prior = pd.read_parquet(BRACKETS)
+        have = set(zip(prior["symbol"], prior["date"]))
+    else:
+        prior = pd.DataFrame()
+
+    s = get_settings()
+    api = StockHistoricalDataClient(s.alpaca_api_key, s.alpaca_secret_key)
+    rows = []
+    todo = [(i, r) for i, r in m.iterrows()
+            if (r["symbol"], r["date"]) not in have]
+    print(f"{len(todo)} of {len(m)} gated events need minute bars")
+    for n, (_, row) in enumerate(todo):
+        d = row["edate"]
+        side = 1 if row["move_pct"] > 0 else -1
+        avg = _avg_abs_ret(row["symbol"], d)
+        sl = min(max(SL_MULT * (avg if avg else SL_FLOOR / SL_MULT),
+                     SL_FLOOR), SL_CAP)
+        tp = 2 * sl
+        entry = float(row["react"])
+        start = datetime(d.year, d.month, d.day, 16, 5, tzinfo=ET)
+        try:
+            out = api.get_stock_bars(StockBarsRequest(
+                symbol_or_symbols=row["symbol"], timeframe=TimeFrame.Minute,
+                start=start, end=start + pd.Timedelta(days=4).to_pytimedelta(),
+                feed="sip"))
+            bars = out.data.get(row["symbol"]) or []
+        except Exception as exc:
+            print(f"  {row['symbol']} {d}: {str(exc)[:70]}")
+            bars = []
+        exit_px, reason = None, None
+        tp_px = entry * (1 + side * tp)
+        sl_px = entry * (1 - side * sl)
+        for bar in bars:
+            ts = bar.timestamp.astimezone(ET)
+            if ts.date() == d and ts.hour * 60 + ts.minute < 16 * 60 + 20:
+                continue          # before the reaction print we entered at
+            if ts.date() > d and (ts.hour * 60 + ts.minute) > 15 * 60 + 55:
+                break             # past the T+1 time stop
+            hi, lo = float(bar.high), float(bar.low)
+            hit_sl = lo <= sl_px if side > 0 else hi >= sl_px
+            hit_tp = hi >= tp_px if side > 0 else lo <= tp_px
+            if hit_sl:            # stop-first on same-bar ties
+                exit_px, reason = sl_px, "sl"
+                break
+            if hit_tp:
+                exit_px, reason = tp_px, "tp"
+                break
+        if exit_px is None:
+            exit_px, reason = float(row["exit"]), "time_stop"
+        rows.append({"symbol": row["symbol"], "date": row["date"],
+                     "side": side, "entry": entry, "sl_pct": sl, "tp_pct": tp,
+                     "exit_px": exit_px, "reason": reason,
+                     "bars": len(bars)})
+        if n % 100 == 0:
+            print(f"  {n}/{len(todo)}")
+        _time.sleep(0.22)
+
+    out = pd.concat([prior, pd.DataFrame(rows)], ignore_index=True) \
+        if len(prior) else pd.DataFrame(rows)
+    out.to_parquet(BRACKETS)
+    mix = out["reason"].value_counts()
+    print(f"\nresolved {len(out)} gated events: "
+          + ", ".join(f"{k} {v} ({v / len(out):.0%})" for k, v in mix.items()))
+    out["ret"] = out["side"] * (out["exit_px"] / out["entry"] - 1) - COSTS_BP / 1e4
+    print(f"bracketed mean {out['ret'].mean() * 1e4:+.1f}bp  |  "
+          f"win {(out['ret'] > 0).mean() * 100:.1f}%")
+    print(f"wrote {BRACKETS}")
+
+
 def stage_curve(args) -> None:
     """Account curve for the LLM-gated stream vs SPY buy-and-hold, plus the
     daily-return regression that turns 'it made money' into alpha and beta.
@@ -961,6 +1076,21 @@ def stage_curve(args) -> None:
     m = m[_gate(m)].copy()
     m["side"] = np.sign(m["move_pct"])
     m["ret"] = m["side"] * (m["exit"] / m["react"] - 1) - COSTS_BP / 1e4
+    # --brackets swaps the raw round trip for the engine's ACTUAL exit: the
+    # vol-scaled stop, the 2x take-profit, or the T+1 time stop, whichever
+    # the minute bars hit first (see the `brackets` stage). Two different
+    # questions — raw measures whether the gate picks direction; bracketed
+    # measures what the strategy AS CONFIGURED would have returned.
+    if args.brackets:
+        if not BRACKETS.exists():
+            raise SystemExit("run the `brackets` stage first")
+        br = pd.read_parquet(BRACKETS)
+        br["bret"] = br["side"] * (br["exit_px"] / br["entry"] - 1) - COSTS_BP / 1e4
+        m = m.merge(br[["symbol", "date", "bret", "reason"]],
+                    on=["symbol", "date"], how="inner")
+        m["ret"] = m["bret"]
+        print(f"bracketed: {len(m)} trades · "
+              + " · ".join(f"{k} {v}" for k, v in m["reason"].value_counts().items()))
     m = m.sort_values("edate")
 
     _load_avg_cache()
@@ -980,7 +1110,6 @@ def stage_curve(args) -> None:
     spy = _spy_daily(lo, hi + pd.Timedelta(days=7).to_pytimedelta())
     spy = spy.sort_values("date").reset_index(drop=True)
     sessions = spy["date"].to_list()
-    closes = spy["close"].to_numpy()
     index = {d: i for i, d in enumerate(sessions)}
 
     # A trade entered after the close on day d is EXITED at day d+1's close,
@@ -1015,44 +1144,128 @@ def stage_curve(args) -> None:
         curves[policy] = eq_by_day
         daily[policy] = ret_by_day
 
-    spy_ret = [0.0] + [closes[i] / closes[i - 1] - 1 for i in range(1, len(closes))]
-    spy_curve = [c / closes[0] for c in closes]
+    # Every benchmark on the SPY session grid, forward-filled across any
+    # missing print so the return series line up index-for-index.
+    bench: dict[str, dict] = {}
+    for sym in BENCHMARKS:
+        b = _spy_daily(lo, hi + pd.Timedelta(days=7).to_pytimedelta(), sym)
+        px = dict(zip(b["date"], b["close"]))
+        series, last = [], None
+        for d in sessions:
+            last = px.get(d, last)
+            series.append(last)
+        if series[0] is None:
+            continue
+        curve = [v / series[0] for v in series]
+        rets = [0.0] + [series[i] / series[i - 1] - 1 for i in range(1, len(series))]
+        bench[sym] = {"curve": curve, "ret": rets}
 
+    def _lever(rets: list[float], k: float) -> list[float]:
+        """Daily-rebalanced k-times exposure — the mechanic real leveraged
+        ETFs use, so the path (and its volatility decay) is honest rather
+        than a naive k x terminal return."""
+        eq, out = 1.0, []
+        for r in rets:
+            eq *= (1 + k * r)
+            out.append(eq)
+        return out
+
+    def _iso_return_leverage(bench_rets: list[float], target: float,
+                             hi: float = 10.0) -> dict:
+        """The SMALLEST daily-rebalanced exposure k for which k-times the
+        index ends where the strategy ends.
+
+        Not a bisection: terminal wealth is NOT monotone in k. Volatility
+        decay makes it hump-shaped — past some k the index's own drawdowns
+        compound faster than its gains, and more leverage ends LOWER, then
+        goes to zero. Bisecting that returns the ceiling and a fake 100%
+        drawdown. So scan, take the peak, and report honestly when the
+        target is unreachable at ANY leverage — which is itself the answer
+        to 'why not just lever the index'.
+        """
+        best_k, best_terminal = 0.0, 1.0
+        found = None
+        k = 0.0
+        while k <= hi:
+            k = round(k + 0.01, 2)
+            curve = _lever(bench_rets, k)
+            terminal = curve[-1]
+            if terminal > best_terminal:
+                best_k, best_terminal = k, terminal
+            if found is None and terminal >= target:
+                found = (k, curve)
+        if found is None:
+            peak = _lever(bench_rets, best_k)
+            mdd = _max_dd(peak)
+            return {"reachable": False, "best_k": best_k,
+                    "best_terminal": round(best_terminal, 3),
+                    "max_drawdown_pct": round(mdd * 100, 1),
+                    "curve": [round(v, 5) for v in peak]}
+        k, curve = found
+        rr = np.diff(np.asarray([1.0] + curve)) / np.asarray([1.0] + curve[:-1])
+        return {"reachable": True, "k": k,
+                "max_drawdown_pct": round(_max_dd(curve) * 100, 1),
+                "vol_annual_pct": round(float(rr.std(ddof=1) * np.sqrt(252) * 100), 1),
+                "terminal": round(curve[-1], 3),
+                "curve": [round(v, 5) for v in curve]}
+
+    def _max_dd(curve) -> float:
+        peak, mdd = 1.0, 0.0
+        for e in curve:
+            peak = max(peak, e)
+            mdd = max(mdd, 1 - e / peak)
+        return mdd
+
+    def _describe(curve, rets, years):
+        peak, mdd = 1.0, 0.0
+        for e in curve:
+            peak = max(peak, e)
+            mdd = max(mdd, 1 - e / peak)
+        r = np.asarray(rets)
+        return {
+            "total_return_pct": round((curve[-1] - 1) * 100, 1),
+            "cagr_pct": round((curve[-1] ** (1 / years) - 1) * 100, 2),
+            "max_drawdown_pct": round(mdd * 100, 1),
+            "sharpe": round(float(r.mean() / r.std(ddof=1) * np.sqrt(252)), 2),
+            "days_traded": int((r != 0).sum()),
+        }
+
+    years = (sessions[-1] - sessions[0]).days / 365.25
     stats = {}
     for policy in ("vol", "flat"):
         r = np.array(daily[policy])
-        b = np.array(spy_ret)
-        beta, alpha_d = np.polyfit(b, r, 1)
-        years = (sessions[-1] - sessions[0]).days / 365.25
-        total = curves[policy][-1]
-        peak, mdd = 1.0, 0.0
-        for e in curves[policy]:
-            peak = max(peak, e)
-            mdd = max(mdd, 1 - e / peak)
-        stats[policy] = {
-            "total_return_pct": round((total - 1) * 100, 1),
-            "cagr_pct": round((total ** (1 / years) - 1) * 100, 2),
-            "alpha_annual_pct": round(alpha_d * 252 * 100, 2),
-            "beta": round(float(beta), 3),
-            "sharpe": round(float(r.mean() / r.std(ddof=1) * np.sqrt(252)), 2),
-            "max_drawdown_pct": round(mdd * 100, 1),
-            "days_traded": int((r != 0).sum()),
-            "trades": int(len(m)),
-        }
-    peak, mdd = 1.0, 0.0
-    for e in spy_curve:
-        peak = max(peak, e)
-        mdd = max(mdd, 1 - e / peak)
-    years = (sessions[-1] - sessions[0]).days / 365.25
-    stats["spy"] = {
-        "total_return_pct": round((spy_curve[-1] - 1) * 100, 1),
-        "cagr_pct": round((spy_curve[-1] ** (1 / years) - 1) * 100, 2),
-        "alpha_annual_pct": 0.0, "beta": 1.0,
-        "sharpe": round(float(np.mean(spy_ret) / np.std(spy_ret, ddof=1)
-                              * np.sqrt(252)), 2),
-        "max_drawdown_pct": round(mdd * 100, 1),
-        "days_traded": len(sessions), "trades": 0,
-    }
+        s_ = _describe(curves[policy], r, years)
+        # One single-factor regression PER benchmark. Alpha only means
+        # something next to the exposure it is adjusted for, and "is this
+        # just the index?" is a different question for SPY, QQQ and TQQQ.
+        s_["vs"] = {}
+        for sym, b in bench.items():
+            beta, alpha_d = np.polyfit(np.asarray(b["ret"]), r, 1)
+            corr = float(np.corrcoef(np.asarray(b["ret"]), r)[0, 1])
+            s_["vs"][sym] = {"alpha_annual_pct": round(alpha_d * 252 * 100, 2),
+                             "beta": round(float(beta), 3),
+                             "corr": round(corr, 3)}
+        s_["alpha_annual_pct"] = s_["vs"].get("SPY", {}).get("alpha_annual_pct", 0.0)
+        s_["beta"] = s_["vs"].get("SPY", {}).get("beta", 0.0)
+        s_["trades"] = int(len(m))
+        # "Could I just have levered the index?" — answered with the receipt.
+        s_["iso"] = {}
+        for sym, b in bench.items():
+            s_["iso"][sym] = _iso_return_leverage(b["ret"], curves[policy][-1])
+        stats[policy] = s_
+    for sym, b in bench.items():
+        s_ = _describe(b["curve"], b["ret"], years)
+        s_.update(alpha_annual_pct=0.0, beta=1.0 if sym == "SPY" else None,
+                  trades=0, vs={})
+        for other, ob in bench.items():
+            beta, alpha_d = np.polyfit(np.asarray(ob["ret"]), np.asarray(b["ret"]), 1)
+            s_["vs"][other] = {"alpha_annual_pct": round(alpha_d * 252 * 100, 2),
+                               "beta": round(float(beta), 3),
+                               "corr": round(float(np.corrcoef(
+                                   np.asarray(ob["ret"]),
+                                   np.asarray(b["ret"]))[0, 1]), 3)}
+        s_["beta"] = s_["vs"]["SPY"]["beta"]
+        stats[sym.lower()] = s_
 
     payload = {
         "updated": datetime.now(timezone.utc).isoformat(),
@@ -1064,22 +1277,47 @@ def stage_curve(args) -> None:
         "dates": [str(d) for d in sessions],
         "series": {"vol": [round(v, 5) for v in curves["vol"]],
                    "flat": [round(v, 5) for v in curves["flat"]],
-                   "spy": [round(v, 5) for v in spy_curve]},
+                   **{s.lower(): [round(v, 5) for v in b["curve"]]
+                      for s, b in bench.items()}},
         "stats": stats,
     }
     CURVE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    CURVE_FILE.write_text(json.dumps(payload), encoding="utf-8")
+    target = (CURVE_FILE.with_name("study-curve-bracketed.json")
+              if args.brackets else CURVE_FILE)
+    target.write_text(json.dumps(payload), encoding="utf-8")
 
     print(f"\n=== {len(m)} gated trades over {len(sessions)} sessions "
           f"{sessions[0]}..{sessions[-1]} ===")
     print(f"{'':6}{'total':>10}{'CAGR':>8}{'alpha':>9}{'beta':>7}"
           f"{'sharpe':>8}{'maxDD':>8}{'days in':>9}")
-    for name in ("vol", "flat", "spy"):
-        s = stats[name]
-        print(f"{name:6}{s['total_return_pct']:>9.1f}%{s['cagr_pct']:>7.2f}%"
-              f"{s['alpha_annual_pct']:>8.2f}%{s['beta']:>7.3f}"
-              f"{s['sharpe']:>8.2f}{s['max_drawdown_pct']:>7.1f}%"
-              f"{s['days_traded']:>9d}")
+    for name in ("vol", "flat", "spy", "qqq", "tqqq"):
+        st = stats.get(name)
+        if not st:
+            continue
+        print(f"{name:6}{st['total_return_pct']:>9.1f}%{st['cagr_pct']:>7.2f}%"
+              f"{st['alpha_annual_pct']:>8.2f}%"
+              f"{(st['beta'] if st['beta'] is not None else 0):>7.3f}"
+              f"{st['sharpe']:>8.2f}{st['max_drawdown_pct']:>7.1f}%"
+              f"{st['days_traded']:>9d}")
+    print()
+    print("  alpha / beta / correlation of the strategy vs each index:")
+    for policy in ("vol", "flat"):
+        for sym, v in stats[policy]["vs"].items():
+            print(f"    {policy:5s} vs {sym:5s}  alpha {v['alpha_annual_pct']:+7.2f}%/yr"
+                  f"   beta {v['beta']:+.3f}   corr {v['corr']:+.3f}")
+    print()
+    print("  same terminal wealth from leverage alone — what it would have cost:")
+    for policy in ("vol", "flat"):
+        for sym, iso in stats[policy]["iso"].items():
+            if iso["reachable"]:
+                print(f"    {policy:5s} == {iso['k']:>5.2f}x {sym:5s}"
+                      f"   maxDD {iso['max_drawdown_pct']:>6.1f}%"
+                      f"   vol {iso['vol_annual_pct']:>5.1f}%/yr")
+            else:
+                print(f"    {policy:5s} vs {sym:5s}   UNREACHABLE at any "
+                      f"leverage — best is {iso['best_k']:.2f}x ending at "
+                      f"{iso['best_terminal']:.2f}x (maxDD "
+                      f"{iso['max_drawdown_pct']:.1f}%)")
     print(f"\nwrote {CURVE_FILE}")
 
 
@@ -1167,7 +1405,7 @@ def stage_calibrate(args) -> None:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("stage", choices=["texts", "scrub", "calibrate", "submit",
-                                      "collect", "watch", "score", "curve"])
+                                      "collect", "watch", "score", "curve", "brackets"])
     ap.add_argument("--arm", default="named", choices=["named", "blind", "notext"])
     ap.add_argument("--effort", default="low", choices=["low", "medium", "high"])
     ap.add_argument("--window", default="", help="comma-separated years")
@@ -1175,11 +1413,14 @@ def main() -> None:
     ap.add_argument("--since", default="2026-02-01")
     ap.add_argument("--budget", type=float, default=50.0)
     ap.add_argument("--poll-s", type=float, default=30.0)
+    ap.add_argument("--brackets", action="store_true",
+                    help="use the walked TP/SL/time-stop exits, not the raw "
+                         "next-session close")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
     {"texts": stage_texts, "scrub": stage_scrub, "calibrate": stage_calibrate,
      "submit": stage_submit, "collect": stage_collect, "watch": stage_watch,
-     "score": stage_score, "curve": stage_curve}[args.stage](args)
+     "score": stage_score, "curve": stage_curve, "brackets": stage_brackets}[args.stage](args)
 
 
 if __name__ == "__main__":
