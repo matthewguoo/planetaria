@@ -107,7 +107,25 @@ MODELS: dict[str, tuple[str, str, str]] = {
     "o48": ("claude-opus-4-8", "2026-01", "Opus 4.8"),
     "o47": ("claude-opus-4-7", "2026-01", "Opus 4.7"),
     "o46": ("claude-opus-4-6", "2025-08", "Opus 4.6"),
+    # The oldest brain still purchasable. Every model with a pre-2025 cutoff
+    # (Opus 3, Sonnet 3.5/3.7, Opus 4/4.1) returns 404 as of 2026-08-06 —
+    # verified by calling them, not by reading the deprecation table — so the
+    # width of the out-of-corpus window is supply-constrained, not budget-
+    # constrained. h45's value is not its skill, which is low, but its
+    # EARLY cutoff: it puts 438 straddle events and, more importantly, 2,281
+    # PRE-period events on the far side of a corpus boundary that Opus 5 does
+    # not share. The pre-period is the part the four-Opus design never had.
+    "h45": ("claude-haiku-4-5", "2025-07", "Haiku 4.5"),
 }
+
+# Models predating Claude 4.6 take a different request shape: adaptive
+# thinking is rejected (400), and output_config carries no `effort`. Both
+# substitutions are handicaps, and both are CONSTANT ACROSS REGIMES — which
+# is exactly why the difference-in-differences survives them. A weaker,
+# shallower-thinking model simply shifts the R1 skill gap that the design
+# already differences out; it cannot manufacture a gap that widens only
+# inside the straddle window.
+LEGACY_THINKING = {"claude-haiku-4-5": 2000}
 TAG_OF = {mid: tag for tag, (mid, _, _) in MODELS.items()}
 CUTOFF_OF = {mid: cut for _, (mid, cut, _) in MODELS.items()}
 
@@ -120,6 +138,16 @@ N_PERM = 1000
 
 # Batch API list price, USD per million tokens (50% of standard).
 PRICE_IN, PRICE_OUT = 2.50, 12.50
+# Per-model batch prices. Until Haiku joined, every model in the study was an
+# Opus at $2.50/$12.50 and one pair of constants was honest. It is not any
+# more: charging Opus rates for a Haiku run overstates the bill FIVEFOLD and
+# trips the budget guard on a batch that is actually affordable — which is
+# how a guard meant to prevent overspending starts preventing research
+# instead. Unknown models fall back to the Opus rate, so the failure mode
+# stays "refuses too early".
+PRICE_OF: dict[str, tuple[float, float]] = {
+    "claude-haiku-4-5": (0.50, 2.50),
+}
 # MEASURED on the 359-request calibration (2026-08-06), not guessed: input
 # runs ~5,120 tok for a 12k-char release (3.6 chars/token underestimated it,
 # so the char model below is corrected too), and output including thinking
@@ -547,6 +575,15 @@ def request_key(arm: str, effort: str, symbol: str, day, model: str) -> str:
     return f"{arm}_{effort}_{TAG_OF.get(model, model)}_{symbol}_{ymd}"
 
 
+def _model_of_id(custom_id: str) -> str:
+    """The inverse of request_key's model field. Four fields means the study
+    model, by the back-compat rule above; five means the tag is field 3."""
+    parts = custom_id.split("_")
+    if len(parts) >= 5 and parts[2] in MODELS:
+        return MODELS[parts[2]][0]
+    return MODEL
+
+
 def build_request(row, arm: str, text: str | None, company: str,
                   effort: str, model: str = MODEL) -> dict | None:
     """One self-contained request. No conversation history, no shared
@@ -569,24 +606,30 @@ def build_request(row, arm: str, text: str | None, company: str,
             return None
         system, schema = HARDENED_SYSTEM, SURPRISE_SCHEMA
         content = f"{task_named(row['symbol'], run5d)}\n\n<data>\n{text}\n</data>"
+    # Adaptive thinking, stated rather than defaulted. Opus 5 thinks when
+    # `thinking` is omitted; Opus 4.6/4.7/4.8 do NOT. Leaving it off would
+    # have made "newer model" and "model that reasoned" the same variable,
+    # and the cross-model test would have measured the wrong thing. This is
+    # the setting the cached Opus 5 verdicts ran under, so stating it
+    # changes nothing for them.
+    output_config: dict = {"format": {"type": "json_schema", "schema": schema},
+                           "effort": effort}
+    thinking: dict = {"type": "adaptive"}
+    if model in LEGACY_THINKING:
+        # Pre-4.6. Both of these are 400s on this model, not preferences.
+        thinking = {"type": "enabled",
+                    "budget_tokens": LEGACY_THINKING[model]}
+        output_config = {"format": output_config["format"]}
     return {
         "custom_id": key,
         "params": {
             "model": model,
             "max_tokens": 4096,
             "system": system,
-            # Adaptive thinking, stated rather than defaulted. Opus 5 thinks
-            # when `thinking` is omitted; Opus 4.6/4.7/4.8 do NOT. Leaving it
-            # off would have made "newer model" and "model that reasoned"
-            # the same variable, and the cross-model test would have measured
-            # the wrong thing. This is the setting the cached Opus 5 verdicts
-            # ran under, so stating it changes nothing for them.
-            "thinking": {"type": "adaptive"},
+            "thinking": thinking,
             # NO tools: the model cannot look the outcome up. This absence is
             # load-bearing, not an omission.
-            "output_config": {"format": {"type": "json_schema",
-                                         "schema": schema},
-                              "effort": effort},
+            "output_config": output_config,
             "messages": [{"role": "user", "content": content}],
         },
     }
@@ -597,13 +640,19 @@ def build_request(row, arm: str, text: str | None, company: str,
 def estimate_cost(requests: list[dict], effort: str) -> tuple[float, int]:
     """Char-based input estimate (3.6 chars/token on dense financial prose)
     plus a measured-output prior. Deliberately rough and deliberately HIGH:
-    the budget guard should trip early, not late."""
-    chars = sum(len(r["params"]["system"])
-                + len(r["params"]["messages"][0]["content"]) for r in requests)
-    tok_in = chars / CHARS_PER_TOKEN
-    tok_out = len(requests) * EST_OUT_TOKENS.get(effort, 1000)
-    usd = tok_in / 1e6 * PRICE_IN + tok_out / 1e6 * PRICE_OUT
-    return usd, int(tok_in)
+    the budget guard should trip early, not late.
+
+    Priced PER MODEL, because a batch may now mix families."""
+    usd, tok_in_total = 0.0, 0.0
+    for r in requests:
+        p = r["params"]
+        price_in, price_out = PRICE_OF.get(p["model"], (PRICE_IN, PRICE_OUT))
+        tok_in = (len(p["system"])
+                  + len(p["messages"][0]["content"])) / CHARS_PER_TOKEN
+        tok_in_total += tok_in
+        usd += (tok_in / 1e6 * price_in
+                + EST_OUT_TOKENS.get(effort, 1000) / 1e6 * price_out)
+    return usd, int(tok_in_total)
 
 
 def client():
@@ -875,8 +924,13 @@ def stage_collect(args) -> None:
                 except (TypeError, ValueError):
                     continue
                 u = msg.usage
-                usd += (u.input_tokens / 1e6 * PRICE_IN
-                        + u.output_tokens / 1e6 * PRICE_OUT)
+                # Priced from the id's own model tag, not from the batch's.
+                # A mixed batch billed at one rate is a wrong ledger, and the
+                # ledger is what the budget guard reads.
+                price_in, price_out = PRICE_OF.get(
+                    _model_of_id(result.custom_id), (PRICE_IN, PRICE_OUT))
+                usd += (u.input_tokens / 1e6 * price_in
+                        + u.output_tokens / 1e6 * price_out)
                 fh.write(json.dumps({
                     "custom_id": result.custom_id, "arm": meta["arm"],
                     "effort": meta["effort"], "verdict": verdict,
