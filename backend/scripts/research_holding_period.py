@@ -708,7 +708,7 @@ def mutation_sides(p: pd.DataFrame) -> dict[str, np.ndarray]:
 
     return {
         # --- the three baselines every mutation has to beat ---------------
-        "SHIPPED gate (verdict agrees with tape)": only(agree, tape),
+        "THE GATE (verdict agrees with tape)": only(agree, tape),
         "pure tape (mechanical, ungated)": tape,
         # THE CONTROL THAT DECIDES THE FADE. Every fade mutation bets against
         # the tape, so "reversal works on 5% earnings moves" would produce the
@@ -995,8 +995,12 @@ def stage_trades(args) -> None:
     payload = {
         "updated": datetime.now(ET).isoformat(),
         "effort": args.effort, "costs_bp": COSTS_BP,
+        # Display labels. The key stays "shipped" because it is the key every
+        # cached artefact already uses; the LABEL drops the word, because the
+        # study finds this the weakest exit it tested and "shipped" reads as an
+        # endorsement of it.
         "policies": {"t1": "hold to T+1 close", "t3": "hold to T+3 close",
-                     "shipped": "T+1 with the shipped 5% stop / 2x target"},
+                     "shipped": "T+1 with a 5% stop and 2x target"},
         "n": len(rows), "gated": int(sum(r["gated"] for r in rows)),
         "trades": rows,
     }

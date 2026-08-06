@@ -41,7 +41,12 @@ KEEP = ("model", "effort", "universe_n", "scored_n", "paths_n", "gated_n",
         # its table, which looks exactly like "the data has not been computed
         # yet". Anything new in build_report_data must be listed.
         "funnel_v2", "panel_compare", "reaction_shape", "model_compare",
-        "holdout", "arms", "contamination", "regimes")
+        "holdout", "arms", "contamination", "regimes",
+        # Added 2026-08-06 with the fill-cost measurement and the
+        # out-of-training test. Listed here at the same time as the keys were
+        # added to build_report_data — that ordering is the whole discipline,
+        # because the failure mode is silent.
+        "spreads", "xmodel")
 
 TRADE_COLS = ["date", "sym", "dir", "conf", "guid", "move", "run5d", "dvM",
               "gated", "why", "t1", "t3", "shipped", "exit", "summary"]

@@ -86,6 +86,31 @@ OUT = CACHE / "llm_contam"
 SEC_UA = {"User-Agent": "planetaria/0.1 (contact: matthewguo.x86@gmail.com)"}
 
 MODEL = "claude-opus-5"
+
+# THE OUT-OF-TRAINING DESIGN. The Opus family's training data ends on
+# different dates, so the same event is inside one model's corpus and outside
+# another's. That turns "could this be memorisation?" from a question about an
+# unobservable into a 2x2: hold the event fixed, vary whether the model could
+# have read about it, and the difference is the memorisation component.
+#
+# Cutoffs are Anthropic's published TRAINING DATA cutoffs (docs, 2026-08-06),
+# not the narrower "reliable knowledge" dates — the wider window is the
+# conservative choice here, because it counts more events as possibly-seen and
+# therefore makes the contamination effect easier, not harder, to detect.
+#
+# Tags are custom_id-safe: the Batch API restricts custom_id to
+# ^[a-zA-Z0-9_-]{1,64}$, and the id is underscore-delimited, so a tag may not
+# contain an underscore.
+MODELS: dict[str, tuple[str, str, str]] = {
+    # tag: (model id, training-data cutoff, display name)
+    "o5": ("claude-opus-5", "2026-05", "Opus 5"),
+    "o48": ("claude-opus-4-8", "2026-01", "Opus 4.8"),
+    "o47": ("claude-opus-4-7", "2026-01", "Opus 4.7"),
+    "o46": ("claude-opus-4-6", "2025-08", "Opus 4.6"),
+}
+TAG_OF = {mid: tag for tag, (mid, _, _) in MODELS.items()}
+CUTOFF_OF = {mid: cut for _, (mid, cut, _) in MODELS.items()}
+
 GATE = 5.0          # |reaction| gate, percent — the live min_move_pct
 TOP_PER_DAY = 5     # the live watchlist rule, applied historically
 MIN_DV = 5e7        # liquidity floor, prior-session dollar volume
@@ -504,15 +529,29 @@ def task_notext(sym: str, day: str) -> str:
             f"would you call?")
 
 
+def request_key(arm: str, effort: str, symbol: str, day, model: str) -> str:
+    """The custom_id, and therefore the dedupe key.
+
+    effort is part of it because the calibration A/B runs the SAME event at
+    two efforts, and a key without it would silently dedupe the second. The
+    model tag is part of it for the same reason, with one exception: the
+    study model keeps the original FOUR-field form, so the 2,626 verdicts
+    already on disk still match and are not re-bought.
+
+    The Batch API restricts custom_id to ^[a-zA-Z0-9_-]{1,64}$ — no pipes, no
+    dots, no colons. Underscores and a compact date it is.
+    """
+    ymd = str(day).replace("-", "")
+    if model == MODEL:
+        return f"{arm}_{effort}_{symbol}_{ymd}"
+    return f"{arm}_{effort}_{TAG_OF.get(model, model)}_{symbol}_{ymd}"
+
+
 def build_request(row, arm: str, text: str | None, company: str,
-                  effort: str) -> dict | None:
+                  effort: str, model: str = MODEL) -> dict | None:
     """One self-contained request. No conversation history, no shared
     session, no cross-event state — every decision is a fresh one."""
-    # effort is part of the key: the calibration A/B runs the SAME event
-    # at two efforts, and a key without it would silently dedupe the second.
-    # The Batch API restricts custom_id to ^[a-zA-Z0-9_-]{1,64}$ — no pipes,
-    # no dots, no colons. Underscores and a compact date it is.
-    key = f"{arm}_{effort}_{row['symbol']}_{str(row['date']).replace('-', '')}"
+    key = request_key(arm, effort, row["symbol"], row["date"], model)
     run5d = row.get("run5d")
     if arm == "notext":
         system, schema = NOTEXT_SYSTEM, NOTEXT_SCHEMA
@@ -533,9 +572,16 @@ def build_request(row, arm: str, text: str | None, company: str,
     return {
         "custom_id": key,
         "params": {
-            "model": MODEL,
+            "model": model,
             "max_tokens": 4096,
             "system": system,
+            # Adaptive thinking, stated rather than defaulted. Opus 5 thinks
+            # when `thinking` is omitted; Opus 4.6/4.7/4.8 do NOT. Leaving it
+            # off would have made "newer model" and "model that reasoned"
+            # the same variable, and the cross-model test would have measured
+            # the wrong thing. This is the setting the cached Opus 5 verdicts
+            # ran under, so stating it changes nothing for them.
+            "thinking": {"type": "adaptive"},
             # NO tools: the model cannot look the outcome up. This absence is
             # load-bearing, not an omission.
             "output_config": {"format": {"type": "json_schema",
@@ -646,15 +692,13 @@ def stage_texts(args) -> None:
 
 
 def _requests_for(arm: str, universe: pd.DataFrame, effort: str,
-                  limit: int | None) -> list[dict]:
+                  limit: int | None, model: str = MODEL) -> list[dict]:
     with httpx.Client(headers=SEC_UA, timeout=30, follow_redirects=True) as http:
         _, names = ticker_map(http)
     done = _completed_ids()
     requests = []
     for _, row in universe.iterrows():
-        key = (f"{arm}_{effort}_{row['symbol']}_"
-               f"{str(row['date']).replace('-', '')}")
-        if key in done:
+        if request_key(arm, effort, row["symbol"], row["date"], model) in done:
             continue
         text = None
         if arm != "notext":
@@ -662,7 +706,8 @@ def _requests_for(arm: str, universe: pd.DataFrame, effort: str,
             text = path.read_text(encoding="utf-8", errors="replace") if path.exists() else None
             if not text:
                 continue
-        req = build_request(row, arm, text, names.get(row["symbol"], ""), effort)
+        req = build_request(row, arm, text, names.get(row["symbol"], ""),
+                            effort, model)
         if req:
             requests.append(req)
         if limit and len(requests) >= limit:
@@ -709,12 +754,25 @@ def stage_submit(args) -> None:
     universe = universe_for(args)
     if args.window:
         universe = universe[universe["year"].isin(args.window.split(","))]
+    # A date floor and ceiling, because the out-of-training test is defined by
+    # WHEN an event happened relative to a training cutoff, and a year filter
+    # cannot express "on or after 2025-08-01".
+    if getattr(args, "from_date", ""):
+        universe = universe[universe["date"].astype(str) >= args.from_date]
+    if getattr(args, "to_date", ""):
+        universe = universe[universe["date"].astype(str) <= args.to_date]
     if args.sample:
         before = len(universe)
         universe = stratified_sample(universe, args.sample, args.seed)
         print(f"stratified sample: {len(universe)} of {before} events "
               f"(seed {args.seed}, year-balanced)")
-    requests = _requests_for(args.arm, universe, args.effort, args.limit)
+    models = [MODELS[t][0] for t in args.models.split(",")] if args.models \
+        else [args.model]
+    requests: list[dict] = []
+    for mid in models:
+        got = _requests_for(args.arm, universe, args.effort, args.limit, mid)
+        print(f"  {mid:18s} {len(got)} requests")
+        requests.extend(got)
     if not requests:
         print("nothing to submit (all done, or no texts)")
         return
@@ -736,6 +794,7 @@ def stage_submit(args) -> None:
     (OUT / "batches.jsonl").open("a", encoding="utf-8").write(json.dumps({
         "id": batch.id, "arm": args.arm, "effort": args.effort,
         "n": len(requests), "est_usd": round(usd, 2),
+        "models": [TAG_OF.get(m, m) for m in models],
         "submitted": datetime.now(timezone.utc).isoformat()}) + "\n")
     print(f"submitted {batch.id} ({batch.processing_status})")
     write_status(api, args.budget)
@@ -793,7 +852,13 @@ def stage_collect(args) -> None:
         # its estimate as well — otherwise every collected batch is counted
         # twice for the rest of the study.
         settled.append(meta["id"])
-        path = OUT / f"results_{meta['arm']}.jsonl"
+        # Cross-model runs land in their own file. Nothing reads it
+        # differently — _load_results globs every results_*.jsonl and keys off
+        # the custom_id — but a batch of 819 verdicts from three other models
+        # should be inspectable without grepping it out of the study's own.
+        tags = [t for t in (meta.get("models") or []) if t != "o5"]
+        suffix = f"_{'-'.join(tags)}" if tags else ""
+        path = OUT / f"results_{meta['arm']}{suffix}.jsonl"
         seen = _completed_ids()
         with path.open("a", encoding="utf-8") as fh:
             for result in api.messages.batches.results(meta["id"]):
@@ -835,7 +900,20 @@ def stage_collect(args) -> None:
 
 # ------------------------------------------------------------------ scoring
 
-def _load_results() -> pd.DataFrame:
+def _load_results(model: str | None = MODEL) -> pd.DataFrame:
+    """Every verdict on disk, FILTERED TO ONE MODEL by default.
+
+    The default is not a convenience, it is the containment. Cross-model rows
+    carry arm="named" and effort="medium" exactly like the study's own — that
+    is the point of the design — so a loader that returned everything would
+    quietly fold three extra models into the headline, the gate spread, the
+    account curve and both contamination arms, and every one of those numbers
+    would move for a reason no reader could see. Filtering here means every
+    existing caller keeps its current behaviour with no edit at all.
+
+    Pass model=None to get the cross-model frame; that is what the
+    out-of-training analysis does, and it is the only thing that should.
+    """
     rows = []
     for path in OUT.glob("results_*.jsonl"):
         for line in path.read_text(encoding="utf-8").splitlines():
@@ -843,12 +921,26 @@ def _load_results() -> pd.DataFrame:
                 r = json.loads(line)
             except Exception:
                 continue
-            arm, effort, symbol, ymd = r["custom_id"].split("_")
+            parts = r["custom_id"].split("_")
+            # Four fields is the original id and means the study model; five
+            # carries a model tag. Anything else is a corrupt line, not a
+            # reason to crash the whole loader.
+            if len(parts) == 4:
+                arm, effort, symbol, ymd = parts
+                mid = MODEL
+            elif len(parts) == 5:
+                arm, effort, tag, symbol, ymd = parts
+                mid = MODELS.get(tag, (tag, "", ""))[0]
+            else:
+                continue
             day = f"{ymd[:4]}-{ymd[4:6]}-{ymd[6:]}"
             rows.append({"arm": arm, "symbol": symbol, "date": day,
-                         "effort": effort, **r["verdict"],
+                         "effort": effort, "model": mid, **r["verdict"],
                          "in": r.get("in"), "out": r.get("out")})
-    return pd.DataFrame(rows)
+    df = pd.DataFrame(rows)
+    if model is not None and not df.empty:
+        df = df[df["model"] == model].reset_index(drop=True)
+    return df
 
 
 def _gate(merged: pd.DataFrame) -> pd.Series:
@@ -1897,6 +1989,16 @@ def main() -> None:
                          "in (sample, seed) so two arms share events")
     ap.add_argument("--seed", type=int, default=20260806)
     ap.add_argument("--since", default="2026-02-01")
+    ap.add_argument("--from-date", dest="from_date", default="",
+                    help="only events on or after this date (YYYY-MM-DD)")
+    ap.add_argument("--to-date", dest="to_date", default="",
+                    help="only events on or before this date (YYYY-MM-DD)")
+    ap.add_argument("--model", default=MODEL,
+                    help="single model id to score with")
+    ap.add_argument("--models", default="",
+                    help=f"comma-separated model TAGS for the out-of-training "
+                         f"test, e.g. o46,o47,o48 (known: "
+                         f"{','.join(MODELS)})")
     ap.add_argument("--budget", type=float, default=50.0)
     ap.add_argument("--poll-s", type=float, default=30.0)
     ap.add_argument("--brackets", action="store_true",

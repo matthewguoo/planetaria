@@ -761,6 +761,22 @@ def main() -> None:
     except SystemExit as exc:
         data["arms"] = {"unavailable": str(exc)}
 
+    # Measured fill costs, and the out-of-training test. Both are optional:
+    # a missing quote cache or an uncollected batch must degrade the paper by
+    # one section, never fail the whole build. The reason is carried into the
+    # payload so the page can say WHY a section is absent rather than
+    # rendering an unexplained gap.
+    for key, mod, fn in (("spreads", "research_spread_sim", "compute"),
+                         ("xmodel", "research_out_of_training", "compute")):
+        try:
+            data[key] = getattr(__import__(mod), fn)(args)
+        except SystemExit as exc:
+            data[key] = {"unavailable": str(exc)}
+        except Exception as exc:                      # noqa: BLE001
+            data[key] = {"unavailable": f"{type(exc).__name__}: {exc}"}
+        if "unavailable" in data[key]:
+            print(f"  {key}: {data[key]['unavailable']}")
+
     data["spend_usd"] = _f(json.loads(
         (CACHE / "llm_contam" / "usage.json").read_text())["usd"])
 
