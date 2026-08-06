@@ -748,6 +748,14 @@ def _batches() -> list[dict]:
     return [json.loads(x) for x in path.read_text(encoding="utf-8").splitlines()]
 
 
+def _measured() -> float:
+    """Spend actually banked by `collect`. _spent_so_far() adds the estimate
+    of anything still in flight so the budget guard cannot be outrun; that is
+    the right number to REFUSE on and the wrong one to report as measured."""
+    path = OUT / "usage.json"
+    return float(json.loads(path.read_text())["usd"]) if path.exists() else 0.0
+
+
 def _spent_so_far() -> float:
     """Measured spend, PLUS the estimate for anything submitted and not yet
     collected.
@@ -1114,6 +1122,23 @@ def compute_arms(args) -> dict:
         p["gated"] = _gate(p)
         return p
 
+    # An arm covering a handful of events produces spectacular nonsense — the
+    # 23 verdicts that survived a cancelled batch scored "memorisation buys
+    # +1859bp" off five coin flips. Below this floor an arm is reported as
+    # under-covered rather than scored.
+    MIN_ARM_N = 100
+    thin = {a: len(m) for a, m in arms.items() if len(m) < MIN_ARM_N}
+    if thin:
+        emit(f"UNDER-COVERED, not scored (fewer than {MIN_ARM_N} events): "
+             + ", ".join(f"{a} n={n}" for a, n in thin.items()))
+        emit()
+        for a in thin:
+            arms.pop(a)
+        shared = set(zip(arms["named"]["symbol"], arms["named"]["date"])) if "named" in arms else set()
+        for a, m in arms.items():
+            shared &= set(zip(m["symbol"], m["date"]))
+        data["under_covered"] = thin
+        data["paired_n"] = len(shared)
     emit("| arm | n | ungated | gated | vetoed | spread | keeps |")
     emit("|---|---|---|---|---|---|---|")
     per_arm, data["per_arm"] = {}, []
@@ -1240,8 +1265,11 @@ def compute_arms(args) -> dict:
              "it is what memorisation alone buys.")
         emit()
 
-    emit(f"measured API spend for the whole study: ${_spent_so_far():.2f}")
-    data["spend_usd"] = round(_spent_so_far(), 2)
+    emit(f"measured API spend for the whole study: ${_measured():.2f} "
+         f"(${_spent_so_far():.2f} including batches submitted but not yet "
+         f"collected)")
+    data["spend_usd"] = round(_measured(), 2)
+    data["reserved_usd"] = round(_spent_so_far(), 2)
     data["lines"] = lines
     return data
 
