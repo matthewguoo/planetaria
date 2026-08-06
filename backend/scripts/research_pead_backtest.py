@@ -73,12 +73,30 @@ def event_minutes(client, sym: str, d: date) -> pd.DataFrame | None:
     })
 
 
+def build_window_inputs(win_start: date, win_end: date,
+                        refresh: bool = False) -> pd.DataFrame:
+    """EDGAR calendar + daily OHLC panel for a window, built if absent.
+
+    Both come from research_leadup_account_sim's builders (start-ranked
+    universe -> EDGAR 2.02 events -> adjusted dailies), so a new window is
+    self-serve instead of requiring the account sim to be run first. The
+    OHLC panel starts 21 calendar days early: the LLM harness joins on
+    prior-day dollar volume and the 5-session run-up, both of which need
+    history BEFORE the window's first event."""
+    from research_leadup_account_sim import fetch_calendar_window, fetch_ohlc
+
+    cal = fetch_calendar_window(win_start, win_end, refresh)
+    pad_start = win_start - timedelta(days=21)
+    symbols = sorted(cal["symbol"].unique())
+    fetch_ohlc(symbols, pad_start, win_end + timedelta(days=3), refresh)
+    return cal
+
+
 def run(win_start: date, win_end: date, limit: int | None,
         refresh: bool) -> None:
     cal_path = CACHE / f"edgar_cal_{win_start}_{win_end}.parquet"
     if not cal_path.exists():
-        raise SystemExit(f"no cached calendar {cal_path.name} - run the "
-                         "account sim for this window first")
+        build_window_inputs(win_start, win_end, refresh)
     cal = pd.read_parquet(cal_path)
     # Acceptance TIME comes from the calendar build (hour class only); we
     # re-derive minute-level acceptance from the stored date + hour=amc by

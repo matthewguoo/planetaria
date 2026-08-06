@@ -87,6 +87,25 @@ async def rig(tmp_path):
     await db.close()
 
 
+async def bled_in_instance(rig, params=None):
+    """Armed instance whose name bled into the print: 540 -> 490 over the 5
+    prior sessions (-9.26%), the bucket the crushed-in short guard exists
+    for. px0 = 500.25 as usual, so a reaction either way clears the 5% gate."""
+    row = await rig.runner.create("earnings_reaction", "earn",
+                                  {"confirm_min": 0, **(params or {})})
+    await rig.runner.set_state(row["id"], "enabled")
+    rig.market.prices["AMD"] = (500.0, 500.5)
+    rig.market.daily["AMD"] = [
+        {"date": f"2026-07-{27 + i}", "close": close, "volume": 1e6}
+        for i, close in enumerate([540.0, 530.0, 520.0, 510.0, 500.0, 490.0])
+    ]
+    await publish_estimate(rig, "AMD")
+    publish_tick(rig)
+    note = await wait_note(rig, row["id"], "watchlist")
+    assert note and note["detail"]["watchlist"]["AMD"]["run5d_pct"] == pytest.approx(-9.26, abs=0.01)
+    return row
+
+
 async def wait_for(predicate, timeout=3.0):
     deadline = asyncio.get_event_loop().time() + timeout
     while asyncio.get_event_loop().time() < deadline:
@@ -156,9 +175,12 @@ async def armed_instance(rig, params=None):
     """Create+enable an instance, feed it AMD estimate, freeze watchlist.
     Daily context: prior close 490, +8.89% run over the 5 prior sessions,
     avg |daily ret| 2.16% -> vol-scaled stop 5.4%. confirm_min=0 keeps
-    legacy tests immediate; the delay has its own coverage."""
+    legacy tests immediate; the delay has its own coverage. min_move_pct=1
+    pins the gate so these tests exercise the MECHANICS at a known
+    threshold — the shipped 5% default has its own test below."""
     row = await rig.runner.create("earnings_reaction", "earn",
-                                  {"confirm_min": 0, **(params or {})})
+                                  {"confirm_min": 0, "min_move_pct": 1.0,
+                                   **(params or {})})
     await rig.runner.set_state(row["id"], "enabled")
     rig.market.prices["AMD"] = (500.0, 500.5)
     rig.market.daily["AMD"] = [
@@ -294,7 +316,7 @@ class TestReanchor:
 
     async def test_missing_daily_context_never_blocks(self, rig):
         row = await rig.runner.create("earnings_reaction", "earn",
-                                      {"confirm_min": 0})
+                                      {"confirm_min": 0, "min_move_pct": 1.0})
         await rig.runner.set_state(row["id"], "enabled")
         rig.market.prices["AMD"] = (500.0, 500.5)  # no daily data set
         await publish_estimate(rig, "AMD")
@@ -376,7 +398,7 @@ class TestManualDryRun:
         """Engine booted after 15:30: the command freezes the watchlist
         without a timer tick, and the normal decision path works after."""
         row = await rig.runner.create("earnings_reaction", "earn",
-                                      {"confirm_min": 0})
+                                      {"confirm_min": 0, "min_move_pct": 1.0})
         await rig.runner.set_state(row["id"], "enabled")
         rig.market.prices["AMD"] = (500.0, 500.5)
         rig.market.daily["AMD"] = [{"date": "2026-08-04", "close": 490.0,
@@ -410,7 +432,8 @@ class TestManualDryRun:
         assert note and "px0" in note["detail"]["skip"]
 
     async def test_dry_run_with_px0(self, rig):
-        row = await rig.runner.create("earnings_reaction", "earn", {})
+        row = await rig.runner.create("earnings_reaction", "earn",
+                                      {"min_move_pct": 1.0})
         await rig.runner.set_state(row["id"], "enabled")
         rig.market.prices["NVDA"] = (204.0, 204.2)
         event = Event(type="manual", ts=datetime.now(timezone.utc),
@@ -449,6 +472,113 @@ class TestConfirmationDelay:
         await publish_release(rig, "AMD")  # burst twin while pending
         await asyncio.sleep(0.3)
         assert rig.fake.calls == []  # still just parked, once
+
+
+@pytest.mark.asyncio
+class TestShippedGates:
+    """The 2026-08-05 config: a 5% tape gate, a crushed-in short veto, and
+    an after-hours spread cap. Each is evidence-driven — see default_params."""
+
+    async def test_default_gate_refuses_the_1_to_5_percent_band(self, rig):
+        """The band the mechanical backtest says is noise. Default params
+        (no min_move_pct override) must not trade a +2% reaction."""
+        row = await rig.runner.create("earnings_reaction", "earn",
+                                      {"confirm_min": 0})
+        await rig.runner.set_state(row["id"], "enabled")
+        rig.market.prices["AMD"] = (500.0, 500.5)
+        await publish_estimate(rig, "AMD")
+        publish_tick(rig)
+        assert await wait_note(rig, row["id"], "watchlist")
+
+        rig.market.prices["AMD"] = (510.0, 510.5)  # +2.0%
+        await publish_release(rig, "AMD")
+        note = await wait_note(rig, row["id"], "no_trade")
+        assert note and "5.00%" in note["detail"]["why"]
+
+    async def test_default_gate_trades_a_clearing_reaction(self, rig):
+        row = await rig.runner.create("earnings_reaction", "earn",
+                                      {"confirm_min": 0})
+        await rig.runner.set_state(row["id"], "enabled")
+        rig.market.prices["AMD"] = (500.0, 500.5)
+        await publish_estimate(rig, "AMD")
+        publish_tick(rig)
+        assert await wait_note(rig, row["id"], "watchlist")
+
+        rig.market.prices["AMD"] = (540.0, 540.5)  # +7.95%
+        await publish_release(rig, "AMD")
+        note = await wait_note(rig, row["id"], "would_trade")
+        assert note and note["detail"]["would_trade"]["side"] == 1
+
+    async def test_crushed_in_short_is_vetoed_not_sized(self, rig):
+        """Bearish verdict + agreeing tape + a name already down 5%+ into
+        the print = the 2022 -922bp bucket. Journal, do not trade."""
+        rig.fake.response = ok_response(verdict_json(direction="bearish"))
+        row = await bled_in_instance(rig)
+        rig.market.prices["AMD"] = (470.0, 470.5)  # -5.99% reaction
+
+        await publish_release(rig, "AMD")
+        note = await wait_note(rig, row["id"], "veto")
+        assert note and "crushed-in short" in note["detail"]["why"]
+        assert note["detail"]["veto"]["side"] == -1
+        assert note["detail"]["veto"]["run5d_pct"] == pytest.approx(-9.26, abs=0.01)
+        # Vetoed BEFORE sizing — no equity was consulted, no order shaped.
+        assert "sizing" not in note["detail"]["veto"]
+
+    async def test_crushed_in_guard_does_not_touch_longs(self, rig):
+        """The same bled-in name reacting UP is a normal long — the guard is
+        directional, not a blanket 'avoid weak names' rule."""
+        row = await bled_in_instance(rig)
+        rig.market.prices["AMD"] = (540.0, 540.5)  # +7.99% reaction
+        await publish_release(rig, "AMD")
+        note = await wait_note(rig, row["id"], "would_trade")
+        assert note and note["detail"]["would_trade"]["side"] == 1
+
+    async def test_guard_disabled_by_null_floor(self, rig):
+        rig.fake.response = ok_response(verdict_json(direction="bearish"))
+        row = await bled_in_instance(rig, {"short_run5d_floor_pct": None})
+        rig.market.prices["AMD"] = (470.0, 470.5)
+        await publish_release(rig, "AMD")
+        note = await wait_note(rig, row["id"], "would_trade")
+        assert note and note["detail"]["would_trade"]["side"] == -1
+
+    async def test_wide_after_hours_book_is_vetoed(self, rig):
+        row, _, _ = await armed_instance(rig, {"max_spread_pct": 1.0})
+        rig.market.prices["AMD"] = (505.0, 520.0)  # ~2.9% spread, mid 512.50
+        await publish_release(rig, "AMD")
+        note = await wait_note(rig, row["id"], "veto")
+        assert note and "book too wide" in note["detail"]["why"]
+        assert note["detail"]["veto"]["spread_pct"] == pytest.approx(2.93, abs=0.01)
+
+    async def test_spread_is_journaled_even_when_it_passes(self, rig):
+        row, _, _ = await armed_instance(rig)
+        rig.market.prices["AMD"] = (510.0, 510.5)
+        await publish_release(rig, "AMD")
+        note = await wait_note(rig, row["id"], "would_trade")
+        assert note["detail"]["would_trade"]["spread_pct"] == pytest.approx(0.098, abs=0.01)
+
+    async def test_live_mode_journals_the_reasoning_before_submitting(self, rig):
+        """Live mode must be at least as explainable as shadow mode: the
+        paper twin replays `decision` rows exactly like `would_trade`."""
+        submitted = []
+
+        class RecordingTrade:
+            async def get_account(self):
+                return {"equity": 100_000.0}
+
+            async def place_trade(self, payload):
+                submitted.append(payload)
+                return {"id": "plan1"}
+
+        rig.runner.trade = RecordingTrade()
+        row, _, _ = await armed_instance(rig, {"live": True})
+        rig.market.prices["AMD"] = (510.0, 510.5)
+        await publish_release(rig, "AMD")
+
+        note = await wait_note(rig, row["id"], "decision")
+        assert note["detail"]["decision"]["side"] == 1
+        assert note["detail"]["decision"]["verdict"]["direction"] == "bullish"
+        assert await wait_for(lambda: len(submitted) == 1)
+        assert submitted[0]["underlying"] == "AMD"
 
 
 def test_effective_bracket_scales_and_clamps():

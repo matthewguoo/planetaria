@@ -8,6 +8,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from app import bootstrap
+from app.api.routes.lab import router as lab_router
 from app.api.routes.market_data import router as market_router
 from app.api.routes.monitor import router as monitor_router
 from app.api.routes.options import router as options_router
@@ -55,6 +56,9 @@ app.include_router(trading_router)
 app.include_router(system_router)
 app.include_router(strategies_router)
 app.include_router(monitor_router)
+# The LAB deck rides with the engine API, not the UI surface: a headless
+# engine is precisely the one you cannot otherwise watch during a live night.
+app.include_router(lab_router)
 if not get_settings().headless:
     app.include_router(market_router)
     app.include_router(options_router)

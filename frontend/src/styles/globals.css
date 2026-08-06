@@ -23,7 +23,8 @@
 
 html,
 body,
-#root {
+#root,
+#lab-root {
   height: 100%;
 }
 

@@ -6,7 +6,9 @@ minute the numbers crossed — docs/notes/earnings_latency_20260804.md); what
 remains tradeable is the CONTINUATION when the release's content and the
 tape's verdict AGREE. Long shares when the LLM reads the release bullish
 AND the tape is already up >= min_move_pct (short: both inverted); exit by
-time stop T+1/T+2. Disagreement = no trade, journaled.
+time stop T+1/T+2. Disagreement = no trade, journaled. Agreement still faces
+two last vetoes before sizing (see default_params): an AH spread cap, and
+the crushed-in short guard.
 
 One instance watches many tickers:
 - `estimate` events (earnings-cal feed) accumulate; the 15:30 ET timer tick
@@ -104,7 +106,29 @@ class EarningsReaction(Strategy):
         # partly spent). Engine risk gates (per-name notional cap, gross
         # exposure, borrow checks) still apply downstream.
         "risk_pct_per_name": 0.5,
-        "min_move_pct": 1.0,       # tape agreement threshold, percent
+        # Tape agreement threshold. 5.0, not the original 1.0: the PEAD
+        # gate curve replicates across three independent regimes (2022 /
+        # 2023 / 2025-26, research_pead_backtest.py) — |reaction| >= 5%
+        # is where the continuation clears costs, and the 1-2% band is
+        # noise that pays the AH spread for nothing.
+        "min_move_pct": 5.0,
+        # Crushed-in short guard (2026-08-05). Shorting a name that already
+        # bled into the print is the one bucket the mechanical backtest
+        # shows as catastrophic: run5d <= -5% shorts returned -922bp in
+        # 2022. Bearish verdict + agreeing tape + this much pre-print
+        # damage = journal a veto, not an order. None disables the guard.
+        "short_run5d_floor_pct": -5.0,
+        # AH book sanity (2026-08-05, written for the SIP flip). Today
+        # every after-hours entry dies at the 120s freshness gate because
+        # free IEX quotes are dead after 16:00, so spread has never been
+        # load-bearing. The moment real-time SIP lands, the 16:00-20:00
+        # book is live AND wide, and the engine-side spread guard cannot
+        # help: risk.py checks leg["half_spread"], which the equity path
+        # never populates. Full spread / mid above this = skip. The
+        # observed spread is journaled on EVERY decision (trade, no_trade,
+        # veto) so this default gets replaced by measured evidence after
+        # the first real SIP night.
+        "max_spread_pct": 2.0,
         # Bracket scales with the NAME's volatility (2026-08-05): a flat 5%
         # stop sits inside the whipsaw band of a +/-10% earnings mover and
         # gets shaken out on path noise. Stop = clamp(vol_stop_mult x avg
@@ -156,8 +180,14 @@ class EarningsReaction(Strategy):
         if not (0.05 <= float(clean["risk_pct_per_name"]) <= 2.0):
             raise ValueError("risk_pct_per_name must be 0.05-2.0 (% of equity "
                              "at the stop)")
-        if not (0.2 <= float(clean["min_move_pct"]) <= 5.0):
-            raise ValueError("min_move_pct must be 0.2-5.0 (percent)")
+        if not (0.2 <= float(clean["min_move_pct"]) <= 15.0):
+            raise ValueError("min_move_pct must be 0.2-15.0 (percent)")
+        floor = clean["short_run5d_floor_pct"]
+        if floor is not None and not (-30.0 <= float(floor) <= 0.0):
+            raise ValueError("short_run5d_floor_pct must be -30..0, or null "
+                             "to disable the crushed-in short guard")
+        if not (0.1 <= float(clean["max_spread_pct"]) <= 20.0):
+            raise ValueError("max_spread_pct must be 0.1-20.0 (percent of mid)")
         for key in ("tp_pct", "sl_pct", "sl_pct_cap"):
             if not (0.01 <= float(clean[key]) <= 0.30):
                 raise ValueError(f"{key} must be 0.01-0.30")
@@ -437,6 +467,7 @@ class EarningsReaction(Strategy):
             "run5d_pct": watch.get("run5d_pct"),
             "bracket": {"sl_pct": sl_eff, "tp_pct": tp_eff,
                         "avg_abs_ret_pct": watch.get("avg_abs_ret_pct")},
+            "spread_pct": _spread_pct(quote),
             "model": analysis.model, "latency_ms": analysis.latency_ms,
         }
         if side == 0:
@@ -444,6 +475,12 @@ class EarningsReaction(Strategy):
                             "why": "verdict/tape disagree or move below "
                                    f"threshold ({move_pct:+.2f}% vs "
                                    f"{min_move:.2f}%)"},
+                           signal_ids=provenance)
+            return
+
+        veto = _veto_reason(side, detail, watch, ctx.params)
+        if veto:
+            await ctx.note({"veto": {**detail, "side": side}, "why": veto},
                            signal_ids=provenance)
             return
 
@@ -462,11 +499,16 @@ class EarningsReaction(Strategy):
         detail["sizing"] = sizing
         intent = self._intent(sym, side, px, quote, sizing["notional"],
                               sl_eff, tp_eff, ctx.params, provenance)
+        record = {**detail, "side": side, "intent": _intent_dict(intent)}
         if not bool(ctx.params["live"]):
-            await ctx.note({"would_trade": {**detail, "side": side,
-                                            "intent": _intent_dict(intent)}},
-                           signal_ids=provenance)
+            await ctx.note({"would_trade": record}, signal_ids=provenance)
             return
+        # Journal the full reasoning BEFORE submitting. The intent row the
+        # runner writes carries the order payload but not the why (verdict,
+        # tape, bracket, sizing audit), so without this a live night is less
+        # explainable than a shadow night — and the paper twin
+        # (services/sim_account.py) would have nothing to replay.
+        await ctx.note({"decision": record}, signal_ids=provenance)
         await ctx.submit(intent)
         ctx.log.info("earnings_reaction placed %s %s @ %.2f (%+.2f%% tape, %s)",
                      "long" if side > 0 else "short", sym, px, move_pct,
@@ -556,6 +598,39 @@ def _effective_bracket(watch: dict, params: dict) -> tuple[float, float]:
     else:
         sl = sl_floor
     return round(sl, 4), round(2 * sl, 4)
+
+
+def _spread_pct(quote: dict | None) -> float | None:
+    """Full bid/ask spread as a percent of mid. None when the quote carries
+    no two-sided book — a tape print synthesized from the overnight bar has
+    bid == ask, which is absence of spread information, not a tight market,
+    so it must never read as 0.0%."""
+    if not quote:
+        return None
+    bid, ask = float(quote.get("bid") or 0), float(quote.get("ask") or 0)
+    if bid <= 0 or ask <= 0 or ask <= bid:
+        return None
+    return round((ask - bid) / ((ask + bid) / 2) * 100, 3)
+
+
+def _veto_reason(side: int, detail: dict, watch: dict,
+                 params: dict) -> str | None:
+    """Last gate before sizing: conditions where the verdict and the tape
+    agree but the trade is still wrong. Returns the journal reason, or None
+    to proceed. Both checks are documented in default_params."""
+    spread = detail.get("spread_pct")
+    cap = float(params["max_spread_pct"])
+    if spread is not None and spread > cap:
+        return (f"AH book too wide: spread {spread:.2f}% of mid exceeds "
+                f"{cap:.2f}% cap (crossing it eats the drift)")
+    floor = params["short_run5d_floor_pct"]
+    run5d = watch.get("run5d_pct")
+    if side < 0 and floor is not None and run5d is not None \
+            and run5d <= float(floor):
+        return (f"crushed-in short: {run5d:+.1f}% over the prior 5 sessions "
+                f"is at or below the {float(floor):+.1f}% floor (the bucket "
+                f"that returned -922bp in 2022)")
+    return None
 
 
 def _size_position(equity: float, verdict: dict, move_pct: float,
