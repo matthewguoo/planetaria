@@ -704,6 +704,8 @@ prose.</p>
   <caption><b>Table 11:</b> Account simulation against SPY, QQQ and 3× QQQ</caption>
 </table></div>
 
+<p id="curve-cost"></p>
+
 <p id="curve-rank"></p>
 
 <p id="iso-para"></p>
@@ -1640,6 +1642,31 @@ table($("curve-table"), ["configuration", "trades", "total", "CAGR", "max DD", "
    invites a reader to rank them. The data cannot: they differ only over the
    neutral verdicts, and that row is not significant. Saying so here, next to
    the table, rather than leaving the ranking to be inferred from rounding. */
+/* The cost basis, stated where the numbers are rather than in a trailing
+   clause of a caption. This table and Section 6.3's differ by seven points of
+   CAGR for the same trades and the same sizing, and a reader who takes one
+   number from here and the other from there is not making an error the paper
+   warned them about unless it says this out loud. */
+(() => {
+  const f = st("full");
+  const dep = ((FC.deployment || {}).policies || [])
+    .find((x) => x.policy === "never stand down");
+  const at30 = dep && dep.rows.find((r) => r.target_gross_pct === 30);
+  if (!at30 || !f.cagr_pct) return;
+  setHTML("curve-cost", `<b>These figures use the flat
+    ${n1(D.costs_bp, 0)}bp round trip assumed throughout Section 5, not the
+    measured one.</b> Section 6 replaces that assumption with the quoted
+    spreads the book actually showed, and the same trades at the same
+    ${n1(at30.realised_gross_pct, 0)}% exposure then compound to
+    <b>${n1(at30.cagr_pct, 1)}%</b> a year at a ${n1(at30.max_dd_pct, 0)}%
+    drawdown and a Sharpe of ${n1(at30.sharpe, 2)}, against
+    ${n1(f.cagr_pct, 1)}%, ${n1(f.max_dd_pct, 0)}% and ${n1(f.sharpe, 2)}
+    here. The ranking of the rows is unaffected — every configuration pays the
+    same spread — but the level is optimistic by roughly
+    ${n1(f.cagr_pct - at30.cagr_pct, 0)} points of CAGR, and Section 6.3 is the
+    table to quote.`);
+})();
+
 (() => {
   const f = st("full"), l = st("llmdir"), neuA = mut("neutral verdicts, traded against");
   if (!f.cagr_pct || !l.cagr_pct || !neuA.t1) return;
