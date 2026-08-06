@@ -1099,6 +1099,60 @@ def stage_brackets(args) -> None:
     print(f"wrote {BRACKETS}")
 
 
+def _lever(rets, k: float) -> list[float]:
+    """Daily-rebalanced k-times exposure — the mechanic real leveraged ETFs
+    use, so the path (and its volatility decay) is honest rather than a naive
+    k x terminal return."""
+    eq, out = 1.0, []
+    for r in rets:
+        eq *= (1 + k * r)
+        out.append(eq)
+    return out
+
+
+def _max_dd(curve) -> float:
+    peak, mdd = 1.0, 0.0
+    for e in curve:
+        peak = max(peak, e)
+        mdd = max(mdd, 1 - e / peak)
+    return mdd
+
+
+def _iso_return_leverage(bench_rets, target: float, hi: float = 10.0) -> dict:
+    """The SMALLEST daily-rebalanced exposure k for which k-times the index
+    ends where the strategy ends.
+
+    Not a bisection: terminal wealth is NOT monotone in k. Volatility decay
+    makes it hump-shaped — past some k the index's own drawdowns compound
+    faster than its gains, and more leverage ends LOWER, then goes to zero.
+    Bisecting that returns the ceiling and a fake 100% drawdown. So scan,
+    take the peak, and report honestly when the target is unreachable at ANY
+    leverage — which is itself the answer to 'why not just lever the index'.
+    """
+    best_k, best_terminal = 0.0, 1.0
+    found = None
+    k = 0.0
+    while k <= hi:
+        k = round(k + 0.01, 2)
+        curve = _lever(bench_rets, k)
+        terminal = curve[-1]
+        if terminal > best_terminal:
+            best_k, best_terminal = k, terminal
+        if found is None and terminal >= target:
+            found = (k, curve)
+    if found is None:
+        peak = _lever(bench_rets, best_k)
+        return {"reachable": False, "best_k": best_k,
+                "best_terminal": round(best_terminal, 3),
+                "max_drawdown_pct": round(_max_dd(peak) * 100, 1)}
+    k, curve = found
+    rr = np.diff(np.asarray([1.0] + curve)) / np.asarray([1.0] + curve[:-1])
+    return {"reachable": True, "k": k,
+            "max_drawdown_pct": round(_max_dd(curve) * 100, 1),
+            "vol_annual_pct": round(float(rr.std(ddof=1) * np.sqrt(252) * 100), 1),
+            "terminal": round(curve[-1], 3)}
+
+
 def stage_curve(args) -> None:
     """Account curve for the LLM-gated stream vs SPY buy-and-hold, plus the
     daily-return regression that turns 'it made money' into alpha and beta.
@@ -1207,62 +1261,6 @@ def stage_curve(args) -> None:
         curve = [v / series[0] for v in series]
         rets = [0.0] + [series[i] / series[i - 1] - 1 for i in range(1, len(series))]
         bench[sym] = {"curve": curve, "ret": rets}
-
-    def _lever(rets: list[float], k: float) -> list[float]:
-        """Daily-rebalanced k-times exposure — the mechanic real leveraged
-        ETFs use, so the path (and its volatility decay) is honest rather
-        than a naive k x terminal return."""
-        eq, out = 1.0, []
-        for r in rets:
-            eq *= (1 + k * r)
-            out.append(eq)
-        return out
-
-    def _iso_return_leverage(bench_rets: list[float], target: float,
-                             hi: float = 10.0) -> dict:
-        """The SMALLEST daily-rebalanced exposure k for which k-times the
-        index ends where the strategy ends.
-
-        Not a bisection: terminal wealth is NOT monotone in k. Volatility
-        decay makes it hump-shaped — past some k the index's own drawdowns
-        compound faster than its gains, and more leverage ends LOWER, then
-        goes to zero. Bisecting that returns the ceiling and a fake 100%
-        drawdown. So scan, take the peak, and report honestly when the
-        target is unreachable at ANY leverage — which is itself the answer
-        to 'why not just lever the index'.
-        """
-        best_k, best_terminal = 0.0, 1.0
-        found = None
-        k = 0.0
-        while k <= hi:
-            k = round(k + 0.01, 2)
-            curve = _lever(bench_rets, k)
-            terminal = curve[-1]
-            if terminal > best_terminal:
-                best_k, best_terminal = k, terminal
-            if found is None and terminal >= target:
-                found = (k, curve)
-        if found is None:
-            peak = _lever(bench_rets, best_k)
-            mdd = _max_dd(peak)
-            return {"reachable": False, "best_k": best_k,
-                    "best_terminal": round(best_terminal, 3),
-                    "max_drawdown_pct": round(mdd * 100, 1),
-                    "curve": [round(v, 5) for v in peak]}
-        k, curve = found
-        rr = np.diff(np.asarray([1.0] + curve)) / np.asarray([1.0] + curve[:-1])
-        return {"reachable": True, "k": k,
-                "max_drawdown_pct": round(_max_dd(curve) * 100, 1),
-                "vol_annual_pct": round(float(rr.std(ddof=1) * np.sqrt(252) * 100), 1),
-                "terminal": round(curve[-1], 3),
-                "curve": [round(v, 5) for v in curve]}
-
-    def _max_dd(curve) -> float:
-        peak, mdd = 1.0, 0.0
-        for e in curve:
-            peak = max(peak, e)
-            mdd = max(mdd, 1 - e / peak)
-        return mdd
 
     def _describe(curve, rets, years):
         peak, mdd = 1.0, 0.0

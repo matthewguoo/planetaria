@@ -35,3 +35,5 @@ backend/scripts/_leadup_cache/
 # while a batch is in flight. Run state, not source.
 frontend/public/study-status.json
 frontend/public/study-curve.json
+frontend/public/study-curve-bracketed.json
+frontend/public/study-trades.json

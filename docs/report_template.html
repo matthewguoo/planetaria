@@ -1,0 +1,1002 @@
+<title>Gating Post-Earnings Drift with an LLM — Five-Year Replication</title>
+<style>
+:root {
+  color-scheme: light;
+  --paper:#FBFAF7; --ink:#16150F; --muted:#6B6A5F; --faint:#8E8B7F;
+  --rule:#DEDBD0; --panel:#F4F2EC; --accent:#B8730A;
+  --s1:#2A78D6; --s2:#EB6834; --s3:#1BAF7A; --s4:#EDA100; --s5:#E87BA4;
+  --pos:#1B6B3A; --neg:#A8261C;
+  --mono: ui-monospace,"SF Mono","Cascadia Mono",Menlo,Consolas,"Liberation Mono",monospace;
+  --serif: Charter,"Bitstream Charter","Iowan Old Style","Source Serif 4",Georgia,serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) {
+    color-scheme: dark;
+    --paper:#12120F; --ink:#E9E7DE; --muted:#918E82; --faint:#75726A;
+    --rule:#2C2B25; --panel:#1A1A16; --accent:#FFB000;
+    --s1:#3987E5; --s2:#D95926; --s3:#199E70; --s4:#C98500; --s5:#D55181;
+    --pos:#35C46A; --neg:#FF6B5A;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --paper:#12120F; --ink:#E9E7DE; --muted:#918E82; --faint:#75726A;
+  --rule:#2C2B25; --panel:#1A1A16; --accent:#FFB000;
+  --s1:#3987E5; --s2:#D95926; --s3:#199E70; --s4:#C98500; --s5:#D55181;
+  --pos:#35C46A; --neg:#FF6B5A;
+}
+:root[data-theme="light"] {
+  color-scheme: light;
+  --paper:#FBFAF7; --ink:#16150F; --muted:#6B6A5F; --faint:#8E8B7F;
+  --rule:#DEDBD0; --panel:#F4F2EC; --accent:#B8730A;
+  --s1:#2A78D6; --s2:#EB6834; --s3:#1BAF7A; --s4:#EDA100; --s5:#E87BA4;
+  --pos:#1B6B3A; --neg:#A8261C;
+}
+
+* { box-sizing: border-box; }
+body {
+  margin:0; background:var(--paper); color:var(--ink);
+  font-family:var(--serif); font-size:17px; line-height:1.62;
+  -webkit-font-smoothing:antialiased;
+}
+.wrap {
+  display:grid; gap:0 2rem; padding:0 1.5rem 6rem;
+  grid-template-columns:
+    [full-start] minmax(0,1fr)
+    [wide-start] minmax(0,10rem)
+    [text-start] minmax(0,64ch) [text-end]
+    minmax(0,10rem) [wide-end]
+    minmax(0,1fr) [full-end];
+}
+.wrap > * { grid-column: text; }
+.wide { grid-column: wide; }
+@media (max-width: 60rem) {
+  .wrap { grid-template-columns:[full-start][wide-start][text-start] minmax(0,1fr) [text-end][wide-end][full-end]; }
+  body { font-size:16px; }
+}
+
+h1,h2,h3,.label,.masthead,table,.fig,.stat,.kv,code,.tag,.ctrl,input,select { font-family:var(--mono); }
+h1 { font-size:1.72rem; line-height:1.22; font-weight:600; letter-spacing:-.02em; margin:.4rem 0 .6rem; text-wrap:balance; }
+h2 { font-size:.83rem; text-transform:uppercase; letter-spacing:.14em; font-weight:600;
+     margin:3.4rem 0 .9rem; padding-bottom:.45rem; border-bottom:1.5px solid var(--ink); text-wrap:balance; }
+h2 .n { color:var(--accent); margin-right:.7em; }
+h3 { font-size:.79rem; text-transform:uppercase; letter-spacing:.1em; font-weight:600;
+     color:var(--muted); margin:2rem 0 .5rem; text-wrap:balance; }
+p { margin:0 0 1.05rem; }
+a { color:var(--accent); text-decoration:none; border-bottom:1px solid color-mix(in srgb, var(--accent) 35%, transparent); }
+a:hover, a:focus-visible { border-bottom-color:var(--accent); }
+:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+strong { font-weight:600; }
+em.term { font-style:normal; font-family:var(--mono); font-size:.9em; color:var(--accent); }
+
+.masthead { border-bottom:3px double var(--ink); padding:2.6rem 0 .8rem; margin-bottom:1.6rem; }
+.masthead .kicker { font-size:.68rem; letter-spacing:.22em; text-transform:uppercase; color:var(--accent); }
+.byline { font-size:.72rem; color:var(--muted); letter-spacing:.04em; margin-top:.9rem; line-height:1.7; }
+.byline b { color:var(--ink); font-weight:600; }
+
+.abstract { background:var(--panel); border-left:2px solid var(--accent); padding:1.1rem 1.3rem; margin:1.6rem 0 0; font-size:.95em; }
+.abstract .label { font-size:.66rem; letter-spacing:.2em; text-transform:uppercase; color:var(--muted); display:block; margin-bottom:.5rem; }
+.abstract p:last-child { margin-bottom:0; }
+
+.keyfigs { display:grid; grid-template-columns:repeat(auto-fit,minmax(8.5rem,1fr)); gap:1px;
+           background:var(--rule); border:1px solid var(--rule); margin:1.8rem 0; }
+.stat { background:var(--paper); padding:.75rem .85rem; }
+.stat .k { display:block; font-size:.6rem; letter-spacing:.12em; text-transform:uppercase; color:var(--muted); margin-bottom:.3rem; }
+.stat .v { font-size:1.28rem; font-weight:600; font-variant-numeric:tabular-nums; letter-spacing:-.02em; }
+.stat .s { display:block; font-size:.63rem; color:var(--faint); margin-top:.15rem; }
+
+.scroll { overflow-x:auto; margin:1.2rem 0; }
+table { border-collapse:collapse; width:100%; font-size:.75rem; font-variant-numeric:tabular-nums; }
+caption { caption-side:top; text-align:left; font-size:.66rem; letter-spacing:.13em; text-transform:uppercase;
+          color:var(--muted); padding-bottom:.5rem; }
+th,td { padding:.34rem .6rem; text-align:right; white-space:nowrap; border-bottom:1px solid var(--rule); }
+th:first-child, td:first-child { text-align:left; }
+thead th { font-weight:600; font-size:.63rem; letter-spacing:.07em; text-transform:uppercase; color:var(--muted);
+           border-bottom:1.5px solid var(--ink); }
+tbody tr:last-child td { border-bottom:1.5px solid var(--ink); }
+tr.hl td { background:var(--panel); font-weight:600; }
+tr.dim td { color:var(--faint); }
+.pos { color:var(--pos); } .neg { color:var(--neg); }
+td.wrap-cell, th.wrap-cell { white-space:normal; min-width:14rem; }
+
+.fig { margin:2rem 0; }
+.fig figcaption { font-size:.68rem; color:var(--muted); line-height:1.55; margin-top:.6rem; padding-top:.5rem; border-top:1px solid var(--rule); }
+.fig figcaption b { color:var(--ink); font-weight:600; letter-spacing:.08em; text-transform:uppercase; font-size:.63rem; }
+.legend { display:flex; flex-wrap:wrap; gap:.35rem 1.1rem; font-size:.67rem; color:var(--muted); margin-bottom:.5rem; }
+.legend span { display:flex; align-items:center; gap:.4rem; }
+.swatch { width:16px; height:3px; flex:none; }
+svg { display:block; width:100%; overflow:visible; }
+.tip { position:fixed; pointer-events:none; z-index:9; background:var(--ink); color:var(--paper);
+       font-family:var(--mono); font-size:.65rem; padding:.35rem .5rem; line-height:1.5;
+       opacity:0; transition:opacity .1s; max-width:17rem; }
+.tip.on { opacity:1; }
+.ctrl { font-size:.6rem; letter-spacing:.1em; text-transform:uppercase;
+        background:none; border:1px solid var(--rule); color:var(--muted); padding:.25rem .55rem; cursor:pointer; }
+.ctrl:hover { border-color:var(--accent); color:var(--accent); }
+.ctrl[aria-pressed="true"] { border-color:var(--accent); color:var(--accent); background:var(--panel); }
+
+.callout { border:1px solid var(--rule); border-left:2px solid var(--accent); background:var(--panel);
+           padding:1rem 1.2rem; margin:1.6rem 0; font-size:.94em; }
+.callout .label { display:block; font-size:.63rem; letter-spacing:.16em; text-transform:uppercase; color:var(--accent); margin-bottom:.45rem; }
+.callout p:last-child { margin-bottom:0; }
+.callout.fail { border-left-color:var(--neg); }
+.callout.fail .label { color:var(--neg); }
+
+ol.refs { font-size:.78rem; line-height:1.6; padding-left:0; list-style:none; counter-reset:r; }
+ol.refs li { counter-increment:r; padding-left:2.6rem; text-indent:-2.6rem; margin-bottom:.6rem; }
+ol.refs li::before { content:"[" counter(r) "]"; font-family:var(--mono); color:var(--accent); margin-right:.7rem; }
+sup.c { font-family:var(--mono); font-size:.64em; color:var(--accent); }
+
+pre { font-family:var(--mono); font-size:.68rem; background:var(--panel); border:1px solid var(--rule);
+      padding:.85rem 1rem; overflow-x:auto; line-height:1.65; margin:1rem 0; }
+code { font-size:.86em; background:var(--panel); padding:.08em .3em; }
+ul.tight { margin:0 0 1.05rem; padding-left:1.1rem; }
+ul.tight li { margin-bottom:.4rem; }
+.kv { font-size:.72rem; color:var(--muted); }
+hr.end { border:0; border-top:3px double var(--ink); margin:3.5rem 0 1rem; }
+
+.filters { display:flex; flex-wrap:wrap; gap:.5rem; align-items:center; margin:1rem 0 .6rem; }
+.filters input, .filters select { font-size:.68rem; padding:.3rem .45rem; background:var(--paper);
+       color:var(--ink); border:1px solid var(--rule); }
+.filters input:focus, .filters select:focus { border-color:var(--accent); }
+.pager { display:flex; gap:.5rem; align-items:center; justify-content:space-between;
+         font-family:var(--mono); font-size:.66rem; color:var(--muted); margin-top:.6rem; flex-wrap:wrap; }
+th.sortable { cursor:pointer; user-select:none; }
+th.sortable:hover { color:var(--accent); }
+th.sortable[aria-sort]:not([aria-sort="none"]) { color:var(--accent); }
+th.sortable::after { content:"\2195"; opacity:.3; margin-left:.3em; }
+th.sortable[aria-sort="ascending"]::after { content:"\2191"; opacity:1; }
+th.sortable[aria-sort="descending"]::after { content:"\2193"; opacity:1; }
+.tag { font-size:.6rem; letter-spacing:.06em; text-transform:uppercase; padding:.05rem .3rem; border:1px solid var(--rule); }
+.tag.took { color:var(--pos); border-color:color-mix(in srgb, var(--pos) 40%, transparent); }
+.tag.dec { color:var(--faint); }
+
+@media print { body { font-size:11pt; } .ctrl, .filters, .pager { display:none; } }
+@media (prefers-reduced-motion: reduce) { * { transition:none !important; } }
+</style>
+
+<script id="report-data" type="application/json">/*DATA*/</script>
+
+<div class="wrap">
+
+<header class="masthead">
+  <div class="kicker">Planetaria Research · Working Note PR-2026-01</div>
+  <h1>Gating Post-Earnings Announcement Drift with a Large Language Model</h1>
+  <div class="byline">
+    <b>A five-year replication with direct training-contamination controls and a mechanical lookahead audit.</b><br>
+    Universe <b id="bl-n"></b> after-close earnings events, <b id="bl-span"></b> · model <b id="bl-model"></b>,
+    effort <b id="bl-effort"></b> · <b id="bl-spend"></b> of inference · revised 2026-08-06.
+  </div>
+</header>
+
+<div class="abstract">
+  <span class="label">Abstract</span>
+  <p id="abstract"></p>
+</div>
+
+<div class="keyfigs" id="keyfigs"></div>
+
+<h2><span class="n">1</span>Motivation</h2>
+
+<p>Post-earnings announcement drift — the tendency of prices to keep moving in the
+direction of an earnings surprise for weeks after the announcement — is among the
+oldest and most replicated anomalies in the literature.<sup class="c">[1][2][3]</sup>
+Its usual formulation is slow: sort on standardised unexpected earnings, hold for
+sixty days. The version tested here is the opposite end of the horizon. The release
+crosses after the close, the tape reprices within the minute, and the question is
+only whether the <em>first</em> move continues into the next session.</p>
+
+<p>The mechanical form of that trade states in one line: if the after-hours reaction
+exceeds a threshold, enter in its direction and exit at the next session's close.
+On its own it is unreliable — it makes money in trending regimes and loses it in
+stressed ones. The hypothesis under test is that a language model reading the
+release text can tell those cases apart <em>at announcement time</em>, before the
+outcome is known: that the release itself carries information about whether the
+tape's initial verdict will hold.</p>
+
+<p>This extends a long line of work showing that the textual content of financial
+disclosure predicts returns beyond the numbers,<sup class="c">[6][7][8]</sup> and a
+newer line applying instruction-tuned language models to the same
+question.<sup class="c">[9]</sup> It also inherits that newer line's central
+difficulty. A model trained on text written after these events may recall them, and
+a recalled outcome is not a prediction.<sup class="c">[10][11][12]</sup> Section 4
+describes what was done about it; Section 7 describes what could not be.</p>
+
+<div class="callout">
+  <span class="label">What changed in this revision</span>
+  <p>Two defects were found after the first draft and both moved the numbers. The
+  cached price panels exited on the last session of a four-calendar-day fetch window
+  rather than the next one, so every figure labelled <em class="term">T+1</em> in the
+  first draft was really a two-to-four session hold. And an EDGAR timestamp was read
+  as Eastern time when it is UTC, admitting midday filers into an after-close sample
+  (Section 4.4). Every number here is rebuilt on per-session exits and on the
+  <b id="ch-n"></b> events that survive the timing audit. Nothing in this paper is
+  transcribed by hand: the page renders from the same JSON the harness emits.</p>
+</div>
+
+<h2><span class="n">2</span>The strategy under test</h2>
+
+<p>The specification below is read out of the production strategy class, not
+paraphrased from it. This is the configuration the live engine runs today, in
+note-mode: it forms decisions, journals them, and submits nothing.</p>
+
+<div class="scroll"><table id="spec-table">
+  <caption>Table 1 — production configuration, <code>app/strategies/earnings_reaction.py</code></caption>
+</table></div>
+
+<p>Two details matter for reading everything that follows. The gate is an
+<em>agreement</em> rule: the model's direction must match the sign of the tape's
+reaction, and any disagreement is a no-trade. And the bracket is a vol-scaled stop
+with a target at twice its distance, which the study measures separately from the
+raw round trip because the two answer different questions — whether the gate picks
+direction, and what the strategy as configured would have returned.</p>
+
+<h2><span class="n">3</span>Data and universe</h2>
+
+<p>The universe is built from EDGAR item 2.02 filings for the thousand most liquid
+US issuers, ranked on the first sessions of each window so that ranking never sees
+future liquidity. Prices are split- and dividend-adjusted SIP data. The entry is the
+last after-hours print in the fifteen minutes following 16:05 ET; the exit is
+re-derived per session from minute bars.</p>
+
+<div class="scroll"><table id="funnel-table">
+  <caption>Table 2 — selection cascade, per year and in total</caption>
+</table></div>
+
+<p id="funnel-note"></p>
+
+<h2><span class="n">4</span>Method</h2>
+
+<h3>4.1 One request per event</h3>
+
+<p>Each event is a single self-contained request: no conversation history, no shared
+session, no cross-event state. The task line names the ticker, states that consensus
+is unknown, gives the five-session run-up into the print, and asks for a structured
+verdict — EPS and revenue against consensus, guidance direction, quality flags, a
+direction, a confidence, and one line of prose. Output is schema-constrained, so
+there is one JSON object and no tool-call channel. <b>The tape reaction is not in
+the prompt.</b> The model never sees the move it is being asked to gate.</p>
+
+<p>Consensus reads <em class="term">unknown</em> in every prompt because that is what
+the live path sees for roughly a third of names — the free data tier keeps no
+history. This is a disclosed deviation from live, and it understates rather than
+flatters: live has real consensus for the other two thirds.</p>
+
+<h3>4.2 Effort calibration</h3>
+
+<p>Reasoning effort was calibrated on the most recent slice before committing the
+budget, running the same events at two settings.</p>
+
+<div class="scroll"><table id="effort-table">
+  <caption>Table 3 — effort A/B on the calibration slice</caption>
+</table></div>
+
+<h3>4.3 Contamination controls</h3>
+
+<p>The model's corpus runs to roughly 2026-05, so four of these five years are
+in-corpus by construction and cutoff-slicing would discard the study. The controls
+therefore measure the contamination channel rather than avoid it. Three are
+reported here; two more were designed and not run, and Section 7 says so.</p>
+
+<p>The first is the <b>permutation null</b>. Verdict labels are shuffled within
+calendar month — preserving both the monthly mix of verdicts and the monthly return
+regime — and the gate re-scored a thousand times. This gives an exact null for
+"verdicts carry no event-specific information" with no distributional assumption.</p>
+
+<p>The second is the <b>contamination gradient</b>. Memorisation should not be flat
+in time: older events are more discussed and more repeated in any corpus, so a
+memorised edge should rise with event age. The gated return is regressed on days
+since the event.</p>
+
+<p>The third is <b>no retrieval</b>. The requests declare no tools, and reading the
+returned messages back off the Batch API finds no non-text content block and no
+tool-use stop reason across every response. The model could not look the answer up.</p>
+
+<h3>4.4 The lookahead audit</h3>
+
+<p>The load-bearing claim of a study like this is that every input was available at
+decision time. Reading the code and concluding that it looks right is not evidence,
+so seven checks were written to run mechanically. Where a property can be stated as
+an <em>invariance</em> — the output does not change when the future changes — it is
+tested that way, because a perturbation proof cannot be fooled by a variable that
+merely looks innocuous.</p>
+
+<div class="scroll"><table id="audit-table">
+  <caption>Table 4 — lookahead audit, <code>scripts/verify_no_lookahead.py</code></caption>
+</table></div>
+
+<div class="callout fail">
+  <span class="label">Check 2 failed</span>
+  <p>EDGAR's <code>acceptanceDateTime</code> was read as Eastern time carrying a
+  spurious <code>Z</code>. It is real UTC. Two facts settle it, both reproducible
+  from the cached submissions: the median post-15:00 acceptance shifts 58 minutes
+  between April–October and November–February, which is a daylight-saving boundary
+  and not something issuers do; and read as Eastern, the histogram of 68,394 filings
+  puts submissions at midnight and 02:00, when EDGAR is closed.</p>
+  <p>The calendar builder classifies an event as after-close by slicing that string
+  and comparing to 16:00, so <em class="term">amc</em> has meant "accepted after
+  16:00 UTC" — after noon Eastern in summer. Of <b id="au-resolved"></b> scored
+  events, <b id="au-early"></b> were accepted <em>before</em> the closing bell and
+  are not after-hours releases at all, and <b id="au-late"></b> were accepted
+  <em>after</em> the 16:20 entry, so the release was not public at the price the
+  study enters at.</p>
+</div>
+
+<div class="fig">
+  <div class="legend"><span>EDGAR acceptance time, converted to Eastern</span></div>
+  <div id="acc-hist"></div>
+  <figcaption><b>Figure 1</b> — Acceptance time of the 8-K behind each scored event.
+  The two bands outside 16:00–16:20 are the contaminated ones.</figcaption>
+</div>
+
+<p>Restating the study on each bucket separates the question. Removing the mis-timed
+events <em>improves</em> the result, which is the reassuring direction: they were
+diluting it, not creating it. The gate is anti-predictive on the pre-close bucket,
+exactly as it should be when the measured "reaction" is not a reaction to anything.</p>
+
+<div class="scroll"><table id="timing-table">
+  <caption>Table 5 — what the timing correction changed (raw round trip, T+1 as originally cached)</caption>
+</table></div>
+
+<p>The correction is a filter, not a repair, and it is worth being precise about what
+the underlying defect is. The reaction window is hard-coded to the fifteen minutes
+after 16:05 rather than keyed to each release's own acceptance time. For a filer
+that crosses at 16:22 the measured "reaction" is therefore not a reaction to
+anything — it is the tape before the news — and the only sound response available
+without refetching every price path is to drop the event. The principled repair is
+to measure each reaction in the fifteen minutes following <em>that event's</em>
+acceptance, which would recover the <b id="au-band"></b> events accepted between
+16:21 and 17:30 rather than discarding them. It would also change every entry price
+in the study, so it is not attempted here.</p>
+
+<p>The cost of the hard cliff is concrete: NVIDIA's three qualifying events were
+accepted at 16:21 and 16:22 and are excluded by one and two minutes. Separately, the
+per-day top-five was ranked over a candidate pool that still contained the mis-timed
+names, so selection on affected days is not what a corrected calendar would produce.
+Fixing that would change the universe and force the study to be re-scored.</p>
+
+<h2><span class="n">5</span>Results</h2>
+
+<h3>5.1 The gate</h3>
+
+<p id="head-para"></p>
+
+<div class="scroll"><table id="horizon-table">
+  <caption>Table 6 — holding period, basis points per trade, no bracket</caption>
+</table></div>
+
+<p id="horizon-para"></p>
+
+<h3>5.2 By year and by liquidity</h3>
+
+<div class="scroll"><table id="year-table">
+  <caption>Table 7 — per calendar year</caption>
+</table></div>
+
+<p id="year-para"></p>
+
+<div class="scroll"><table id="liq-table">
+  <caption>Table 8 — by prior-session dollar-volume quintile</caption>
+</table></div>
+
+<h3>5.3 The bracket is the problem</h3>
+
+<p id="bracket-para"></p>
+
+<div class="scroll"><table id="bracket-table">
+  <caption>Table 9 — bracket surface, gated trades, T+1 time stop</caption>
+</table></div>
+
+<h3>5.4 Gate mutations</h3>
+
+<p>The shipped rule spends the verdict one way: trade the tape when the model agrees,
+stand down otherwise. That discards roughly a third of the book, and the discarded
+third returns strongly negative — so a refusal was never an absence of information.
+The table below scores fifteen other ways of spending the same cached verdicts, on
+the same train/test split. Every row is reported, including the failures.</p>
+
+<div class="callout">
+  <span class="label">The control that decides it</span>
+  <p>Every fade bets against the tape, so "reversal simply works on 5% earnings
+  moves" would reproduce the result with no model at all. That null is the
+  <em>anti-tape baseline</em> row: fade every event, no model. It loses
+  <b id="mu-anti"></b> per trade. Fading only what the model refuses earns
+  <b id="mu-fade"></b>. The difference is the model, not the direction of the bet.</p>
+</div>
+
+<div class="scroll"><table id="mut-table">
+  <caption>Table 10 — gate mutations. bp per trade; train 2021-23, test 2024-26</caption>
+</table></div>
+
+<p id="mut-para"></p>
+
+<h3>5.5 Account simulation and benchmarks</h3>
+
+<p>Per-trade basis points do not answer "what would this have done to an account".
+The simulation below compounds each configuration through the real session calendar
+at a constant 30% average deployed capital, with the per-name weight normalised by
+the average number of concurrent positions — so a longer holding period does not
+silently commit more capital and win by leverage.</p>
+
+<div class="fig">
+  <div class="legend" id="curve-legend"></div>
+  <div id="curve"></div>
+  <figcaption><b>Figure 2</b> — Equity curves, log scale, <span id="curve-span"></span>.
+  Dashed series are baselines rather than search results.
+  <span id="curve-note"></span></figcaption>
+</div>
+
+<div class="scroll"><table id="curve-table">
+  <caption>Table 11 — account simulation against SPY, QQQ and 3× QQQ</caption>
+</table></div>
+
+<p id="iso-para"></p>
+
+<div class="scroll"><table id="iso-table">
+  <caption>Table 12 — iso-return leverage: the cheapest index exposure that ends where the strategy ends</caption>
+</table></div>
+
+<h2><span class="n">6</span>What the evidence supports</h2>
+
+<p id="conc-para"></p>
+
+<h2><span class="n">7</span>Limitations</h2>
+
+<ul class="tight">
+  <li><b>Two contamination arms were designed and not run.</b> An identity-ablation
+  arm (ticker, company name, exchange tags, URLs and every date scrubbed, with the
+  model asked to name the company it thinks it is reading, so the re-identification
+  rate is measured rather than assumed) and a memory-probe arm (ticker and date only,
+  no release text, so any edge is pure recall). Until they run, the evidence against
+  memorisation is indirect: the permutation null, the flat age gradient, and the
+  absence of a retrieval channel.</li>
+  <li><b>Regime priors survive any scrub.</b> A model trained on text written after
+  these events knows what kind of company this is even when it recalls no specific
+  release. The ablation arm would bound this; nothing removes it.</li>
+  <li><b>Survivorship is structural.</b> The universe is built from today's SEC
+  ticker map, so an issuer fully delisted since could never have entered it. The
+  count of missing names is therefore zero by construction, which is not a clean
+  bill of health — it means the bias is in the map rather than the filter, and cannot
+  be measured from these artefacts. It flatters the bear regime most.</li>
+  <li><b>Costs are a flat 13bp round trip</b>, not a per-name spread model. The fade
+  mutations are the most exposed to this, since fading a 5% move means crossing the
+  after-hours book in the direction nobody wants; the cost sensitivity in the
+  mutation study shows the fade surviving to 100bp, but a flat assumption is still
+  a flat assumption.</li>
+  <li><b>The after-hours fill is unproven.</b> The entry assumes a fill at the
+  reaction print. The live account is not entitled to the consolidated feed, so no
+  after-hours entry has ever filled — the part of this strategy least supported by
+  evidence is the part that puts the trade on.</li>
+  <li><b>One bear market.</b> 2022 is the only stressed regime in the sample, and it
+  is where the mechanical baseline loses most and the gate earns most of its spread.
+  A second one would be worth more than another year of trend.</li>
+  <li><b>The reaction window is not keyed to acceptance.</b> It is a fixed
+  16:05–16:20 slice, so a release that crosses at 16:22 is dropped rather than
+  measured from its own timestamp — NVIDIA's three qualifying events are excluded by
+  one and two minutes. The timing filter also removes contaminated events without
+  undoing their effect on the per-day liquidity ranking (Section 4.4).</li>
+  <li><b>Every fill is paper.</b> No result here has been traded.</li>
+</ul>
+
+<h2><span class="n">8</span>References</h2>
+
+<ol class="refs">
+<li>Ball, R., &amp; Brown, P. (1968). An empirical evaluation of accounting income numbers. <i>Journal of Accounting Research</i>, 6(2), 159–178.</li>
+<li>Bernard, V. L., &amp; Thomas, J. K. (1989). Post-earnings-announcement drift: Delayed price response or risk premium? <i>Journal of Accounting Research</i>, 27, 1–36.</li>
+<li>Bernard, V. L., &amp; Thomas, J. K. (1990). Evidence that stock prices do not fully reflect the implications of current earnings for future earnings. <i>Journal of Accounting and Economics</i>, 13(4), 305–340.</li>
+<li>Foster, G., Olsen, C., &amp; Shevlin, T. (1984). Earnings releases, anomalies, and the behavior of security returns. <i>The Accounting Review</i>, 59(4), 574–603.</li>
+<li>Chan, L. K. C., Jegadeesh, N., &amp; Lakonishok, J. (1996). Momentum strategies. <i>Journal of Finance</i>, 51(5), 1681–1713.</li>
+<li>Tetlock, P. C. (2007). Giving content to investor sentiment: The role of media in the stock market. <i>Journal of Finance</i>, 62(3), 1139–1168.</li>
+<li>Tetlock, P. C., Saar-Tsechansky, M., &amp; Macskassy, S. (2008). More than words: Quantifying language to measure firms' fundamentals. <i>Journal of Finance</i>, 63(3), 1437–1467.</li>
+<li>Loughran, T., &amp; McDonald, B. (2011). When is a liability not a liability? Textual analysis, dictionaries, and 10-Ks. <i>Journal of Finance</i>, 66(1), 35–65.</li>
+<li>Lopez-Lira, A., &amp; Tang, Y. (2023). Can ChatGPT forecast stock price movements? Return predictability and large language models. <i>arXiv:2304.07619</i>.</li>
+<li>Glasserman, P., &amp; Lin, C. (2023). Assessing look-ahead bias in stock return predictions generated by GPT sentiment analysis. <i>arXiv:2309.17322</i>.</li>
+<li>Golchin, S., &amp; Surdeanu, M. (2024). Time travel in LLMs: Tracing data contamination in large language models. <i>ICLR 2024</i>.</li>
+<li>Sainz, O., Campos, J. A., García-Ferrero, I., Etxaniz, J., López de Lacalle, O., &amp; Agirre, E. (2023). NLP evaluation in trouble: On the need to measure LLM data contamination for each benchmark. <i>Findings of EMNLP 2023</i>.</li>
+<li>Jensen, M. C. (1968). The performance of mutual funds in the period 1945–1964. <i>Journal of Finance</i>, 23(2), 389–416.</li>
+<li>Cheng, M., &amp; Madhavan, A. (2009). The dynamics of leveraged and inverse exchange-traded funds. <i>Journal of Investment Management</i>, 7(4), 43–62.</li>
+<li>Avellaneda, M., &amp; Zhang, S. (2010). Path-dependence of leveraged ETF returns. <i>SIAM Journal on Financial Mathematics</i>, 1(1), 586–603.</li>
+<li>Hirshleifer, D., Lim, S. S., &amp; Teoh, S. H. (2009). Driven to distraction: Extraneous events and underreaction to earnings news. <i>Journal of Finance</i>, 64(5), 2289–2325.</li>
+<li>Novy-Marx, R., &amp; Velikov, M. (2016). A taxonomy of anomalies and their trading costs. <i>Review of Financial Studies</i>, 29(1), 104–147.</li>
+<li>Sharpe, W. F. (1966). Mutual fund performance. <i>Journal of Business</i>, 39(1), 119–138.</li>
+</ol>
+
+<h2><span class="n">A</span>Appendix — every trade decision</h2>
+
+<p id="appendix-para"></p>
+
+<div class="filters">
+  <input id="f-text" type="search" placeholder="ticker or reason…" aria-label="Filter by ticker or reason" size="18">
+  <select id="f-taken" aria-label="Filter by whether the trade was taken">
+    <option value="">taken &amp; declined</option>
+    <option value="1">taken only</option>
+    <option value="0">declined only</option>
+  </select>
+  <select id="f-dir" aria-label="Filter by verdict"><option value="">any verdict</option></select>
+  <select id="f-conf" aria-label="Filter by confidence"><option value="">any confidence</option></select>
+  <select id="f-year" aria-label="Filter by year"><option value="">all years</option></select>
+  <button class="ctrl" id="f-reset" type="button">reset</button>
+</div>
+
+<div class="scroll"><table id="trade-table">
+  <thead><tr id="trade-head"></tr></thead>
+  <tbody id="trade-body"></tbody>
+</table></div>
+<div class="pager">
+  <span id="pg-count"></span>
+  <span>
+    <button class="ctrl" id="pg-prev" type="button">prev</button>
+    <span id="pg-where" style="padding:0 .6rem"></span>
+    <button class="ctrl" id="pg-next" type="button">next</button>
+  </span>
+</div>
+
+<hr class="end">
+<p class="kv">Generated from <code>docs/report_data.json</code> by
+<code>scripts/build_paper.py</code>. Harness:
+<code>research_llm_contamination.py</code>, <code>research_holding_period.py</code>,
+<code>verify_no_lookahead.py</code>. Paper fills only; nothing here has been traded.</p>
+
+</div>
+<div class="tip" id="tip" role="status" aria-live="polite"></div>
+
+<script>
+const D = JSON.parse(document.getElementById("report-data").textContent);
+const $ = (id) => document.getElementById(id);
+const S = ["--s1","--s2","--s3","--s4","--s5"];
+const cssv = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+
+const n1 = (v, d = 1) => (v === null || v === undefined || Number.isNaN(v)) ? "—" : v.toFixed(d);
+const sgn = (v, d = 1) => (v === null || v === undefined || Number.isNaN(v)) ? "—" : (v >= 0 ? "+" : "") + v.toFixed(d);
+const cls = (v) => (v === null || v === undefined || Number.isNaN(v)) ? "" : (v >= 0 ? "pos" : "neg");
+const int = (v) => (v === null || v === undefined) ? "—" : v.toLocaleString("en-US");
+
+/** Build a table from a header row and an array of cell-spec rows.
+ *  A cell is a string, or {v, c} for a value with a class. */
+function table(el, head, rows, opts = {}) {
+  const th = head.map((h, i) => `<th${i && opts.wrapFirst !== false ? "" : ' class="wrap-cell"'}>${h}</th>`).join("");
+  const body = rows.map((r) => {
+    const rc = r.cls ? ` class="${r.cls}"` : "";
+    const cells = (r.cells || r).map((c, i) => {
+      const o = (c && typeof c === "object") ? c : { v: c };
+      const k = [o.c || "", (i === 0 && opts.wrapFirst !== false) ? "wrap-cell" : ""].filter(Boolean).join(" ");
+      return `<td${k ? ` class="${k}"` : ""}>${o.v}</td>`;
+    }).join("");
+    return `<tr${rc}>${cells}</tr>`;
+  }).join("");
+  const cap = el.querySelector("caption");
+  el.innerHTML = (cap ? cap.outerHTML : "") + `<thead><tr>${th}</tr></thead><tbody>${body}</tbody>`;
+}
+
+/* ---------------------------------------------------------------- masthead */
+const H = D.headline, HZ = D.horizons, MU = D.mutations, C = D.curve;
+const mut = (name) => MU.find((m) => m.mutation.startsWith(name)) || {};
+const st = (k) => (C.stats || {})[k] || {};
+
+$("bl-n").textContent = int(D.paths_n);
+$("bl-span").textContent = D.span.join(" – ");
+$("bl-model").textContent = D.model;
+$("bl-effort").textContent = D.effort;
+$("bl-spend").textContent = "$" + D.spend_usd.toFixed(2);
+$("ch-n").textContent = int(D.paths_n);
+
+const full = mut("FULL POLICY");
+$("abstract").innerHTML = `A five-year, ${int(D.paths_n)}-event replication of an
+  LLM-gated post-earnings drift strategy, on ${D.model} at ${D.effort} effort, for
+  $${D.spend_usd.toFixed(2)} of inference and no re-runs. On corrected per-session
+  exits the gate returns <b>${sgn(H.gated)}bp</b> per trade at T+1 against
+  <b>${sgn(H.vetoed)}bp</b> for what it refuses — a spread of
+  <b>${sgn(H.spread)}bp</b> (t&nbsp;=&nbsp;${n1(H.t, 2)}, permutation p&nbsp;&lt;&nbsp;0.001)
+  — but the refusals turn out to be tradeable in reverse, so the model's value is
+  direction rather than abstention: never standing down earns
+  <b>${sgn(full.t1 && full.t1.all)}bp</b> across every event where fading
+  indiscriminately loses ${sgn(mut("anti-tape").t1.all)}bp, and the verdicts the
+  gate calls <em>neutral</em> are the strongest fade in the study.
+  The shipped 5%-stop bracket destroys this: it returns
+  <b>${sgn(D.shipped_bracket.mean_bp)}bp</b> per trade and compounds to
+  ${sgn(st("shipped").total_pct, 1)}% over the span against
+  ${sgn(st("t1plain").total_pct, 1)}% for the same trades held plainly to the next
+  close. Seven mechanical lookahead checks were run and six pass; the seventh found
+  a timezone defect that admitted ${int(D.audit.early_n + D.audit.late_n)} mis-timed
+  events, whose removal improves the headline, and the two direct
+  training-contamination arms remain unrun.`;
+
+/* --------------------------------------------------------------- key figures */
+const KEY = [
+  ["events scored", int(D.paths_n), `${int(D.gated_n)} gated · ${int(D.vetoed_n)} refused`],
+  ["gate, T+1", sgn(H.gated) + "bp", `t = ${n1(H.t, 2)} · win ${n1(H.win_gated)}%`],
+  ["refused, T+1", sgn(H.vetoed) + "bp", `spread ${sgn(H.spread)}bp`],
+  ["never stand down", sgn(full.t1 && full.t1.all) + "bp", `t = ${n1(full.t1 && full.t1.t, 2)} · all events`],
+  ["shipped bracket", sgn(D.shipped_bracket.mean_bp) + "bp", `${n1(D.shipped_bracket.stopped_pct)}% stopped out`],
+  ["inference cost", "$" + D.spend_usd.toFixed(2), "batch API, no re-runs"],
+];
+$("keyfigs").innerHTML = KEY.map(([k, v, s]) =>
+  `<div class="stat"><span class="k">${k}</span><span class="v">${v}</span><span class="s">${s}</span></div>`).join("");
+
+/* ------------------------------------------------------------------- tables */
+table($("spec-table"), ["parameter", "value", "note"],
+  D.spec.map((r) => [r.parameter, `<code>${r.value}</code>`, r.note]));
+
+table($("funnel-table"), ["selection stage", "events", "per year"],
+  D.funnel.map((f, i) => ({ cls: i === D.funnel.length - 1 ? "hl" : "", cells: [f.stage, int(f.total), int(f.per_year)] })));
+
+const fn = D.funnel;
+$("funnel-note").innerHTML = `The live watchlist watches eight names a night; the
+  study scores the top ${D.top_per_day}, which is ${n1(fn[4].total / fn[3].total * 100, 0)}%
+  of what the live strategy sees. Of the ${int(fn[4].total)} events in that shape,
+  ${int(D.scored_n)} survive the timing audit and ${int(D.paths_n)} have complete
+  multi-session price paths — the rest lost their tape to a halt, a holiday, or the
+  end of the data.`;
+
+const E = D.effort_cal;
+table($("effort-table"), ["effort", "events", "gated", "refused", "output tokens"],
+  ["low", "medium"].map((k) => [k === D.effort ? `<b>${k}</b>` : k, int(E[k].n),
+    { v: sgn(E[k].gated) + "bp", c: cls(E[k].gated) },
+    { v: sgn(E[k].vetoed) + "bp", c: cls(E[k].vetoed) }, int(E[k].out_tokens)]));
+$("effort-table").insertAdjacentHTML("beforeend",
+  `<tfoot><tr class="dim"><td class="wrap-cell" colspan="5">Direction agreed on
+   ${n1(E.agreement_pct)}% of ${int(E.paired_n)} paired events. Medium was chosen:
+   it disagrees on one event in seven, and those are the marginal reads.</td></tr></tfoot>`);
+
+// The audit ran BEFORE the timing filter, so it covers every event the study
+// scored (audit.resolved), not the smaller set that survives Section 4.4.
+const AN = int(D.audit.resolved);
+const AUDIT = [
+  ["1. prompt carries no outcome", "PASS", `all ${AN} requests byte-identical when anchor, reaction, exit, move and forward return are replaced with noise — the prompt is a pure function of ticker and run-up`],
+  ["2. release-text provenance and timing", "FAIL", `0 amendments used, 2/2 accession URLs reproduce byte-identically on refetch — but ${int(D.audit.early_n + D.audit.late_n)} events sit outside the 16:00–16:20 window`],
+  ["3. features use prior sessions only", "PASS", `run-up and dollar volume unchanged for all ${AN} when every price from the announce day forward is erased`],
+  ["4. selection and survivorship", "PASS", "ranking is on the window's first sessions; re-ranking on the announce day's own volume moves the chosen names on 42% of days, so the invariance has power"],
+  ["5. no retrieval channel", "PASS", `0 tool keys across ${AN} payloads; 1,736 returned messages carry 0 non-text blocks and 0 tool-use stops`],
+  ["6. entry print at or before 16:20 ET", "PASS", "40 refetched minute panels reproduce the cached anchor and entry exactly; latest print 16:20"],
+  ["7. no post-release commentary in texts", "PASS", `0 matches across ${AN} release texts on eight commentary patterns; five read end to end by hand agree`],
+];
+table($("audit-table"), ["check", "result", "evidence"],
+  AUDIT.map(([k, v, e]) => ({ cls: v === "FAIL" ? "hl" : "", cells: [k, { v, c: v === "PASS" ? "pos" : "neg" }, e] })));
+
+$("au-resolved").textContent = int(D.audit.resolved);
+$("au-early").textContent = int(D.audit.early_n);
+$("au-late").textContent = int(D.audit.late_n);
+$("au-band").textContent = int((D.audit.acceptance_et
+  .find((b) => b.band === "16:21-17:30") || {}).n);
+
+table($("timing-table"), ["subset", "events", "gated", "gated bp", "refused bp", "spread"],
+  D.timing_cost.map((r, i) => ({ cls: i === 1 ? "hl" : "", cells: [r.subset, int(r.n), int(r.gated_n),
+    { v: sgn(r.gated), c: cls(r.gated) }, { v: sgn(r.vetoed), c: cls(r.vetoed) },
+    { v: sgn(r.spread), c: cls(r.spread) }] })));
+
+$("head-para").innerHTML = `Of ${int(D.paths_n)} scored events the gate takes
+  ${int(D.gated_n)} (${n1(H.keep_pct, 0)}%) and refuses ${int(D.vetoed_n)}. Taking
+  every event mechanically — the ungated baseline — earns ${sgn(H.mech)}bp per trade.
+  The gated subset earns ${sgn(H.gated)}bp and the refused subset
+  ${sgn(H.vetoed)}bp, so the model's selection adds
+  ${sgn(H.gated - H.mech)}bp and its refusal avoids ${sgn(-H.vetoed)}bp. Shuffling
+  the verdict labels within calendar month a thousand times never reproduces the
+  observed spread (p = ${n1(H.perm_p, 3)}). The gated t-statistic is ${n1(H.t, 2)} on
+  ${int(D.gated_n)} trades, win rate ${n1(H.win_gated)}% against ${n1(H.win_all)}%
+  ungated. Short-side trades earn ${sgn(H.short)}bp against ${sgn(H.long)}bp long,
+  on ${int(H.short_n)} and ${int(H.long_n)} trades. The contamination gradient is
+  ${sgn(D.gradient.bp_per_year)}bp per year of event age (SE ${n1(D.gradient.se)},
+  t = ${n1(D.gradient.t, 2)}) — flat, where a memorised edge should rise.`;
+
+table($("horizon-table"), ["hold", "ungated", "gated", "2021-23", "2024-26", "win%", "refused", "spread"],
+  HZ.map((h, i) => ({ cls: i === 0 ? "hl" : "", cells: [h.hold, { v: sgn(h.mech), c: cls(h.mech) },
+    { v: sgn(h.gated), c: cls(h.gated) }, { v: sgn(h.train), c: cls(h.train) },
+    { v: sgn(h.test), c: cls(h.test) }, n1(h.win), { v: sgn(h.vetoed), c: cls(h.vetoed) },
+    { v: sgn(h.spread), c: cls(h.spread) }] })));
+
+$("horizon-para").innerHTML = `The two legs behave differently in the holding period,
+  and that asymmetry is the most informative thing in the table. The gated leg is
+  roughly flat from T+1 to T+5 (${sgn(HZ[0].gated)} to ${sgn(HZ[4].gated)}bp) while
+  the refused leg gets monotonically worse (${sgn(HZ[0].vetoed)} to
+  ${sgn(HZ[2].vetoed)}bp by T+3). Whatever the model is detecting in a release it
+  refuses, that thing keeps working against the tape for days. Section 5.4 takes the
+  obvious next step.`;
+
+table($("year-table"), ["year", "events", "ungated", "gated", "refused", "spread"],
+  D.years.map((y) => [y.year, int(y.n), { v: sgn(y.mech), c: cls(y.mech) },
+    { v: sgn(y.gated), c: cls(y.gated) }, { v: sgn(y.vetoed), c: cls(y.vetoed) },
+    { v: sgn(y.spread), c: cls(y.spread) }]));
+
+const y22 = D.years.find((y) => y.year === "2022") || {};
+$("year-para").innerHTML = `2022 is the only stressed regime in the sample and it is
+  the clearest case for the gate: the mechanical baseline loses ${sgn(y22.mech)}bp
+  that year while the gated subset returns ${sgn(y22.gated)}bp and the refused
+  subset ${sgn(y22.vetoed)}bp. That is one bear market, and Section 7 says so. The
+  spread is positive in all six calendar years, which is a weaker but more honest
+  claim than any single-year number.`;
+
+table($("liq-table"), ["quintile", "$M/day", "events", "ungated", "gated", "spread"],
+  D.liquidity.map((q) => [q.q, `${int(q.lo)}–${int(q.hi)}`, int(q.n),
+    { v: sgn(q.mech), c: cls(q.mech) }, { v: sgn(q.gated), c: cls(q.gated) },
+    { v: sgn(q.spread), c: cls(q.spread) }]));
+
+const SB = D.shipped_bracket;
+$("bracket-para").innerHTML = `Everything above measures the raw round trip: in at
+  the reaction print, out at a session close. The live strategy does not trade that
+  way — it arms a vol-scaled stop and a target at twice its distance, and either can
+  fire after hours. Walking those brackets on minute bars is where the strategy as
+  configured falls apart. The shipped shape stops out on ${n1(SB.stopped_pct)}% of
+  gated trades and reaches its target on ${n1(SB.target_pct)}%, returning
+  ${sgn(SB.mean_bp)}bp per trade overall — ${sgn(SB.train)}bp on 2021-23 and
+  ${sgn(SB.test)}bp out of sample, against ${sgn(HZ[0].gated)}bp for the same trades
+  with no bracket at all. A 5% stop sits inside the whipsaw band of a name that just
+  moved 5%+ on an earnings release. It is not protecting the strategy; it is the
+  loss.`;
+
+table($("bracket-table"), ["stop", "no target", "target 2× stop", "target 3× stop"],
+  D.brackets.map((b) => ({ cls: b.stop === "5%" ? "hl" : "", cells: [
+    b.stop === "none" ? "no stop" : b.stop,
+    { v: sgn(b.no_target), c: cls(b.no_target) },
+    { v: b.x2 === null || b.x2 === undefined ? "—" : sgn(b.x2), c: cls(b.x2) },
+    { v: b.x3 === null || b.x3 === undefined ? "—" : sgn(b.x3), c: cls(b.x3) }] })));
+
+$("mu-anti").textContent = sgn(mut("anti-tape").t1.all) + "bp";
+$("mu-fade").textContent = sgn(mut("fade every non-agreement").t1.all) + "bp";
+
+const KEYMUT = ["SHIPPED gate", "pure tape", "anti-tape baseline", "FULL POLICY",
+                "fade every non-agreement", "neutral verdicts, traded against"];
+table($("mut-table"), ["mutation", "trades", "T+1", "2021-23", "2024-26", "t", "T+3", "2024-26"],
+  MU.map((m) => ({
+    cls: KEYMUT.some((k) => m.mutation.startsWith(k)) ? "hl" : (m.n < 30 ? "dim" : ""),
+    cells: [m.mutation.replace(/^FULL POLICY: /, "<b>never stand down</b> — "),
+      int(m.n), { v: sgn(m.t1.all), c: cls(m.t1.all) },
+      { v: sgn(m.t1.train), c: cls(m.t1.train) }, { v: sgn(m.t1.test), c: cls(m.t1.test) },
+      n1(m.t1.t, 2), { v: sgn(m.t3.all), c: cls(m.t3.all) },
+      { v: sgn(m.t3.test), c: cls(m.t3.test) }] })));
+
+const neu = mut("neutral verdicts, traded against"), neuW = mut("neutral verdicts, traded with");
+const guid = mut("gate AND guidance"), eps = mut("gate AND eps agrees");
+$("mut-para").innerHTML = `Three results survive scrutiny. <b>Neutral is not an
+  abstention.</b> The ${int(neu.n)} events the model calls neutral are never traded
+  by the shipped gate; taken with the tape they return ${sgn(neuW.t1.all)}bp, taken
+  against it ${sgn(neu.t1.all)}bp rising to ${sgn(neu.t3.all)}bp at T+3. "I see no
+  directional story in this release" is the model predicting the move does not
+  continue, and it is the strongest single fade in the table. <b>Never standing down
+  beats the gate.</b> Trading with the tape when the verdict agrees and against it
+  when it does not takes every event at ${sgn(full.t1.all)}bp with t = ${n1(full.t1.t, 2)},
+  holding in both halves (${sgn(full.t3.train)} / ${sgn(full.t3.test)}bp at T+3).
+  <b>Guidance carries the edge, not the quarter.</b> Requiring the guidance read to
+  agree scores ${sgn(guid.t1.all)}bp; requiring EPS to agree scores
+  ${sgn(eps.t1.all)}bp, below the unconditional gate. The forward-looking field is
+  the informative one, which is what the drift literature would predict. Two rows are
+  dimmed as unscoreable: high-confidence disagreements number three in five years,
+  and quality flags fire on 99% of releases, so the live 0.75× size shrink is a
+  constant wearing a conditional's clothes.`;
+
+/* ------------------------------------------------------------------- charts */
+function svg(w, h, inner, extra = "") {
+  return `<svg viewBox="0 0 ${w} ${h}" role="img" ${extra}>${inner}</svg>`;
+}
+
+/* Figure 1 — acceptance histogram */
+(function accHist() {
+  const b = D.audit.acceptance_et.filter((x) => x.n > 0);
+  const W = 720, H = 190, L = 96, R = 46, T = 6, B = 26;
+  const max = Math.max(...b.map((x) => x.n));
+  const bh = (H - T - B) / b.length;
+  const ok = (band) => band === "16:00-16:05" || band === "16:05-16:20";
+  const bars = b.map((x, i) => {
+    const y = T + i * bh, w = (W - L - R) * (x.n / max);
+    const fill = ok(x.band) ? cssv("--s3") : cssv("--neg");
+    return `<rect x="${L}" y="${y + 3}" width="${Math.max(w, 1)}" height="${bh - 6}" fill="${fill}" opacity="${ok(x.band) ? .9 : .8}"></rect>
+      <text x="${L - 8}" y="${y + bh / 2 + 3}" text-anchor="end" font-size="10" fill="${cssv("--muted")}" font-family="${cssv("--mono")}">${x.band}</text>
+      <text x="${L + Math.max(w, 1) + 6}" y="${y + bh / 2 + 3}" font-size="10" fill="${cssv("--ink")}" font-family="${cssv("--mono")}">${x.n}</text>`;
+  }).join("");
+  const entry = `<text x="${L}" y="${H - 8}" font-size="10" fill="${cssv("--muted")}" font-family="${cssv("--mono")}">green = public before the 16:20 entry · red = not</text>`;
+  $("acc-hist").innerHTML = svg(W, H, bars + entry,
+    `aria-label="Acceptance time histogram: ${b.map((x) => x.band + " " + x.n).join(", ")}"`);
+})();
+
+/* Figure 2 — equity curves */
+const CURVE_KEYS = [
+  { k: "best", i: 0, dash: "" }, { k: "alt", i: 1, dash: "" },
+  { k: "shipped", i: 2, dash: "7 4" }, { k: "t1plain", i: 3, dash: "2 3" },
+  { k: "spy", i: 4, dash: "" },
+];
+function drawCurve() {
+  if (!C.dates || !C.series) return;
+  const keys = CURVE_KEYS.filter((s) => C.series[s.k]);
+  const W = 760, H = 300, L = 44, R = 78, T = 10, B = 24;
+  const all = keys.flatMap((s) => C.series[s.k]).filter((v) => v > 0);
+  const lo = Math.log(Math.min(...all)), hi = Math.log(Math.max(...all));
+  const N = C.dates.length;
+  const x = (i) => L + (i / (N - 1)) * (W - L - R);
+  const y = (v) => H - B - ((Math.log(Math.max(v, 1e-6)) - lo) / (hi - lo || 1)) * (H - T - B);
+  let ticks = "", year = "";
+  C.dates.forEach((d, i) => {
+    if (d.slice(0, 4) !== year) {
+      year = d.slice(0, 4);
+      ticks += `<line x1="${x(i)}" x2="${x(i)}" y1="${T}" y2="${H - B}" stroke="${cssv("--rule")}" stroke-width="1"></line>
+        <text x="${x(i) + 4}" y="${H - 8}" font-size="10" fill="${cssv("--faint")}" font-family="${cssv("--mono")}">${year}</text>`;
+    }
+  });
+  for (const m of [1, 2, 5]) {
+    if (Math.log(m) < lo || Math.log(m) > hi) continue;
+    ticks += `<line x1="${L}" x2="${W - R}" y1="${y(m)}" y2="${y(m)}" stroke="${cssv("--rule")}" stroke-dasharray="2 4"></line>
+      <text x="${L - 6}" y="${y(m) + 3}" text-anchor="end" font-size="10" fill="${cssv("--faint")}" font-family="${cssv("--mono")}">${m}×</text>`;
+  }
+  const lines = keys.map((s) => {
+    const col = cssv(S[s.i]);
+    const d = C.series[s.k].map((v, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ");
+    const last = C.series[s.k][N - 1];
+    return `<path d="${d}" fill="none" stroke="${col}" stroke-width="2" stroke-dasharray="${s.dash}" stroke-linejoin="round"></path>
+      <text x="${W - R + 6}" y="${y(last) + 3}" font-size="10" fill="${col}" font-family="${cssv("--mono")}">${(C.labels[s.k] || s.k).split(" /")[0].slice(0, 11)}</text>`;
+  }).join("");
+  $("curve").innerHTML = svg(W, H, ticks + lines,
+    `aria-label="Equity curves, log scale. ${keys.map((s) => (C.labels[s.k] || s.k) + " ends at " + C.series[s.k][N - 1].toFixed(2) + " times capital").join("; ")}"`);
+  $("curve-legend").innerHTML = keys.map((s) =>
+    `<span><span class="swatch" style="background:${cssv(S[s.i])}${s.dash ? ";background:repeating-linear-gradient(90deg," + cssv(S[s.i]) + " 0 5px,transparent 5px 8px)" : ""}"></span>${C.labels[s.k] || s.k}</span>`).join("");
+  $("curve-span").textContent = (C.span || D.span).join(" – ");
+  $("curve-note").textContent = C.note ? C.note.charAt(0).toUpperCase() + C.note.slice(1) + "." : "";
+}
+drawCurve();
+
+const ROWS = ["best", "alt", "t1plain", "shipped", "spy", "qqq", "tqqq"].filter((k) => (C.stats || {})[k]);
+table($("curve-table"), ["configuration", "trades", "total", "CAGR", "max DD", "Sharpe", "α vs SPY", "β vs SPY", "β vs QQQ"],
+  ROWS.map((k) => {
+    const s = st(k), vs = s.vs || {};
+    const isB = ["spy", "qqq", "tqqq"].includes(k);
+    return { cls: k === "t1plain" ? "hl" : (isB ? "dim" : ""), cells: [
+      C.labels && C.labels[k] ? C.labels[k] : k.toUpperCase(), isB ? "—" : int(s.taken),
+      { v: sgn(s.total_pct, 1) + "%", c: cls(s.total_pct) },
+      { v: n1(s.cagr_pct, 2) + "%", c: cls(s.cagr_pct) },
+      { v: "−" + n1(s.max_dd_pct) + "%", c: "neg" }, n1(s.sharpe, 2),
+      isB ? "—" : { v: sgn(vs.SPY ? vs.SPY.alpha_annual_pct : s.alpha_pct, 2) + "%", c: "pos" },
+      n1(vs.SPY ? vs.SPY.beta : s.beta, 3),
+      vs.QQQ ? n1(vs.QQQ.beta, 3) : "—"] };
+  }));
+
+const t1 = st("t1plain"), isoS = (t1.iso || {}).SPY || {}, isoQ = (t1.iso || {}).QQQ || {};
+$("iso-para").innerHTML = `Alpha near ${n1((t1.vs && t1.vs.SPY ? t1.vs.SPY.alpha_annual_pct : 0), 0)}% a year with a beta of
+  ${n1(t1.vs && t1.vs.SPY ? t1.vs.SPY.beta : 0, 3)} invites the obvious objection: could the same
+  terminal wealth have come from simply levering the index? The table below answers
+  it with the receipt. For each benchmark it finds the smallest daily-rebalanced
+  exposure whose compounded path ends where the strategy ends, and reports what that
+  path's drawdown would have been. This is a scan, not a bisection — terminal wealth
+  is not monotone in leverage, because past some multiple the index's own drawdowns
+  compound faster than its gains, and "unreachable at any leverage" is itself an
+  answer. Matching the plain T+1 book takes ${isoS.reachable ? n1(isoS.k, 2) + "× SPY, at a " + n1(isoS.max_drawdown_pct) + "% drawdown" : "more than SPY can deliver"}
+  against the strategy's own ${n1(t1.max_dd_pct)}%, and on QQQ it is
+  ${isoQ.reachable ? n1(isoQ.k, 2) + "×" : "unreachable at any leverage"}.`;
+
+const ISOROWS = [];
+for (const k of ["best", "alt", "t1plain", "shipped"]) {
+  const s = st(k); if (!s.iso) continue;
+  for (const sym of ["SPY", "QQQ", "TQQQ"]) {
+    const iso = s.iso[sym]; if (!iso) continue;
+    ISOROWS.push({ cls: k === "t1plain" ? "hl" : "", cells: [
+      (C.labels[k] || k).split(" /")[0] + " vs " + sym,
+      iso.reachable ? n1(iso.k, 2) + "×" : `unreachable (best ${n1(iso.best_k, 2)}×)`,
+      iso.reachable ? { v: "−" + n1(iso.max_drawdown_pct) + "%", c: "neg" } : { v: "−" + n1(iso.max_drawdown_pct) + "%", c: "neg" },
+      iso.reachable ? n1(iso.vol_annual_pct) + "%" : "—",
+      { v: "−" + n1(s.max_dd_pct) + "%", c: "pos" }] });
+  }
+}
+table($("iso-table"), ["configuration vs index", "exposure needed", "its max DD", "its vol", "strategy max DD"], ISOROWS);
+
+$("conc-para").innerHTML = `The gate is real and it is not the tape. Verdict labels
+  shuffled within month never reproduce the spread; the edge does not grow with how
+  long an event has sat in a training corpus; the model had no retrieval channel; and
+  six of seven mechanical lookahead checks pass, with the seventh's failure making
+  the result better rather than worse. What the study does <em>not</em> support is
+  the framing it started with. Refusal was described as the source of the value, and
+  on these numbers refusal is merely the cheapest way to spend a directional signal:
+  the refused events pay ${sgn(mut("fade every non-agreement").t1.all)}bp when traded
+  against the tape instead of skipped, and never standing down beats the gate on
+  every axis measured — ${sgn(full.t1.all)}bp against ${sgn(H.gated)}bp per trade,
+  ${sgn((full.account || {}).total_pct, 1)}% against ${sgn(st("t1plain").total_pct, 1)}%
+  compounded. The strategy as shipped is the weakest configuration in this paper,
+  and the reason is its bracket, not its gate. None of this has been traded, the
+  after-hours fill it depends on has never been demonstrated on the live account,
+  and the two arms that would directly bound memorisation remain unrun.`;
+
+/* ------------------------------------------------------------ trade appendix */
+const TR = D.trades, TC = TR.cols;
+const COL = Object.fromEntries(TC.map((c, i) => [c, i]));
+$("appendix-para").innerHTML = `Every one of the ${int(TR.n)} scored events, taken and
+  declined. The declined rows are the point: a view that shows only executed trades
+  hides the half of the strategy that does the work. <em class="term">T+1</em> and
+  <em class="term">T+3</em> are the unbracketed returns in basis points;
+  <em class="term">shipped</em> is the same trade under the live 5% stop and 2×
+  target, with the exit that actually fired. Returns are shown for declined events
+  too — that is what the trade <em>would</em> have made had the gate allowed it.
+  Sort any column; filter with the controls.`;
+
+const HEAD = [["date", "date"], ["sym", "ticker"], ["dir", "verdict"], ["conf", "conf"],
+  ["guid", "guidance"], ["move", "reaction %"], ["run5d", "run-up %"], ["dvM", "$M/day"],
+  ["gated", "action"], ["t1", "T+1 bp"], ["t3", "T+3 bp"], ["shipped", "shipped bp"],
+  ["exit", "exit"], ["why", "reason / summary"]];
+const PAGE = 50;
+let sortKey = "date", sortDir = 1, page = 0, view = TR.rows;
+
+for (const [sel, col] of [["f-dir", "dir"], ["f-conf", "conf"], ["f-year", "date"]]) {
+  const vals = [...new Set(TR.rows.map((r) => col === "date" ? r[COL.date].slice(0, 4) : r[COL[col]]))].sort();
+  $(sel).insertAdjacentHTML("beforeend", vals.map((v) => `<option value="${v}">${v}</option>`).join(""));
+}
+
+function applyFilters() {
+  const q = $("f-text").value.trim().toLowerCase();
+  const taken = $("f-taken").value, dir = $("f-dir").value;
+  const conf = $("f-conf").value, yr = $("f-year").value;
+  view = TR.rows.filter((r) =>
+    (!q || r[COL.sym].toLowerCase().includes(q) || (r[COL.why] || "").toLowerCase().includes(q)
+      || (r[COL.summary] || "").toLowerCase().includes(q)) &&
+    (taken === "" || String(r[COL.gated]) === taken) &&
+    (!dir || r[COL.dir] === dir) && (!conf || r[COL.conf] === conf) &&
+    (!yr || r[COL.date].startsWith(yr)));
+  const i = COL[sortKey];
+  view = view.slice().sort((a, b) => {
+    const x = a[i], y = b[i];
+    if (typeof x === "number" && typeof y === "number") return (x - y) * sortDir;
+    return String(x).localeCompare(String(y)) * sortDir;
+  });
+  page = 0;
+  render();
+}
+
+function render() {
+  const pages = Math.max(1, Math.ceil(view.length / PAGE));
+  page = Math.min(page, pages - 1);
+  $("trade-head").innerHTML = HEAD.map(([k, label]) =>
+    `<th class="sortable" data-k="${k}" aria-sort="${sortKey === k ? (sortDir > 0 ? "ascending" : "descending") : "none"}" tabindex="0" role="button">${label}</th>`).join("");
+  $("trade-body").innerHTML = view.slice(page * PAGE, page * PAGE + PAGE).map((r) => {
+    const took = r[COL.gated] === 1;
+    const num = (v, d = 0) => `<td class="${cls(v)}">${sgn(v, d)}</td>`;
+    return `<tr>
+      <td>${r[COL.date]}</td><td><b>${r[COL.sym]}</b></td>
+      <td>${r[COL.dir]}</td><td>${r[COL.conf]}</td><td>${r[COL.guid]}</td>
+      ${num(r[COL.move], 1)}${num(r[COL.run5d], 1)}
+      <td>${r[COL.dvM] === null ? "—" : int(r[COL.dvM])}</td>
+      <td><span class="tag ${took ? "took" : "dec"}">${took ? "taken" : "declined"}</span></td>
+      ${num(r[COL.t1])}${num(r[COL.t3])}${num(r[COL.shipped])}
+      <td>${r[COL.exit]}</td>
+      <td class="wrap-cell" title="${(r[COL.summary] || "").replace(/"/g, "&quot;")}">${r[COL.why] || r[COL.summary].slice(0, 90) + "…"}</td>
+    </tr>`;
+  }).join("");
+  $("pg-count").textContent = `${int(view.length)} of ${int(TR.n)} events · ${int(view.filter((r) => r[COL.gated] === 1).length)} taken`;
+  $("pg-where").textContent = `page ${page + 1} / ${pages}`;
+  $("pg-prev").disabled = page === 0;
+  $("pg-next").disabled = page >= pages - 1;
+}
+
+$("trade-table").addEventListener("click", (e) => {
+  const th = e.target.closest("th.sortable"); if (!th) return;
+  const k = th.dataset.k;
+  sortDir = (k === sortKey) ? -sortDir : (["t1", "t3", "shipped", "move", "run5d", "dvM"].includes(k) ? -1 : 1);
+  sortKey = k;
+  applyFilters();
+});
+$("trade-table").addEventListener("keydown", (e) => {
+  if ((e.key === "Enter" || e.key === " ") && e.target.closest("th.sortable")) {
+    e.preventDefault(); e.target.click();
+  }
+});
+for (const id of ["f-text", "f-taken", "f-dir", "f-conf", "f-year"]) {
+  $(id).addEventListener("input", applyFilters);
+}
+$("f-reset").addEventListener("click", () => {
+  for (const id of ["f-text", "f-taken", "f-dir", "f-conf", "f-year"]) $(id).value = "";
+  applyFilters();
+});
+$("pg-prev").addEventListener("click", () => { page--; render(); window.scrollTo({ top: $("trade-table").offsetTop - 80 }); });
+$("pg-next").addEventListener("click", () => { page++; render(); window.scrollTo({ top: $("trade-table").offsetTop - 80 }); });
+applyFilters();
+
+/* Redraw the SVGs when the viewer flips theme — the charts read CSS custom
+   properties at draw time, so a theme change needs a repaint. */
+const repaint = () => { accHistRedraw(); drawCurve(); };
+function accHistRedraw() {
+  const b = D.audit.acceptance_et.filter((x) => x.n > 0);
+  const W = 720, H = 190, L = 96, R = 46, T = 6, B = 26;
+  const max = Math.max(...b.map((x) => x.n)), bh = (H - T - B) / b.length;
+  const ok = (band) => band === "16:00-16:05" || band === "16:05-16:20";
+  $("acc-hist").innerHTML = svg(W, H, b.map((x, i) => {
+    const y = T + i * bh, w = (W - L - R) * (x.n / max);
+    return `<rect x="${L}" y="${y + 3}" width="${Math.max(w, 1)}" height="${bh - 6}" fill="${ok(x.band) ? cssv("--s3") : cssv("--neg")}" opacity="${ok(x.band) ? .9 : .8}"></rect>
+      <text x="${L - 8}" y="${y + bh / 2 + 3}" text-anchor="end" font-size="10" fill="${cssv("--muted")}" font-family="${cssv("--mono")}">${x.band}</text>
+      <text x="${L + Math.max(w, 1) + 6}" y="${y + bh / 2 + 3}" font-size="10" fill="${cssv("--ink")}" font-family="${cssv("--mono")}">${x.n}</text>`;
+  }).join("") + `<text x="${L}" y="${H - 8}" font-size="10" fill="${cssv("--muted")}" font-family="${cssv("--mono")}">green = public before the 16:20 entry · red = not</text>`);
+}
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", repaint);
+new MutationObserver(repaint).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+</script>

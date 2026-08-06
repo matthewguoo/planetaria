@@ -399,6 +399,7 @@ def account(p: pd.DataFrame, ret: np.ndarray, horizon: np.ndarray,
         "taken": int(live.sum()), "avg_concurrent": round(avg_concurrent, 2),
         "weight_pct": round(weight * 100, 2),
         "peak_concurrent": int(occupancy.max()),
+        "daily": daily,
         "total_pct": (equity[-1] - 1) * 100,
         "cagr_pct": (equity[-1] ** (1 / years) - 1) * 100,
         "max_dd_pct": mdd * 100,
@@ -412,7 +413,7 @@ def account(p: pd.DataFrame, ret: np.ndarray, horizon: np.ndarray,
 def stage_best(args) -> None:
     """Joint search over horizon x stop x target, chosen on 2021-23 and
     scored on 2024-26, then compounded through the calendar."""
-    from research_llm_contamination import _spy_daily
+    from research_llm_contamination import _iso_return_leverage, _spy_daily
 
     if not PATHS.exists():
         raise SystemExit("run the `paths` stage first")
@@ -527,11 +528,59 @@ def stage_best(args) -> None:
     spy_curve = (spy_close / spy_close[0]).tolist()
     series, stats_out = {"spy": [round(v, 5) for v in spy_curve]}, {}
     names = {}
+    # "Is this just index exposure?" is a different question for SPY, for the
+    # NASDAQ-100 (earnings reactions concentrate in tech, so QQQ is the
+    # benchmark the strategy could plausibly be a proxy for) and for TQQQ —
+    # if the returns were levered beta, 3x QQQ is what they would look like,
+    # drawdown included. One single-factor regression each, plus the receipt:
+    # the smallest daily-rebalanced exposure that ends where the strategy
+    # ends, and what its drawdown would have been.
+    bench: dict[str, dict] = {}
+    for sym in ("SPY", "QQQ", "TQQQ"):
+        b = _spy_daily(lo, hi + pd.Timedelta(days=14).to_pytimedelta(), sym)
+        px = dict(zip(b["date"], b["close"]))
+        line, last = [], None
+        for d in sessions:
+            last = px.get(d, last)
+            line.append(last)
+        if line[0] is None:
+            continue
+        bench[sym] = {"curve": [v / line[0] for v in line],
+                      "ret": [0.0] + [line[i] / line[i - 1] - 1
+                                      for i in range(1, len(line))]}
+
     for key, r in picks:
         _, a = results[key]
         series[key] = [round(v, 5) for v in a["equity"]]
         names[key] = f"{r['horizon']} / stop {r['stop']} / target {r['target']}"
-        stats_out[key] = {k: v for k, v in a.items() if k != "equity"}
+        stats_out[key] = {k: v for k, v in a.items()
+                          if k not in ("equity", "daily")}
+        daily = np.asarray(a["daily"])
+        stats_out[key]["vs"], stats_out[key]["iso"] = {}, {}
+        for sym, b in bench.items():
+            beta, alpha_d = np.polyfit(np.asarray(b["ret"]), daily, 1)
+            stats_out[key]["vs"][sym] = {
+                "alpha_annual_pct": round(float(alpha_d) * 252 * 100, 2),
+                "beta": round(float(beta), 3),
+                "corr": round(float(np.corrcoef(np.asarray(b["ret"]), daily)[0, 1]), 3)}
+            stats_out[key]["iso"][sym] = _iso_return_leverage(
+                b["ret"], a["equity"][-1])
+    for sym, b in bench.items():
+        if sym == "SPY":
+            continue
+        c = np.asarray(b["curve"])
+        pk = np.maximum.accumulate(c)
+        rr = np.asarray(b["ret"])
+        series[sym.lower()] = [round(float(v), 5) for v in c]
+        names[sym.lower()] = f"{sym} buy & hold"
+        stats_out[sym.lower()] = {
+            "total_pct": float((c[-1] - 1) * 100),
+            "cagr_pct": float((c[-1] ** (252 / len(sessions)) - 1) * 100),
+            "max_dd_pct": float((1 - c / pk).max()) * 100,
+            "sharpe": float(rr.mean() / rr.std(ddof=1) * np.sqrt(252)),
+            "alpha_pct": 0.0,
+            "beta": round(float(np.polyfit(np.asarray(bench["SPY"]["ret"]),
+                                           rr, 1)[0]), 3)}
     peak = np.maximum.accumulate(np.asarray(spy_curve))
     stats_out["spy"] = {
         "total_pct": (spy_curve[-1] - 1) * 100,
