@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import BenchmarkChart from "./BenchmarkChart";
 import CallsPanel from "./CallsPanel";
 import DecisionTape from "./DecisionTape";
 import EquityCurves from "./EquityCurves";
@@ -188,8 +189,11 @@ export default function LabApp() {
           </div>
         </div>
 
-        <div className="flex min-h-0 flex-col gap-px bg-bb-border">
-          <div className="bg-bb-panel">
+        <div className="flex min-h-0 flex-col gap-px overflow-auto bg-bb-border">
+          <div className="shrink-0 bg-bb-panel">
+            <BenchmarkChart />
+          </div>
+          <div className="shrink-0 bg-bb-panel">
             <EquityCurves sim={sim} />
             <div className="flex flex-wrap items-center gap-3 border-t border-bb-border px-3 py-1.5 text-[11px]">
               <label className="flex items-center gap-1.5">
@@ -220,7 +224,7 @@ export default function LabApp() {
               </span>
             </div>
           </div>
-          <div className="min-h-0 flex-1 bg-bb-panel">
+          <div className="min-h-[220px] shrink-0 bg-bb-panel">
             <TradesPanel sim={sim} plans={stream?.plans ?? []} />
           </div>
         </div>
