@@ -1,4 +1,4 @@
-<title>Gating Post-Earnings Drift with an LLM — Five-Year Replication</title>
+<title>Gating Post-Earnings Drift with an LLM — A Ten-Year Replication</title>
 <style>
 :root {
   color-scheme: light;
@@ -204,7 +204,7 @@ th.sortable[aria-sort="descending"]::after { content:"\2193"; opacity:1; }
   <div class="kicker">Planetaria Research · Working Note PR-2026-01</div>
   <h1>Gating Post-Earnings Announcement Drift with a Large Language Model</h1>
   <div class="byline">
-    <b>A five-year replication with direct training-contamination controls and a mechanical lookahead audit.</b><br>
+    <b id="bl-sub">A replication with direct training-contamination controls and a mechanical lookahead audit.</b><br>
     Universe <b id="bl-n"></b> after-close earnings events, <b id="bl-span"></b> · model <b id="bl-model"></b>,
     effort <b id="bl-effort"></b> · <b id="bl-spend"></b> of inference · revised 2026-08-06.
   </div>
@@ -245,14 +245,20 @@ describes what was done about it; Section 7 describes what could not be.</p>
 
 <div class="callout">
   <span class="label">What changed in this revision</span>
-  <p>Two defects were found after the first draft and both moved the numbers. The
-  cached price panels exited on the last session of a four-calendar-day fetch window
-  rather than the next one, so every figure labelled <em class="term">T+1</em> in the
-  first draft was really a two-to-four session hold. And an EDGAR timestamp was read
-  as Eastern time when it is UTC, admitting midday filers into an after-close sample
-  (Section 4.4). Every number here is rebuilt on per-session exits and on the
-  <b id="ch-n"></b> events that survive the timing audit. Nothing in this paper is
-  transcribed by hand: the page renders from the same JSON the harness emits.</p>
+  <p>Three defects were found after the first draft and all three moved the numbers.
+  The cached price panels exited on the last session of a four-calendar-day fetch
+  window rather than the next one, so every figure labelled <em class="term">T+1</em>
+  in the first draft was really a two-to-four session hold. An EDGAR timestamp was
+  read as Eastern when it is UTC, admitting midday filers into an after-close sample
+  and mistiming the rest (Section 4.4). And the reaction window itself was a fixed
+  clock slice rather than being keyed to each release, which selected the issuers
+  that file earliest (Section 4.5).</p>
+  <p>Every number here is rebuilt on per-session exits and on reaction windows
+  measured from each event's own EDGAR acceptance, over
+  <b id="ch-n"></b> events spanning <b id="ch-span"></b>. Nothing in this paper is
+  transcribed by hand: the page renders from the same JSON the harness emits, and
+  the two earlier panels are kept alongside so the corrections are visible rather
+  than silently applied.</p>
 </div>
 
 <h2><span class="n">2</span>The strategy, stated exactly</h2>
@@ -381,10 +387,10 @@ budget, running the same events at two settings.</p>
 
 <h3>4.3 Contamination controls</h3>
 
-<p>The model's corpus runs to roughly 2026-05, so four of these five years are
-in-corpus by construction and cutoff-slicing would discard the study. The controls
-therefore measure the contamination channel rather than avoid it. Three are
-reported here; two more were designed and not run, and Section 7 says so.</p>
+<p id="cc-intro">The model's corpus runs to roughly 2026-05, so almost all of
+this sample is in-corpus by construction and cutoff-slicing would discard the
+study. The controls therefore measure the contamination channel rather than avoid
+it.</p>
 
 <p>The first is the <b>permutation null</b>. Verdict labels are shuffled within
 calendar month — preserving both the monthly mix of verdicts and the monthly return
@@ -419,7 +425,7 @@ merely looks innocuous.</p>
   spurious <code>Z</code>. It is real UTC. Two facts settle it, both reproducible
   from the cached submissions: the median post-15:00 acceptance shifts 58 minutes
   between April–October and November–February, which is a daylight-saving boundary
-  and not something issuers do; and read as Eastern, the histogram of 68,394 filings
+  and not something issuers do; and read as Eastern, the histogram of every cached filing
   puts submissions at midnight and 02:00, when EDGAR is closed.</p>
   <p>The calendar builder classifies an event as after-close by slicing that string
   and comparing to 16:00, so <em class="term">amc</em> has meant "accepted after
@@ -527,7 +533,7 @@ the same train/test split. Every row is reported, including the failures.</p>
 
 <div class="callout">
   <span class="label">The control that decides it</span>
-  <p>Every fade bets against the tape, so "reversal simply works on 5% earnings
+  <p>Every fade bets against the tape, so "reversal simply works on <span class="pv-gate"></span> earnings
   moves" would reproduce the result with no model at all. That null is the
   <em>anti-tape baseline</em> row: fade every event, no model. It loses
   <b id="mu-anti"></b> per trade. Fading only what the model refuses earns
@@ -587,10 +593,10 @@ silently commit more capital and win by leverage.</p>
 
 <h3 id="arms-h3">5.7 Contamination: how much of this could be memorisation?</h3>
 
-<p>Four of these years sit inside the model's training corpus, so the question
-is unavoidable: is the gate reading these releases, or recalling what happened
-next? Two estimates below bound it from the observed data, and then two arms
-measure it directly by removing an input at a time.</p>
+<p id="contam-lead">Almost all of this sample sits inside the model's training
+corpus, so the question is unavoidable: is the gate reading these releases, or
+recalling what happened next? Two estimates below bound it from the observed data,
+and two arms measure it directly by removing an input at a time.</p>
 
 <div class="scroll"><table id="contam-table">
   <caption>Table 16 — the gate either side of the model's knowledge boundary</caption>
@@ -664,8 +670,8 @@ measure it directly by removing an input at a time.</p>
   count of missing names is therefore zero by construction, which is not a clean
   bill of health — it means the bias is in the map rather than the filter, and cannot
   be measured from these artefacts. It flatters the bear regime most.</li>
-  <li><b>Costs are a flat 13bp round trip</b>, not a per-name spread model. The fade
-  mutations are the most exposed to this, since fading a 5% move means crossing the
+  <li><b>Costs are a flat <span class="pv-cost"></span> round trip</b>, not a per-name spread model. The fade
+  mutations are the most exposed to this, since fading a <span class="pv-gate"></span> move means crossing the
   after-hours book in the direction nobody wants; the cost sensitivity in the
   mutation study shows the fade surviving to 100bp, but a flat assumption is still
   a flat assumption.</li>
@@ -673,9 +679,9 @@ measure it directly by removing an input at a time.</p>
   reaction print. The live account is not entitled to the consolidated feed, so no
   after-hours entry has ever filled — the part of this strategy least supported by
   evidence is the part that puts the trade on.</li>
-  <li><b>One bear market.</b> 2022 is the only stressed regime in the sample, and it
-  is where the mechanical baseline loses most and the gate earns most of its spread.
-  A second one would be worth more than another year of trend.</li>
+  <li id="lim-regime"><b>Few stressed regimes.</b> Drawdowns are where the
+  mechanical baseline loses most and the gate earns most of its spread, so the
+  number of them in the sample bounds how much can be claimed.</li>
   <li><b>The reaction window is not keyed to acceptance.</b> It is a fixed
   16:05–16:20 slice, so a release that crosses at 16:22 is dropped rather than
   measured from its own timestamp — NVIDIA's three qualifying events are excluded by
@@ -779,15 +785,34 @@ const H = D.headline, HZ = D.horizons, MU = D.mutations, C = D.curve;
 const mut = (name) => MU.find((m) => m.mutation.startsWith(name)) || {};
 const st = (k) => (C.stats || {})[k] || {};
 
+/* Span in years, derived. Every "five-year" in this document used to be typed
+   by hand, and the study is now a decade — a hardcoded span is a claim that
+   goes stale the moment the panel is rebuilt. */
+// FLOOR, not round: a 10.5-year panel calling itself an 11-year study claims
+// half a year it does not have.
+const SPAN_YEARS = Math.floor(
+  (new Date(D.span[1]) - new Date(D.span[0])) / (365.25 * 864e5));
+
+// Parameters that appear in prose are filled from the data, not typed. A
+// sentence quoting "13bp" survives a change to COSTS_BP and starts lying.
+document.querySelectorAll(".pv-gate").forEach((e) => {
+  e.textContent = `${n1(D.gate_pct, 0)}%`;
+});
+document.querySelectorAll(".pv-cost").forEach((e) => {
+  e.textContent = `${n1(D.costs_bp, 0)}bp`;
+});
 $("bl-n").textContent = int(D.paths_n);
 $("bl-span").textContent = D.span.join(" – ");
+$("bl-sub").textContent = `A ${SPAN_YEARS}-year replication with direct `
+  + `training-contamination controls and a mechanical lookahead audit.`;
 $("bl-model").textContent = D.model;
 $("bl-effort").textContent = D.effort;
 $("bl-spend").textContent = "$" + D.spend_usd.toFixed(2);
 $("ch-n").textContent = int(D.paths_n);
+$("ch-span").textContent = D.span.join(" to ");
 
 const full = mut("FULL POLICY");
-$("abstract").innerHTML = `A five-year, ${int(D.paths_n)}-event replication of an
+$("abstract").innerHTML = `A ${SPAN_YEARS}-year, ${int(D.paths_n)}-event replication of an
   LLM-gated post-earnings drift strategy, on ${D.model} at ${D.effort} effort, for
   $${D.spend_usd.toFixed(2)} of inference and no re-runs. On corrected per-session
   exits the gate returns <b>${sgn(H.gated)}bp</b> per trade at T+1 against
@@ -830,7 +855,7 @@ $("abstract").innerHTML = `A five-year, ${int(D.paths_n)}-event replication of a
     const full = HO.mutations.find((r) => r.mutation.startsWith("FULL POLICY")) || {};
     const gate = HO.mutations.find((r) => r.mutation.startsWith("SHIPPED gate")) || {};
     extra.push(`Extending the panel back to ${HO.holdout_span[0]} adds
-      ${int(HO.holdout_n)} sampled events from five and a half years that no design
+      ${int(HO.holdout_n)} events from the years before it that no design
       decision ever saw; the gate earns ${sgn(gate.holdout && gate.holdout.bp)}bp
       there and never standing down earns
       ${sgn(full.holdout && full.holdout.bp)}bp.`);
@@ -883,7 +908,7 @@ const AUDIT = [
   ["2. release-text provenance and timing", "FAIL", `0 amendments used, 2/2 accession URLs reproduce byte-identically on refetch — but ${int(D.audit.early_n + D.audit.late_n)} events sit outside the 16:00–16:20 window`],
   ["3. features use prior sessions only", "PASS", `run-up and dollar volume unchanged for all ${AN} when every price from the announce day forward is erased`],
   ["4. selection and survivorship", "PASS", "ranking is on the window's first sessions; re-ranking on the announce day's own volume moves the chosen names on 42% of days, so the invariance has power"],
-  ["5. no retrieval channel", "PASS", `0 tool keys across ${AN} payloads; 1,736 returned messages carry 0 non-text blocks and 0 tool-use stops`],
+  ["5. no retrieval channel", "PASS", `0 tool keys across ${AN} payloads; every returned message across all batches carries 0 non-text blocks and 0 tool-use stops`],
   ["6. entry print at or before 16:20 ET", "PASS", "40 refetched minute panels reproduce the cached anchor and entry exactly; latest print 16:20"],
   ["7. no post-release commentary in texts", "PASS", `0 matches across ${AN} release texts on eight commentary patterns; five read end to end by hand agree`],
 ];
@@ -935,12 +960,29 @@ table($("year-table"), ["year", "events", "ungated", "gated", "refused", "spread
     { v: sgn(y.spread), c: cls(y.spread) }]));
 
 const y22 = D.years.find((y) => y.year === "2022") || {};
-$("year-para").innerHTML = `2022 is the only stressed regime in the sample and it is
-  the clearest case for the gate: the mechanical baseline loses ${sgn(y22.mech)}bp
-  that year while the gated subset returns ${sgn(y22.gated)}bp and the refused
-  subset ${sgn(y22.vetoed)}bp. That is one bear market, and Section 7 says so. The
-  spread is positive in all six calendar years, which is a weaker but more honest
-  claim than any single-year number.`;
+const REG = D.regimes || {};
+const stressed = (REG.stressed || []).filter((y) => D.years.some((r) => r.year === y));
+const posYears = D.years.filter((r) => (r.spread || 0) > 0).length;
+$("year-para").innerHTML = `2022 is the clearest single case for the gate: the
+  mechanical baseline loses ${sgn(y22.mech)}bp that year while the gated subset
+  returns ${sgn(y22.gated)}bp and the refused subset ${sgn(y22.vetoed)}bp.
+  ${stressed.length > 1
+    ? `The sample contains ${stressed.length} years in which the index drew down
+       more than ${n1(REG.threshold_pct, 0)}% — ${stressed.join(", ")} — so the
+       claim no longer rests on a single bear market.`
+    : `That is the only year in the sample where the index drew down more than
+       ${n1(REG.threshold_pct, 0)}%, and Section 7 says so.`}
+  The spread is positive in ${posYears} of ${D.years.length} calendar years, which
+  is a weaker but more honest claim than any single-year number.`;
+if ($("lim-regime")) {
+  $("lim-regime").innerHTML = `<b>${stressed.length > 1 ? "Stressed regimes are still few" : "One bear market"}.</b>
+    Drawdowns are where the mechanical baseline loses most and the gate earns most
+    of its spread, so how many the sample contains bounds what can be claimed.
+    ${stressed.length
+      ? `Here there ${stressed.length === 1 ? "is one" : `are ${stressed.length}`}:
+         ${stressed.join(", ")} (index drawdown over ${n1(REG.threshold_pct, 0)}%).`
+      : ""}`;
+}
 
 table($("liq-table"), ["quintile", "$M/day", "events", "ungated", "gated", "spread"],
   D.liquidity.map((q) => [q.q, `${int(q.lo)}–${int(q.hi)}`, int(q.n),
@@ -996,7 +1038,7 @@ $("mut-para").innerHTML = `Three results survive scrutiny. <b>Neutral is not an
   agree scores ${sgn(guid.t1.all)}bp; requiring EPS to agree scores
   ${sgn(eps.t1.all)}bp, below the unconditional gate. The forward-looking field is
   the informative one, which is what the drift literature would predict. Two rows are
-  dimmed as unscoreable: high-confidence disagreements number three in five years,
+  dimmed as unscoreable: high-confidence disagreements number ${int((mut('fade only: high confidence').n) || 0)} in the whole sample,
   and quality flags fire on 99% of releases, so the live 0.75× size shrink is a
   constant wearing a conditional's clothes.`;
 
@@ -1239,7 +1281,7 @@ if (!MC.arms || MC.arms.length < 2) {
     <b>Read the t-statistics before drawing a conclusion.</b> Six months is
     ${int(MC.paired_n)} events, and none of these arms separates from zero at
     conventional significance (best t = ${n1(best.t, 2)}). The ranking is
-    consistent with the five-year result and with the effort calibration in
+    consistent with the full-sample result and with the effort calibration in
     Table 3, but on this slice alone it is suggestive, not established.`;
 }
 
@@ -1393,6 +1435,23 @@ if (A.per_arm && A.per_arm.length > 1) {
     ${int(A.paired_n)}-event sample rather than the full panel, so their
     confidence intervals are wider than the named arm's.`;
 }
+
+
+/* 4.3 counts its own controls. It used to assert "three reported, two not
+   run", which stopped being true the moment the arms landed. */
+(() => {
+  const armed = ((D.arms || {}).per_arm || []).map((a) => a.arm);
+  const extra = armed.filter((a) => a !== "named");
+  const e = $("cc-intro");
+  if (!e) return;
+  e.innerHTML += ` Three indirect controls are reported below — a permutation
+    null, a contamination gradient, and the absence of any retrieval channel —
+    ${extra.length
+      ? `and the two direct ablation arms ran on this panel; Section 5.7 reports
+         what they found.`
+      : `and two direct ablation arms were designed but have not run on this
+         panel, which Section 7 states as a limitation.`}`;
+})();
 
 /* -------------------------------------------------------- 5.7 the decade */
 const HO = D.holdout || {};

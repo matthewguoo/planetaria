@@ -41,7 +41,7 @@ KEEP = ("model", "effort", "universe_n", "scored_n", "paths_n", "gated_n",
         # its table, which looks exactly like "the data has not been computed
         # yet". Anything new in build_report_data must be listed.
         "funnel_v2", "panel_compare", "reaction_shape", "model_compare",
-        "holdout", "arms", "contamination")
+        "holdout", "arms", "contamination", "regimes")
 
 TRADE_COLS = ["date", "sym", "dir", "conf", "guid", "move", "run5d", "dvM",
               "gated", "why", "t1", "t3", "shipped", "exit", "summary"]

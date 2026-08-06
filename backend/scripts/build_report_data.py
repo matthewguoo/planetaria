@@ -27,6 +27,7 @@ import argparse
 import json
 import math
 import sys
+from datetime import date, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -413,6 +414,36 @@ def _load_results_local():
     return _load_results()
 
 
+STRESS_DD_PCT = 15.0     # a year the index gave back this much is a stress test
+
+
+def regimes(span: list[str]) -> dict:
+    """Which years in the sample were actually stressed, measured rather than
+    remembered.
+
+    The first draft asserted "2022 is the only bear market in the sample",
+    which was true of a 2021-2026 panel and stops being true the moment the
+    decade extension lands — 2018's fourth quarter and 2020's crash are both
+    in it. Per-year max drawdown on SPY decides it, so the claim tracks the
+    panel instead of the author's memory.
+    """
+    lo = date.fromisoformat(span[0])
+    hi = date.fromisoformat(span[1])
+    spy = _spy_daily(lo, hi + timedelta(days=7)).sort_values("date")
+    if spy.empty:
+        return {}
+    spy["year"] = [d.year for d in spy["date"]]
+    out = []
+    for year, g in spy.groupby("year"):
+        c = g["close"].to_numpy()
+        dd = float((1 - c / np.maximum.accumulate(c)).max()) * 100
+        out.append({"year": str(year), "max_dd_pct": _f(dd),
+                    "ret_pct": _f((c[-1] / c[0] - 1) * 100),
+                    "stressed": bool(dd >= STRESS_DD_PCT)})
+    return {"threshold_pct": STRESS_DD_PCT, "years": out,
+            "stressed": [r["year"] for r in out if r["stressed"]]}
+
+
 def reaction_shape() -> dict:
     """How much of the measured move is the release, and how much preceded it.
 
@@ -558,6 +589,7 @@ def main() -> None:
         "reaction_shape": reaction_shape(),
         "model_compare": model_compare(),
         "contamination": contamination_estimate("v1"),
+        "regimes": regimes([str(min(p["edate"])), str(max(p["edate"]))]),
     }
 
     # --- headline, on CORRECTED per-session exits -------------------------
