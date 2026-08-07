@@ -52,7 +52,9 @@ KEEP = ("model", "effort", "universe_n", "scored_n", "paths_n", "gated_n",
         # build: not computed" over a fully computed result.
         "legacy",
         # The early/late split behind Section 5.5's callout.
-        "early_late")
+        "early_late",
+        # Section 5.5's position-limit sweep.
+        "capacity")
 
 TRADE_COLS = ["date", "sym", "dir", "conf", "guid", "move", "run5d", "dvM",
               "gated", "why", "t1", "t3", "shipped", "exit", "summary"]

@@ -789,6 +789,62 @@ def holdout(p: pd.DataFrame, n: int, early_cut: str = HOLDOUT_CUT) -> dict:
     return out
 
 
+def capacity(args) -> dict:
+    """What a hard position limit costs, swept over the limit.
+
+    The rest of the account simulation sizes to AVERAGE concurrency and takes
+    every signal, which is the right way to compare holding periods but
+    understates what has to be funded: earnings cluster into season, so the
+    average is not the peak. This sweep fixes the peak instead — n positions
+    at gross/n each, never more — and lets the constraint express itself as
+    skipped events, which is what it would be in an account.
+    """
+    from research_holding_period import SLOTS, account_slots, mutation_sides
+    from research_slots import FULL, _panel
+
+    p = _panel(getattr(args, "effort", "medium"),
+               getattr(args, "all_events", False), "v2")
+    side = mutation_sides(p).get(FULL)
+    if side is None:
+        return {}
+    live = side != 0
+    spy = _spy_daily(min(p["edate"]),
+                     max(p["edate"]) + pd.Timedelta(days=14).to_pytimedelta())
+    spy = spy.sort_values("date")
+    sessions, spy_close = spy["date"].to_list(), spy["close"].to_numpy()
+    hz = np.where(np.isin(p["guidance"].to_numpy(), ["raised", "lowered"]), 3, 1)
+    ret, _ = resolve(p.assign(side=side), hz, None, None)
+
+    rows = []
+    for n_slots in (2, 3, 4, 5, 6, 7, 8, 10, 12, 16, 24):
+        a = account_slots(p[live].reset_index(drop=True), ret[live], hz[live],
+                          sessions, spy_close, n_slots=n_slots, gross=1.0)
+        rows.append({"slots": n_slots, "weight_pct": _f(a["weight_pct"]),
+                     "taken": a["taken"], "skipped": a["skipped"],
+                     "skip_pct": _f(a["skip_pct"]),
+                     "deployed_pct": _f(a["deployed_pct"]),
+                     "cagr_pct": _f(a["cagr_pct"]),
+                     "sharpe": _f(a["sharpe"]),
+                     "max_dd_pct": _f(a["max_dd_pct"]),
+                     "chosen": n_slots == SLOTS})
+    # Peak concurrency the UNCONSTRAINED book would have reached, which is the
+    # number the slot ceiling is replacing and the reason it is needed.
+    index = {d: i for i, d in enumerate(sessions)}
+    ent = np.array([index.get(d, -1) for d in p["edate"]])
+    occ = np.zeros(len(sessions))
+    for j in np.where(live & (ent >= 0))[0]:
+        occ[ent[j]:min(ent[j] + int(hz[j]), len(sessions) - 1) + 1] += 1
+    act = occ[occ > 0]
+    return {"rows": rows, "chosen": SLOTS,
+            "unconstrained": {"mean": _f(act.mean()), "peak": int(act.max()),
+                              "p90": _f(np.percentile(act, 90)),
+                              # What a book sized to 30% AVERAGE would carry
+                              # on its busiest session. This is the leverage
+                              # the slot ceiling removes.
+                              "peak_gross_at_30_pct":
+                                  _f(30.0 / act.mean() * act.max())}}
+
+
 def early_late(curve: dict, years: list) -> dict:
     """The decade split at the year the strategy stops trailing SPY.
 
@@ -1075,6 +1131,7 @@ def main() -> None:
             data[f"curve_{tag}"] = json.loads(path.read_text(encoding="utf-8"))
 
     data["early_late"] = early_late(data.get("curve_raw") or {}, data["years"])
+    data["capacity"] = capacity(args)
 
     # The decade extension, framed as the holdout it is.
     data["holdout"] = holdout(p, n)

@@ -318,6 +318,17 @@ th.sortable[aria-sort="descending"]::after { content:"\2193"; opacity:1; }
 
 <div class="scroll"><table id="hero-table"></table></div>
 
+<div class="callout" id="spec-block">
+  <span class="label">The flagship, stated in full</span>
+  <p>Every parameter behind the figure above, so that the result can be
+  reproduced or refuted without reading the sections that derive them. Each
+  line is defended where it is cited.</p>
+  <div class="scroll"><table id="flagship-spec-table">
+    <caption><b>Table 1:</b> The flagship configuration in full</caption>
+  </table></div>
+  <p id="spec-note"></p>
+</div>
+
 <h2><span class="n">1</span> What is being tested</h2>
 
 <p>When a company reports earnings after the closing bell, its shares reprice in the
@@ -472,7 +483,7 @@ next close without a bracket. The gap between those two is one of the larger
 findings in the study.</p>
 
 <div class="scroll"><table id="spec-table">
-  <caption><b>Table 1:</b> The live configuration, read from <code>app/strategies/earnings_reaction.py</code></caption>
+  <caption><b>Table 2:</b> The live configuration, read from <code>app/strategies/earnings_reaction.py</code></caption>
 </table></div>
 
 <h2><span class="n">3</span> Data and universe</h2>
@@ -484,7 +495,7 @@ last after-hours print in the fifteen minutes following 16:05 ET; the exit is
 re-derived per session from minute bars.</p>
 
 <div class="scroll"><table id="funnel-table">
-  <caption><b>Table 2:</b> Selection cascade, from every after-close release to what is scored</caption>
+  <caption><b>Table 3:</b> Selection cascade, from every after-close release to what is scored</caption>
 </table></div>
 
 <p id="funnel-note"></p>
@@ -514,7 +525,7 @@ effort and once at <em class="term">medium</em>, and the two verdicts are compar
 event by event.</p>
 
 <div class="scroll"><table id="effort-table">
-  <caption><b>Table 3:</b> Effort A/B, identical releases scored twice</caption>
+  <caption><b>Table 4:</b> Effort A/B, identical releases scored twice</caption>
 </table></div>
 
 <p id="effort-para"></p>
@@ -562,7 +573,7 @@ tested that way, because a perturbation proof cannot be fooled by a variable tha
 merely looks innocuous.</p>
 
 <div class="scroll"><table id="audit-table">
-  <caption><b>Table 4:</b> Lookahead audit, <code>scripts/verify_no_lookahead.py</code></caption>
+  <caption><b>Table 5:</b> Lookahead audit, <code>scripts/verify_no_lookahead.py</code></caption>
 </table></div>
 
 <div class="callout">
@@ -610,7 +621,7 @@ timestamp.</p>
 <p id="head-para"></p>
 
 <div class="scroll"><table id="horizon-table">
-  <caption><b>Table 5:</b> Holding period, basis points per trade, no bracket</caption>
+  <caption><b>Table 6:</b> Holding period, basis points per trade, no bracket</caption>
 </table></div>
 
 <p id="horizon-para"></p>
@@ -618,7 +629,7 @@ timestamp.</p>
 <h3>5.2 By year and by liquidity</h3>
 
 <div class="scroll"><table id="year-table">
-  <caption><b>Table 6:</b> Per calendar year</caption>
+  <caption><b>Table 7:</b> Per calendar year</caption>
 </table></div>
 
 <p id="year-para"></p>
@@ -629,7 +640,7 @@ timestamp.</p>
 <p id="liq-intro"></p>
 
 <div class="scroll"><table id="liq-floor-table">
-  <caption><b>Table 7:</b> Raising the liquidity floor, on events already scored</caption>
+  <caption><b>Table 8:</b> Raising the liquidity floor, on events already scored</caption>
 </table></div>
 
 <p id="liq-floor-para"></p>
@@ -644,7 +655,7 @@ timestamp.</p>
 </div>
 
 <div class="scroll"><table id="liq-cost-table">
-  <caption><b>Table 8:</b> The same quintiles, separating the quoted spread from the signal</caption>
+  <caption><b>Table 9:</b> The same quintiles, separating the quoted spread from the signal</caption>
 </table></div>
 </div>
 
@@ -654,7 +665,7 @@ timestamp.</p>
 <p id="lf-intro"></p>
 
 <div class="scroll"><table id="lf-table">
-  <caption><b>Table 9:</b> Gated return by year, split on whether a fixed
+  <caption><b>Table 10:</b> Gated return by year, split on whether a fixed
   <code>[16:00, 16:20]</code> window could have measured the event</caption>
 </table></div>
 
@@ -662,7 +673,7 @@ timestamp.</p>
 </div>
 
 <div class="scroll"><table id="liq-table">
-  <caption><b>Table 10:</b> By prior-session dollar-volume quintile</caption>
+  <caption><b>Table 11:</b> By prior-session dollar-volume quintile</caption>
 </table></div>
 
 <h3>5.3 The stop-loss is the problem</h3>
@@ -670,7 +681,7 @@ timestamp.</p>
 <p id="bracket-para"></p>
 
 <div class="scroll"><table id="bracket-table">
-  <caption><b>Table 11:</b> Bracket surface, gated trades, T+1 time stop</caption>
+  <caption><b>Table 12:</b> Bracket surface, gated trades, T+1 time stop</caption>
 </table></div>
 
 <h3>5.4 Gate mutations</h3>
@@ -696,7 +707,7 @@ same train/test split. Every row is reported, including the failures.</p>
 </div>
 
 <div class="scroll"><table id="mut-table">
-  <caption><b>Table 12:</b> Gate mutations. bp per trade; train 2021-23, test 2024-26</caption>
+  <caption><b>Table 13:</b> Gate mutations. bp per trade; train 2021-23, test 2024-26</caption>
 </table></div>
 
 <p id="mut-para"></p>
@@ -712,6 +723,17 @@ arrives at lead the chart; the gated configurations follow, so the cost of
 standing down is visible as a gap between curves rather than as a claim in
 prose.</p>
 
+<div class="callout">
+  <span class="label">Average exposure is not the exposure an account must fund</span>
+  <p id="cap-para"></p>
+</div>
+
+<div class="scroll"><table id="cap-table">
+  <caption><b>Table 14:</b> Position limit against coverage and deployed capital</caption>
+</table></div>
+
+<p id="cap-choice"></p>
+
 <div class="fig">
   <div class="legend" id="curve-legend"></div>
   <div id="curve"></div>
@@ -722,7 +744,7 @@ prose.</p>
 </div>
 
 <div class="scroll"><table id="curve-table">
-  <caption><b>Table 13:</b> Account simulation against SPY, QQQ and 3× QQQ</caption>
+  <caption><b>Table 15:</b> Account simulation against SPY, QQQ and 3× QQQ</caption>
 </table></div>
 
 <p id="curve-cost"></p>
@@ -737,7 +759,7 @@ prose.</p>
 <p id="iso-para"></p>
 
 <div class="scroll"><table id="iso-table">
-  <caption><b>Table 14:</b> Iso-return leverage: the cheapest index exposure that ends where the strategy ends</caption>
+  <caption><b>Table 16:</b> Iso-return leverage: the cheapest index exposure that ends where the strategy ends</caption>
 </table></div>
 
 <h3 id="model-h3">5.6 Which model, and how much reasoning?</h3>
@@ -753,7 +775,7 @@ prose.</p>
 </div>
 
 <div class="scroll"><table id="model-table">
-  <caption><b>Table 15:</b> Model and effort, identical events and identical entries</caption>
+  <caption><b>Table 17:</b> Model and effort, identical events and identical entries</caption>
 </table></div>
 
 <p id="model-para"></p>
@@ -767,7 +789,7 @@ recalling what happened next? Two estimates below bound it from the observed dat
 and two arms measure it directly by removing an input at a time.</p>
 
 <div class="scroll"><table id="contam-table">
-  <caption><b>Table 16:</b> The gate either side of the model's knowledge boundary</caption>
+  <caption><b>Table 18:</b> The gate either side of the model's knowledge boundary</caption>
 </table></div>
 
 <p id="contam-para"></p>
@@ -778,7 +800,7 @@ and two arms measure it directly by removing an input at a time.</p>
 <p id="arms-intro"></p>
 
 <div class="scroll"><table id="arms-table">
-  <caption><b>Table 17:</b> The same gate, the same events, one input removed at a time</caption>
+  <caption><b>Table 19:</b> The same gate, the same events, one input removed at a time</caption>
 </table></div>
 
 <div class="fig">
@@ -791,7 +813,7 @@ and two arms measure it directly by removing an input at a time.</p>
 <p id="blind-para"></p>
 
 <div class="scroll"><table id="blind-table">
-  <caption><b>Table 18:</b> Identity ablation: what the model thought it was reading</caption>
+  <caption><b>Table 20:</b> Identity ablation: what the model thought it was reading</caption>
 </table></div>
 
 <p id="notext-para"></p>
@@ -810,7 +832,7 @@ and two arms measure it directly by removing an input at a time.</p>
 </div>
 
 <div class="scroll"><table id="holdout-table">
-  <caption><b>Table 19:</b> Key mutations, holdout years against the years the study was designed on</caption>
+  <caption><b>Table 21:</b> Key mutations, holdout years against the years the study was designed on</caption>
 </table></div>
 
 <p id="decade-para"></p>
@@ -836,7 +858,7 @@ the model could have memorised it, and whatever difference remains is the
 memorisation effect.</p>
 
 <div class="scroll"><table id="xm-cutoff-table">
-  <caption><b>Table 20:</b> Training-data cutoffs, and how they split this window</caption>
+  <caption><b>Table 22:</b> Training-data cutoffs, and how they split this window</caption>
 </table></div>
 
 <p id="xm-design"></p>
@@ -851,7 +873,7 @@ memorisation effect.</p>
 </div>
 
 <div class="scroll"><table id="xm-cell-table">
-  <caption><b>Table 21:</b> Per-trade return by model and corpus status, identical events</caption>
+  <caption><b>Table 23:</b> Per-trade return by model and corpus status, identical events</caption>
 </table></div>
 
 <h4>The estimate</h4>
@@ -868,7 +890,7 @@ cutoff. Standard errors cluster by event, because four verdicts on one release a
 not four independent observations.</p>
 
 <div class="scroll"><table id="xm-did-table">
-  <caption><b>Table 22:</b> Memorisation effect, naive and with event and model intercepts</caption>
+  <caption><b>Table 24:</b> Memorisation effect, naive and with event and model intercepts</caption>
 </table></div>
 
 <p id="xm-naive"></p>
@@ -894,7 +916,7 @@ not four independent observations.</p>
 <p id="xm-mp-intro"></p>
 
 <div class="scroll"><table id="xm-mp-table">
-  <caption><b>Table 23:</b> The no-text memory probe, by model and corpus status</caption>
+  <caption><b>Table 25:</b> The no-text memory probe, by model and corpus status</caption>
 </table></div>
 
 <p id="xm-mp-para"></p>
@@ -925,7 +947,7 @@ event enters and again at the minute it exits. Nothing here is modelled; the quo
 spread is what the book actually showed.</p>
 
 <div class="scroll"><table id="fc-measure-table">
-  <caption><b>Table 24:</b> Measured quoted spreads, in basis points of the midpoint</caption>
+  <caption><b>Table 26:</b> Measured quoted spreads, in basis points of the midpoint</caption>
 </table></div>
 
 <p id="fc-measure-para"></p>
@@ -951,7 +973,7 @@ spread is what the book actually showed.</p>
 </div>
 
 <div class="scroll"><table id="fc-agg-table">
-  <caption><b>Table 25:</b> The edge charged each event its own measured spread</caption>
+  <caption><b>Table 27:</b> The edge charged each event its own measured spread</caption>
 </table></div>
 
 <h3>6.2 Randomised fills</h3>
@@ -965,7 +987,7 @@ deliberate: earnings-night spreads are violently right-skewed, and a Gaussian wo
 quietly delete the tail that does the damage.</p>
 
 <div class="scroll"><table id="fc-alpha-table">
-  <caption><b>Table 26:</b> Account simulation under each cost assumption, against SPY</caption>
+  <caption><b>Table 28:</b> Account simulation under each cost assumption, against SPY</caption>
 </table></div>
 
 <p id="fc-mc-para"></p>
@@ -991,7 +1013,7 @@ policy of Section 5.4, both charged their own measured spreads.</p>
 </div>
 
 <div class="scroll"><table id="fc-dep-table">
-  <caption><b>Table 27:</b> The same trades at different deployment, charged their measured spreads</caption>
+  <caption><b>Table 29:</b> The same trades at different deployment, charged their measured spreads</caption>
 </table></div>
 
 <p id="fc-dep-para"></p>
@@ -1115,7 +1137,7 @@ permitting the skill gap to be estimated on its own.</p>
 <p id="lg-avail"></p>
 
 <div class="scroll"><table id="lg-regime-table">
-  <caption><b>Table 28:</b> The three regimes an earlier cutoff creates</caption>
+  <caption><b>Table 30:</b> The three regimes an earlier cutoff creates</caption>
 </table></div>
 
 <p id="lg-design">The estimator is a difference of means rather than a
@@ -1133,7 +1155,7 @@ the market rather than in what the model recalls.</p>
 </div>
 
 <div class="scroll"><table id="lg-did-table">
-  <caption><b>Table 29:</b> Memorisation effect against two controls, by outcome</caption>
+  <caption><b>Table 31:</b> Memorisation effect against two controls, by outcome</caption>
 </table></div>
 
 <p id="lg-controls"></p>
@@ -1179,6 +1201,19 @@ const n1 = (v, d = 1) => (v === null || v === undefined || Number.isNaN(v)) ? "�
 const sgn = (v, d = 1) => (v === null || v === undefined || Number.isNaN(v)) ? "—" : (v >= 0 ? "+" : "") + v.toFixed(d);
 const cls = (v) => (v === null || v === undefined || Number.isNaN(v)) ? "" : (v >= 0 ? "pos" : "neg");
 const int = (v) => (v === null || v === undefined) ? "—" : v.toLocaleString("en-US");
+
+/* CROSS-REFERENCES, RESOLVED FROM THE DOCUMENT. Table numbers are assigned by
+   position, so inserting a table anywhere renumbers every one after it and
+   silently invalidates every "Table N" typed into prose. This has now broken
+   three times in two edits. tnum() reads the number off the caption of the
+   table being referred to, so a reference points at a TABLE rather than at a
+   number and survives any reordering. */
+const tnum = (id) => {
+  const el = document.querySelector(`#${id} caption b`);
+  const m = el && el.textContent.match(/Table (\d+)/);
+  return m ? m[1] : "?";
+};
+
 
 /* DISPLAY NAMES. The harness, the parquet caches and the trade export all key
    the 5% stop / 2x target configuration as "shipped", because it is the one
@@ -1289,8 +1324,17 @@ setHTML("abstract", `A large language model was asked to read
   happens to run — is the weakest: ${sgn(D.shipped_bracket.mean_bp)}bp per trade,
   compounding to ${sgn(st("shipped").total_pct, 1)}% over the span against
   ${sgn(st("t1plain").total_pct, 1)}% for the identical trades held plainly to the
-  next close. Seven mechanical lookahead checks were written to run against the
-  harness rather than to be argued about, and all seven pass.`);
+  next close. Holding to the third session instead of the first where the model
+  reports guidance raised or lowered, and capping the book at
+  ${int((st("flagship") || {}).slots || 6)} concurrent positions so that peak
+  exposure is ${n1((st("flagship") || {}).gross_pct || 100, 0)}% and the account
+  is never levered, compounds at
+  ${n1((st("flagship") || {}).cagr_pct, 1)}% a year at a Sharpe of
+  ${n1((st("flagship") || {}).sharpe, 2)} — with
+  ${n1((st("flagship") || {}).skip_pct, 1)}% of qualifying events declined for
+  want of a free slot, which is the strategy's capacity limit rather than a
+  modelling choice. Seven mechanical lookahead checks were written to run against
+  the harness rather than to be argued about, and all seven pass.`);
 
 /* The abstract grows as the study does — the original five sentences stay put
    and the new evidence is appended rather than rewritten over. */
@@ -1695,7 +1739,7 @@ function svg(w, h, inner, extra = "") {
    index. Everything else in the paper is an argument about whether these
    three lines mean what they appear to mean. */
 function drawHero() {
-  const need = ["full", "full100", "spy"];
+  const need = ["flagship", "flagship100", "spy"];
   if (!C.dates || !C.series || need.some((k) => !C.series[k])) {
     const f = $("hero-fig"); if (f) f.style.display = "none";
     return;
@@ -1714,13 +1758,13 @@ function drawHero() {
         <text x="${x(i) + 4}" y="${H - 8}" font-size="10" fill="${cssv("--faint")}" font-family="${cssv("--mono")}">${year}</text>`;
     }
   });
-  for (const m of [1, 5, 10]) {
+  for (const m of [1, 5, 10, 50]) {
     if (Math.log(m) < lo || Math.log(m) > hi) continue;
     inner += `<line x1="${L}" x2="${W - R}" y1="${y(m)}" y2="${y(m)}" stroke="${cssv("--rule")}" stroke-dasharray="2 4"></line>
       <text x="${L - 6}" y="${y(m) + 3}" text-anchor="end" font-size="10" fill="${cssv("--faint")}" font-family="${cssv("--mono")}">${m}×</text>`;
   }
-  const COL = { full: cssv(S[0]), full100: cssv(S[2]), spy: cssv("--muted") };
-  const SHORT = { full: "strategy", full100: "+ $100M floor", spy: "SPY" };
+  const COL = { flagship: cssv(S[0]), flagship100: cssv(S[2]), spy: cssv("--muted") };
+  const SHORT = { flagship: "strategy", flagship100: "+ $100M floor", spy: "SPY" };
   need.forEach((k) => {
     const arr = C.series[k];
     inner += `<path d="${arr.map((v, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ")}"
@@ -1731,9 +1775,9 @@ function drawHero() {
   setHTML("hero-chart", svg(W, H, inner, `aria-label="Equity of the strategy, the strategy with a liquidity floor, and SPY"`));
   setHTML("hero-legend", need.map((k) =>
     `<span><span class="swatch" style="background:${COL[k]}"></span>${C.labels[k] || k}</span>`).join(""));
-  const f = st("full"), f100 = st("full100"), spy = st("spy");
+  const f = st("flagship"), f100 = st("flagship100"), spy = st("spy");
   table($("hero-table"), ["", "trades", "total", "CAGR", "max drawdown", "Sharpe", "α vs SPY"],
-    [["the strategy — never standing down", int(f.taken),
+    [["the strategy", int(f.taken),
       { v: sgn(f.total_pct, 0) + "%", c: "pos" }, n1(f.cagr_pct, 1) + "%",
       { v: "−" + n1(f.max_dd_pct) + "%", c: "neg" }, n1(f.sharpe, 2),
       { v: sgn((f.vs && f.vs.SPY ? f.vs.SPY.alpha_annual_pct : f.alpha_pct), 1) + "%", c: "pos" }],
@@ -1744,15 +1788,61 @@ function drawHero() {
      { cls: "dim", cells: ["SPY, bought and held", "—",
       { v: sgn(spy.total_pct, 0) + "%", c: "" }, n1(spy.cagr_pct, 1) + "%",
       { v: "−" + n1(spy.max_dd_pct) + "%", c: "neg" }, n1(spy.sharpe, 2), "—"] }]);
-  setText("hero-cap", `Every trade the model approved, compounded through the real `
-    + `session calendar at ${n1((C.stats && C.stats.full ? C.stats.full.weight_pct * C.stats.full.avg_concurrent : 30), 0)}% `
-    + `average gross exposure, log scale, ${(C.span || D.span).join(" to ")}. `
-    + `Costs are the flat ${n1(D.costs_bp, 0)}bp assumed through Section 5; `
-    + `Section 6 measures them and restates this at a lower level. The middle `
-    + `line is the same strategy declining to trade the least liquid names, `
-    + `which is Section 5.2's finding and most of what separates the two.`);
+  setText("hero-cap", `The strategy compounded through the real session calendar, `
+    + `log scale, ${(C.span || D.span).join(" to ")}. Positions are limited to `
+    + `${int(f.slots)} at a time at ${n1(f.weight_pct, 1)}% of capital each, so `
+    + `exposure peaks at ${n1(f.gross_pct, 0)}% and the book is never levered; `
+    + `average deployed capital is ${n1(f.deployed_pct, 1)}%. That ceiling costs `
+    + `coverage — ${n1(f.skip_pct, 1)}% of qualifying events arrive with no free `
+    + `slot and are skipped (Section 5.5). Costs are the flat `
+    + `${n1(D.costs_bp, 0)}bp assumed through Section 5; Section 6 measures them `
+    + `and restates this lower. The middle line declines the least liquid names, `
+    + `which is Section 5.2's finding.`);
 }
 drawHero();
+
+/* THE SPEC. A reader who wants to reproduce or refute the headline should not
+   have to reassemble it from nine sections. Values come from the payload, so
+   the specification cannot drift from the run that produced the figure. */
+(() => {
+  const f = st("flagship"), f100 = st("flagship100");
+  if (!f || !f.slots) { const b = $("spec-block"); if (b) b.remove(); return; }
+  const rows = [
+    ["universe", `AMC earnings reporters, top ${int(D.top_per_day)} per night by
+      prior-session dollar volume, floor $${n1(D.min_dv_musd, 0)}M/day`, "§3"],
+    ["event gate", `|reaction| ≥ ${n1(D.gate_pct, 0)}% in the fifteen minutes
+      after the 8-K crosses, against that day's official close`, "§2.1, §4.5"],
+    ["decision", `one ${MODEL_NAME(D.model)} call at ${D.effort} effort,
+      ${int(D.spec && D.spec.length ? 12000 : 12000).toLocaleString()} characters
+      of release text, no tools and no retrieval`, "§4.1, §4.3"],
+    ["direction", `with the tape where the verdict agrees; <b>against</b> the
+      tape where it disagrees or is neutral — never stand down`, "§5.4"],
+    ["entry", "the 16:05 ET post-auction print", "§4.5"],
+    ["exit", `the next session's close; the <b>third</b> session's close where
+      the verdict reports guidance raised or lowered`, "§5.3"],
+    ["position limit", `${int(f.slots)} concurrent, ${n1(f.weight_pct, 1)}% of
+      capital each — peak exposure ${n1(f.gross_pct, 0)}%, never levered`, "§5.5"],
+    ["contested slot", "highest prior-session dollar volume wins", "§5.5"],
+    ["no stop, no target", "the bracket is removed, not tuned", "§5.3"],
+    ["costs", `flat ${n1(D.costs_bp, 0)}bp round trip through §5;
+      ${n1((FC.measured || {}).round_trip_bp || 23, 0)}bp measured in §6`, "§6"],
+  ];
+  table($("flagship-spec-table"), ["parameter", "value", "where it is argued"], rows);
+  setHTML("spec-note", `That configuration returns
+    <b>${n1(f.cagr_pct, 1)}% a year</b> at a Sharpe of ${n1(f.sharpe, 2)} and a
+    ${n1(f.max_dd_pct, 1)}% maximum drawdown across ${(C.span || D.span).join("–")},
+    taking ${int(f.taken)} of ${int(f.eligible)} qualifying events and declining
+    ${n1(f.skip_pct, 1)}% for want of a free position. Adding the
+    $100M/day liquidity floor of Section 5.2 gives
+    ${n1(f100.cagr_pct, 1)}% at Sharpe ${n1(f100.sharpe, 2)} on
+    ${int(f100.taken)} trades — less return, better risk-adjusted, and the
+    version this paper would run.
+    <b>Two of these lines were chosen after seeing the results</b> and should be
+    discounted accordingly: the conditional exit was selected from twelve
+    candidate rules, and the position limit from a sweep of twenty-four. Neither
+    was pre-registered. The gate, the universe, the entry and the absence of a
+    bracket were all fixed before the decade was scored.`);
+})();
 
 /* Figure 4 — equity curves.
    The two policies Section 5.4 concludes for lead the list. An earlier version
@@ -1913,6 +2003,54 @@ table($("curve-table"), ["configuration", "trades", "total", "CAGR", "max DD", "
     performance cannot be settled from this sample.`);
 })();
 
+/* CAPACITY. The chart above holds deployed capital equal across policies,
+   which is what makes horizons comparable. It is not what an account has to
+   fund: earnings arrive in clusters, so the peak is far above the average
+   and nothing in the simulation had ever computed it. */
+(() => {
+  const CAP = D.capacity || {};
+  if (!CAP.rows || !CAP.rows.length) { const b = $("cap-para"); if (b) b.closest(".callout").remove(); return; }
+  const U = CAP.unconstrained || {};
+  const pick = CAP.rows.find((r) => r.chosen) || CAP.rows[0];
+  setHTML("cap-para", `Sizing every name at a share of <em>average</em> concurrency
+    holds deployed capital equal across horizons, which is what the comparison
+    above needs. It is not a description of an account. Earnings arrive in
+    clusters, so the book that averages ${n1(U.mean, 1)} concurrent positions
+    reaches ${int(U.peak)} on its busiest session, and a book sized to average
+    30% gross would be carrying <b>${n1(U.peak_gross_at_30_pct, 0)}%</b> of
+    capital that day. That is leverage, and it appears nowhere in the figures
+    above because nothing computed it.
+    The table below replaces the average with a ceiling. A fixed number of
+    positions, each at an equal share of capital, means exposure peaks at 100%
+    and the book is never levered; an event arriving with no free slot for
+    every session it would span is skipped rather than funded on margin.
+    Contested slots go to the highest prior-session dollar volume, which is
+    the rule the live watchlist already applies.`);
+
+  table($("cap-table"),
+    ["positions", "per name", "taken", "skipped", "coverage lost",
+     "avg deployed", "CAGR", "Sharpe", "max drawdown"],
+    CAP.rows.map((r) => ({ cls: r.chosen ? "hl" : "", cells: [
+      int(r.slots), n1(r.weight_pct, 1) + "%", int(r.taken), int(r.skipped),
+      n1(r.skip_pct, 1) + "%", n1(r.deployed_pct, 1) + "%",
+      { v: n1(r.cagr_pct, 1) + "%", c: "pos" }, n1(r.sharpe, 2),
+      { v: "−" + n1(r.max_dd_pct, 1) + "%", c: "neg" }] })));
+
+  const bestSh = CAP.rows.reduce((a, b) => (b.sharpe > a.sharpe ? b : a));
+  setHTML("cap-choice", `Sharpe is flat across the middle of this range —
+    ${n1(bestSh.sharpe, 2)} at ${int(bestSh.slots)} positions against
+    ${n1(pick.sharpe, 2)} at ${int(pick.slots)} — while deployed capital is not,
+    at ${n1(bestSh.deployed_pct, 1)}% and ${n1(pick.deployed_pct, 1)}%
+    respectively. Since the ceiling rules out levering the wider book back up,
+    the narrower one earns nearly twice the CAGR for the same risk-adjusted
+    quality, and <b>${int(pick.slots)} positions</b> is what the rest of this
+    paper reports. The cost is ${n1(pick.skip_pct, 1)}% of qualifying events
+    declined for want of a slot. That is a real capacity limit rather than an
+    artefact: the trades it turns away averaged +103bp, and the strategy does
+    not scale past it without either more capital per name or more names per
+    night.`);
+})();
+
 const t1 = st("t1plain"), isoS = (t1.iso || {}).SPY || {}, isoQ = (t1.iso || {}).QQQ || {};
 $("iso-para").innerHTML = `Alpha near ${n1((t1.vs && t1.vs.SPY ? t1.vs.SPY.alpha_annual_pct : 0), 0)}% a year with a beta of
   ${n1(t1.vs && t1.vs.SPY ? t1.vs.SPY.beta : 0, 3)} invites the obvious objection: could the same
@@ -2006,7 +2144,7 @@ if (!MC.arms || MC.arms.length < 2) {
     ${int(MC.paired_n)} events, and none of these arms separates from zero at
     conventional significance (best t = ${n1(best.t, 2)}). The ranking is
     consistent with the full-sample result and with the effort calibration in
-    Table 3, but on this slice alone it is suggestive, not established.`;
+    Table ${tnum('effort-table')}, but on this slice alone it is suggestive, not established.`;
 }
 
 function drawModels() {
@@ -2808,7 +2946,7 @@ function drawXModel() {
   setText("xm-figcap", `Same ${int(XM.n_events)} releases throughout; only the `
     + `reader changes. Read this figure with care — the in-corpus cells are `
     + `also the EARLIER cells, so the gap between the two colours is mostly `
-    + `calendar, not memory. Table 22 removes that; this figure is here to show `
+    + `calendar, not memory. Table ${tnum('xm-did-table')} removes that; this figure is here to show `
     + `what the raw data looks like before it is removed.`);
 }
 
@@ -2838,7 +2976,8 @@ if (XM.unavailable || !XM.cells) {
   const AI = XM.accuracy_implied_bp || {};
   const didRows = [];
   // The naive row goes FIRST and is marked as wrong, because it is the number
-  // a reader would compute themselves from Table 21 and it is badly misleading.
+  // a reader would compute themselves from the cells table and it is badly
+  // misleading.
   if (NV.diff_bp !== undefined) {
     didRows.push({ cls: "dim", cells: [
       "per-trade return, <b>no event effects</b>",
@@ -3290,6 +3429,49 @@ const repaint = () => { accHistRedraw(); drawCurve();
   if ((D.holdout||{}).mutations) drawDecade();
   if (XM.cells) drawXModel();
   drawHero();
+
+/* THE SPEC. A reader who wants to reproduce or refute the headline should not
+   have to reassemble it from nine sections. Values come from the payload, so
+   the specification cannot drift from the run that produced the figure. */
+(() => {
+  const f = st("flagship"), f100 = st("flagship100");
+  if (!f || !f.slots) { const b = $("spec-block"); if (b) b.remove(); return; }
+  const rows = [
+    ["universe", `AMC earnings reporters, top ${int(D.top_per_day)} per night by
+      prior-session dollar volume, floor $${n1(D.min_dv_musd, 0)}M/day`, "§3"],
+    ["event gate", `|reaction| ≥ ${n1(D.gate_pct, 0)}% in the fifteen minutes
+      after the 8-K crosses, against that day's official close`, "§2.1, §4.5"],
+    ["decision", `one ${MODEL_NAME(D.model)} call at ${D.effort} effort,
+      ${int(D.spec && D.spec.length ? 12000 : 12000).toLocaleString()} characters
+      of release text, no tools and no retrieval`, "§4.1, §4.3"],
+    ["direction", `with the tape where the verdict agrees; <b>against</b> the
+      tape where it disagrees or is neutral — never stand down`, "§5.4"],
+    ["entry", "the 16:05 ET post-auction print", "§4.5"],
+    ["exit", `the next session's close; the <b>third</b> session's close where
+      the verdict reports guidance raised or lowered`, "§5.3"],
+    ["position limit", `${int(f.slots)} concurrent, ${n1(f.weight_pct, 1)}% of
+      capital each — peak exposure ${n1(f.gross_pct, 0)}%, never levered`, "§5.5"],
+    ["contested slot", "highest prior-session dollar volume wins", "§5.5"],
+    ["no stop, no target", "the bracket is removed, not tuned", "§5.3"],
+    ["costs", `flat ${n1(D.costs_bp, 0)}bp round trip through §5;
+      ${n1((FC.measured || {}).round_trip_bp || 23, 0)}bp measured in §6`, "§6"],
+  ];
+  table($("flagship-spec-table"), ["parameter", "value", "where it is argued"], rows);
+  setHTML("spec-note", `That configuration returns
+    <b>${n1(f.cagr_pct, 1)}% a year</b> at a Sharpe of ${n1(f.sharpe, 2)} and a
+    ${n1(f.max_dd_pct, 1)}% maximum drawdown across ${(C.span || D.span).join("–")},
+    taking ${int(f.taken)} of ${int(f.eligible)} qualifying events and declining
+    ${n1(f.skip_pct, 1)}% for want of a free position. Adding the
+    $100M/day liquidity floor of Section 5.2 gives
+    ${n1(f100.cagr_pct, 1)}% at Sharpe ${n1(f100.sharpe, 2)} on
+    ${int(f100.taken)} trades — less return, better risk-adjusted, and the
+    version this paper would run.
+    <b>Two of these lines were chosen after seeing the results</b> and should be
+    discounted accordingly: the conditional exit was selected from twelve
+    candidate rules, and the position limit from a sweep of twenty-four. Neither
+    was pre-registered. The gate, the universe, the entry and the absence of a
+    bracket were all fixed before the decade was scored.`);
+})();
   if (FC.cost_curve) drawFillCharts();
   if ((FC.deployment||{}).dates) drawDeployment(); };
 function accHistRedraw() {

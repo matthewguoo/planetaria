@@ -442,6 +442,92 @@ def account(p: pd.DataFrame, ret: np.ndarray, horizon: np.ndarray,
     }
 
 
+SLOTS = 6            # chosen on the sweep in research_slots.py
+SLOT_GROSS = 1.00    # peak exposure, and therefore unlevered by construction
+# The mutation key for the policy Section 5.4 concludes for. Spelled once,
+# because it is matched by string in three places and a typo returns None
+# rather than raising.
+FULL_MUT = ("FULL POLICY: with the tape if the verdict agrees, against it "
+            "otherwise")
+
+
+def account_slots(p: pd.DataFrame, ret: np.ndarray, horizon: np.ndarray,
+                  sessions: list, spy_close: np.ndarray,
+                  n_slots: int = SLOTS, gross: float = SLOT_GROSS) -> dict:
+    """Compound through the calendar against a FINITE number of positions.
+
+    account() above sizes each name at target_gross / AVERAGE concurrency and
+    takes every signal. That is the right instrument for comparing horizons,
+    because it holds deployed capital equal across them. It is the wrong one
+    for describing an account, because earnings cluster into season and the
+    average is not what has to be funded: at 30% average gross the flat T+1
+    book peaks at 10 concurrent names and needs 110% of capital on its
+    busiest session, and the conditional exit rule peaks at 17 and needs
+    146%. That leverage was never disclosed because nothing ever computed it.
+
+    Here the constraint comes first. There are n_slots positions and each is
+    sized gross / n_slots, so the book sits at gross when full and NEVER
+    above it. A position holds its slot for its whole horizon. An event
+    arriving when no slot is free for every session it would span is skipped,
+    and the skip is counted rather than absorbed.
+
+    The exposure is then honest in both directions: no hidden margin, and the
+    cost of the constraint appears as trades not taken. Roughly a fifth of
+    events are skipped at six slots, which is a real capacity limit of the
+    strategy rather than an artefact of the simulation.
+
+    Contested slots go to the highest prior-session dollar volume, which is
+    the rule the live watchlist already uses. Ordering by anything correlated
+    with the outcome would be lookahead wearing a capacity constraint's
+    clothes.
+    """
+    index = {d: i for i, d in enumerate(sessions)}
+    ent = np.array([index.get(d, -1) for d in p["edate"]])
+    live = ent >= 0
+    n = len(sessions)
+    dv = np.nan_to_num(p["dv"].to_numpy()) if "dv" in p.columns \
+        else np.zeros(len(p))
+    order = np.lexsort((-dv, ent))
+
+    occ = np.zeros(n, dtype=int)
+    taken = np.zeros(len(p), dtype=bool)
+    weight = gross / n_slots
+    daily = np.zeros(n)
+    for j in order:
+        if not live[j]:
+            continue
+        a = ent[j]
+        b = min(a + int(horizon[j]), n - 1)
+        if occ[a:b + 1].max() >= n_slots:
+            continue
+        occ[a:b + 1] += 1
+        taken[j] = True
+        daily[b] += weight * ret[j]
+
+    equity = np.cumprod(1 + daily)
+    peak = np.maximum.accumulate(equity)
+    spy_ret = np.diff(spy_close, prepend=spy_close[0]) / spy_close
+    beta, alpha_d = np.polyfit(spy_ret, daily, 1)
+    years = n / 252
+    return {
+        "slots": n_slots, "gross_pct": gross * 100,
+        "weight_pct": round(weight * 100, 2),
+        "taken": int(taken.sum()), "eligible": int(live.sum()),
+        "skipped": int(live.sum() - taken.sum()),
+        "skip_pct": round(100 * (1 - taken.sum() / max(live.sum(), 1)), 1),
+        "deployed_pct": round(float(occ.mean() * weight * 100), 2),
+        "peak_concurrent": int(occ.max()),
+        "daily": daily,
+        "total_pct": (equity[-1] - 1) * 100,
+        "cagr_pct": (equity[-1] ** (1 / years) - 1) * 100,
+        "max_dd_pct": float((1 - equity / peak).max() * 100),
+        "sharpe": float(daily.mean() / daily.std(ddof=1) * np.sqrt(252)),
+        "alpha_pct": float(alpha_d * 252 * 100),
+        "beta": float(beta),
+        "equity": equity,
+    }
+
+
 def stage_best(args) -> None:
     """Joint search over horizon x stop x target, chosen on 2021-23 and
     scored on 2024-26, then compounded through the calendar."""
@@ -641,6 +727,43 @@ def stage_best(args) -> None:
                            None, None)
         a = account(p_mut[live].reset_index(drop=True), ret_m[live],
                     np.ones(int(live.sum()), int), sessions, spy_close)
+        series[key] = [round(v, 5) for v in a["equity"]]
+        names[key] = label
+        stats_out[key] = {k: v for k, v in a.items()
+                          if k not in ("equity", "daily")}
+        daily = np.asarray(a["daily"])
+        stats_out[key]["vs"], stats_out[key]["iso"] = {}, {}
+        for sym, b in bench.items():
+            beta, alpha_d = np.polyfit(np.asarray(b["ret"]), daily, 1)
+            stats_out[key]["vs"][sym] = {
+                "alpha_annual_pct": round(float(alpha_d) * 252 * 100, 2),
+                "beta": round(float(beta), 3),
+                "corr": round(float(np.corrcoef(np.asarray(b["ret"]), daily)[0, 1]), 3)}
+            stats_out[key]["iso"][sym] = _iso_return_leverage(
+                b["ret"], a["equity"][-1])
+
+    # THE FLAGSHIP. Two conclusions of this study that had never been applied
+    # together — never standing down (Section 5.4) and the conditional exit
+    # (Section 5.3) — run under the slot discipline account_slots documents,
+    # so the reported exposure is one an account could actually fund.
+    guid_moved = np.isin(p_mut["guidance"].to_numpy(), ["raised", "lowered"])
+    hz_cond = np.where(guid_moved, 3, 1)
+    for key, label, mname, floor in (
+            ("flagship",
+             f"never stand down, T+1/T+3 on guidance, {SLOTS} slots",
+             FULL_MUT, False),
+            ("flagship100",
+             f"the same, ${FLOOR_MUSD:.0f}M/day liquidity floor",
+             FULL_MUT, True)):
+        side = mutation_sides(p_mut).get(mname)
+        if side is None:
+            continue
+        if floor:
+            side = np.where(p_mut["dv"].to_numpy() >= FLOOR_MUSD * 1e6, side, 0)
+        live = side != 0
+        ret_f, _ = resolve(p_mut.assign(side=side), hz_cond, None, None)
+        a = account_slots(p_mut[live].reset_index(drop=True), ret_f[live],
+                          hz_cond[live], sessions, spy_close)
         series[key] = [round(v, 5) for v in a["equity"]]
         names[key] = label
         stats_out[key] = {k: v for k, v in a.items()
