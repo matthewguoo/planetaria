@@ -4,6 +4,20 @@ Written 2026-08-06, at the end of the session that finished the paper. The
 study is done; what follows is the debt it left. Nothing here changes a
 number in the paper, and the first task is the check that proves it.
 
+> **Status, 2026-08-06 (commit 47af9d5).** The tree also *moved*: the study
+> now lives in `research/pead-llm-gate/`, not `backend/scripts/`, so every
+> path below is relative to that. **Done:** §0 the regression gate (payload
+> and rendered paper both rebuild byte-identical), §1 archive what nothing
+> imports (`scripts/archive/`), §5 the notes prune (62 superseded logs to
+> `notes/archive/`; the runbook and the SIP preflight moved to `docs/` as
+> operational). Filesystem anchors are now centralised in `scripts/_paths.py`
+> — which is §2's problem in miniature, solved for paths but not for the
+> module cycle. **Still open:** §2 the `research_holding_period` ↔
+> `research_llm_contamination` import cycle, §3 the cohort audit, §4 the
+> 97 KB module split, §6 the duplicate bars in `cache/`, §7 folding the new
+> one-offs into the builder. §8 is not cleanup and is restated in
+> `research/README.md`.
+
 ## Standing constraints (unchanged)
 
 - Commit locally per step, **never push**.
