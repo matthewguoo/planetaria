@@ -348,60 +348,47 @@ and a newer literature applies instruction-tuned language models to the same
 question.<sup class="c">[9]</sup> It also inherits that newer literature's central
 problem, which is the one this paper spends the most effort on. <b>A model trained on
 text written after these earnings came out may simply remember what happened next.</b>
-A remembered outcome looks exactly like a skilled prediction and is
-worth nothing.<sup class="c">[10][11][12]</sup> Section 4 sets out the four separate
+A remembered outcome is observationally identical to a skilled prediction and
+carries no information about future performance.<sup class="c">[10][11][12]</sup> Section 4 sets out the four separate
 controls built to detect that; Section 5.9 reports the one that settles it.</p>
 
 <div class="callout">
-  <span class="label">Six terms this paper uses constantly</span>
+  <span class="label">Constructs specific to this study</span>
   <dl class="terms">
     <dt>reaction</dt><dd>the percentage price move in the fifteen minutes after the
     release crosses, measured against that day's official closing price.</dd>
-    <dt>the gate</dt><dd>the rule that decides whether to trade: take the position only
-    when the model's stated direction agrees with the sign of the reaction. Events it
-    takes are <em class="term">gated</em>; events it declines are
+    <dt>the gate</dt><dd>take the position only where the model's stated direction
+    agrees with the sign of the reaction. Events it takes are
+    <em class="term">gated</em>; events it declines are
     <em class="term">refused</em>.</dd>
-    <dt>T+1</dt><dd>the holding period — enter after the close, exit at the close of the
-    next full trading session. T+3 means three sessions.</dd>
-    <dt>basis point (bp)</dt><dd>one hundredth of one percent. 100 bp = 1%. All returns
-    here are per trade, in basis points, net of trading costs.</dd>
-    <dt>selection spread</dt><dd>the paper's central measure of whether the model is
-    worth anything: the average return on gated events <em>minus</em> the average return
-    on refused ones. If the model carries no information, this is zero.</dd>
-    <dt>quoted spread</dt><dd>a different, unrelated quantity — the gap between the best
-    bid and the best offer, i.e. what it costs to trade. Always written
-    <em class="term">quoted</em> spread to keep the two apart (Section 6).</dd>
+    <dt>selection spread</dt><dd>mean return on gated events less mean return on
+    refused events. Zero under the null that the verdicts carry no information.
+    Distinct from the <em class="term">quoted</em> spread, which is always
+    qualified as such (Section 6).</dd>
+    <dt>never stand down</dt><dd>trade every event rather than skipping some: with
+    the tape where the verdict agrees, against it where the verdict disagrees or
+    is neutral. Refusals become reversed positions rather than abstentions
+    (Section 5.4).</dd>
+    <dt>pure LLM direction</dt><dd>trade the model's stated direction and ignore
+    the tape, abstaining only on neutrals. Coincides with never standing down on
+    every directional event; the two differ only over neutrals (Section 5.4).</dd>
+    <dt>holdout</dt><dd>2016 to mid-2021, appended after every design decision had
+    been fixed on the later years. Performance there is a test rather than a fit
+    (Section 5.8).</dd>
+    <dt>in-corpus / after cutoff</dt><dd>whether a release predates the end of a
+    given model's training data, and so whether that model could have read the
+    subsequent outcome (Section 5.9).</dd>
   </dl>
-  <p style="margin-top:.6rem">Four more that appear once the results start:</p>
-  <dl class="terms">
-    <dt>never stand down</dt><dd>an alternative to the gate that trades
-    <em>every</em> event instead of skipping some: with the tape when the model's
-    verdict agrees with it, against the tape when it disagrees or is neutral. The
-    gate's refusals become trades in the opposite direction rather than no trade
-    at all (Section 5.4).</dd>
-    <dt>pure LLM direction</dt><dd>a third rule that ignores the tape entirely and
-    trades whichever way the model called, sitting out only the neutrals. It turns
-    out to be the same thing as never standing down on every event where the model
-    took a side — the two differ only over the neutrals (Section 5.4).</dd>
-    <dt>holdout</dt><dd>the years 2016 to mid-2021, which were added to the study
-    only after every design decision had already been made on the later years.
-    Nothing about the strategy was chosen by looking at them, so performance
-    there is a test rather than a fit (Section 5.8).</dd>
-    <dt>in-corpus / after cutoff</dt><dd>whether an earnings release happened
-    before or after the date a given model's training data ends — that is,
-    whether the model could possibly have read what happened next (Section
-    5.9).</dd>
-    <dt>gross exposure</dt><dd>how much of the account is invested at once,
-    averaged over time. The strategy holds a few positions for one session each,
-    so it is idle much of the time; unless stated otherwise every account figure
-    here runs at about 30% average exposure (Section 6.3).</dd>
-  </dl>
+  <p style="margin-top:.6rem">Returns are per trade in basis points and net of
+  costs unless stated. Account figures run at 30% average gross exposure
+  (Section 6.3). T+1 denotes entry after the close and exit at the following
+  session's close.</p>
 </div>
 
 <h2><span class="n">2</span> The strategy, stated exactly</h2>
 
 <div class="callout thesis">
-  <span class="label">The thesis in one paragraph</span>
+  <span class="label">Statement of the hypothesis</span>
   <p>When a company releases earnings after the close, the tape reprices it within
   the minute — by the time anyone has read the release, the move has happened. What
   is left to trade is not the move but <b>whether it continues</b> into the next
@@ -580,7 +567,7 @@ merely looks innocuous.</p>
 </table></div>
 
 <div class="callout">
-  <span class="label">One thing a replication will get wrong</span>
+  <span class="label">Replication note</span>
   <p>EDGAR's <code>acceptanceDateTime</code> ends in a <code>Z</code> and looks like
   Eastern time carrying a spurious suffix. It is real UTC, and reading it as Eastern
   moves every filing four or five hours, which is enough to turn a midday filer into
@@ -653,7 +640,7 @@ timestamp.</p>
 </div>
 
 <div class="callout" id="liq-contam-block">
-  <span class="label">Is this a liquidity finding or a contamination finding?</span>
+  <span class="label">Liquidity versus contamination</span>
   <p id="liq-contam-para"></p>
 </div>
 
@@ -696,12 +683,12 @@ table below scores fifteen other ways of spending the same cached verdicts, on t
 same train/test split. Every row is reported, including the failures.</p>
 
 <div class="callout">
-  <span class="label">Three of these rows are quoted throughout the paper</span>
+  <span class="label">Rows cited elsewhere in the paper</span>
   <p id="mut-policies"></p>
 </div>
 
 <div class="callout">
-  <span class="label">The control that decides it</span>
+  <span class="label">The decisive control</span>
   <p>Every fade bets against the tape, so "reversal simply works on <span class="pv-gate"></span> earnings
   moves" would reproduce the result with no model at all. That null is the
   <em>anti-tape baseline</em> row: fade every event, no model. It loses
@@ -744,7 +731,7 @@ prose.</p>
 <p id="curve-rank"></p>
 
 <div class="callout" id="early-block">
-  <span class="label">When the outperformance actually happened</span>
+  <span class="label">Distribution of returns across the sample</span>
   <p id="curve-early"></p>
 </div>
 
@@ -888,7 +875,7 @@ not four independent observations.</p>
 <p id="xm-naive"></p>
 
 <div class="callout">
-  <span class="label">Why this reports an equivalence test</span>
+  <span class="label">Equivalence testing</span>
   <p>A non-significant coefficient is not evidence that memorisation is absent — it is
   equally consistent with a test too small to detect it, and reporting it as
   reassurance would be the same error the rest of this paper spends its length trying
@@ -916,16 +903,14 @@ not four independent observations.</p>
 
 <p id="xm-para"></p>
 
-<p><b>One further attempt on this bound is reported in Appendix B.</b> The
-limitation of the test just described is that the memorisation effect and the
-skill gap are identified from the same straddle window, so the natural repair is a
-model whose corpus closes far earlier — giving a long pre-period in which neither
-model has an informational advantage and the skill gap can be measured on its own.
-That experiment was run. It did not tighten the bound, and the reason it could not
-is worth more than the result: the constraint is the <em>number of straddle
-events</em>, which is fixed by the calendar and cannot be bought. Its point
-estimates agree with this section's on sign, and its quarter-by-quarter series
-shows no discontinuity at the cutoff.</p>
+<p>Appendix B reports a further attempt on this bound. The test above
+identifies the memorisation effect and the skill gap from the same straddle
+window; a model whose corpus closes considerably earlier supplies a long
+pre-period in which neither model holds an informational advantage, allowing the
+skill gap to be estimated separately. That design does not tighten the bound. The
+binding constraint is the number of straddle events, which is fixed by the
+calendar. Its point estimates agree with this section's in sign, and its
+quarter-by-quarter series shows no discontinuity at the cutoff.</p>
 </div>
 
 <h2><span class="n">6</span> What the fills actually cost</h2>
@@ -1122,11 +1107,11 @@ policy of Section 5.4, both charged their own measured spreads.</p>
 
 <div id="legacy-block">
 <p>Section 5.9 identifies the memorisation effect and the skill gap from the
-<em>same</em> <span id="lg-straddle"></span> events — the ones falling between the
-earliest and latest Opus cutoff. One window, two parameters, which is the arithmetic
-reason its bound came out as wide as it did. The obvious repair is a model whose
-corpus closes much earlier, so that a long stretch of the panel sits inside
-<em>both</em> models' training data and the skill gap can be measured on its own.</p>
+same <span id="lg-straddle"></span> events, those falling between the earliest and
+latest Opus cutoff. A single window identifying two parameters accounts for the
+width of the resulting bound. A model whose corpus closes considerably earlier
+would place a long stretch of the panel inside both models' training data,
+permitting the skill gap to be estimated on its own.</p>
 
 <p id="lg-avail"></p>
 
@@ -1134,16 +1119,17 @@ corpus closes much earlier, so that a long stretch of the panel sits inside
   <caption><b>Table 28:</b> The three regimes an earlier cutoff creates</caption>
 </table></div>
 
-<p id="lg-design">The estimator is a difference of means, not a regression. Both
-models score the same events, so the within-event difference removes the event
-effect exactly — no fixed effects to estimate and no clustering assumption to
-defend. Memorisation is then how much the gap <em>widens</em> in the middle regime,
-where only the newer model could have read the outcome. The bottom regime is a free
-falsification: with both models outside their corpus the gap must return to its
-baseline, and if it does not, whatever moved was the market rather than memory.</p>
+<p id="lg-design">The estimator is a difference of means rather than a
+regression. Both models score the same events, so the within-event difference
+removes the event effect exactly, requiring no fixed effects and no clustering
+assumption. The memorisation effect is the widening of that gap in the middle
+regime, where only the newer model could have read the outcome. The third regime
+provides a falsification test: with both models outside their corpus the gap
+should return to its baseline, and a failure to do so would indicate a change in
+the market rather than in what the model recalls.</p>
 
 <div class="callout">
-  <span class="label">The result is that this does not work, and why is the useful part</span>
+  <span class="label">Result</span>
   <p id="lg-verdict"></p>
 </div>
 
@@ -1888,50 +1874,44 @@ table($("curve-table"), ["configuration", "trades", "total", "CAGR", "max DD", "
   const EL = D.early_late || {};
   if (!EL.early || !EL.late) { const b = $("early-block"); if (b) b.remove(); return; }
   const E = EL.early, L = EL.late;
-  setHTML("curve-early", `<b>It is not evenly distributed.</b> Through the end
-    of ${EL.split_year} the strategy had compounded to ${n1(E.mult, 2)}× against
-    SPY's ${n1(E.spy_mult, 2)}× — behind the index at every year-end from
-    ${EL.first_year} to ${EL.split_year}, and as low as
-    ${n1(100 * EL.worst.ratio, 0)}% of its level in ${EL.worst.year}.
-    <b>That gap is not the indictment it looks like</b>, because SPY is not
-    this strategy's benchmark in any meaningful sense: beta over those years is
-    ${n1(E.beta, 3)} and correlation ${n1(E.corr, 3)}, so trailing a
-    ${n1(E.spy_cagr_pct, 1)}% index while returning ${n1(E.cagr_pct, 1)}% is
-    arithmetic rather than a verdict on skill. The risk-adjusted number is the
-    one that answers the question, and it is <b>+${n1(E.alpha_annual_pct, 1)}% a
-    year of alpha</b> — positive, sizeable, and earned with essentially no
-    market exposure. What is true is that it is smaller than the
-    +${n1(L.alpha_annual_pct, 1)}% of the years that follow.
-    <b>The tempting explanation is that the model was worse then, and the
-    by-year table says otherwise.</b> What changes between the halves is the
-    <em>anomaly</em>, not the verdicts. The mechanical baseline — the same
-    trades with no model at all — runs ${sgn(E.mech, 0)}bp across the early
-    years against ${sgn(L.mech, 0)}bp afterwards. The model's own selection
-    spread barely moves: ${sgn(E.spread, 0)}bp then, ${sgn(L.spread, 0)}bp now.
-    The verdicts were separating winners from losers the whole time; there was
-    less drift underneath them to separate, and a gate cannot manufacture
-    continuation the tape is not paying. Supply compounds it —
-    ${n1(E.per_year, 0)} qualifying events a year against ${n1(L.per_year, 0)},
-    which reflects how often stocks move ${n1(D.gate_pct, 0)}% after earnings
-    rather than anything about the strategy.
-    <b>One sentence for a reader in a hurry:</b> the strategy produced positive
-    alpha in both halves of the decade and beat buy-and-hold in only one of
-    them, and an account judging it against SPY would have quit in
-    ${EL.worst.year} over a number that was never the right one to watch.
-    <b>The pattern also points the wrong way for the memorisation story</b>,
-    since the weakest years are the oldest and the oldest sit deepest in every
-    model's training corpus.`);
+  setHTML("curve-early", `Returns are not evenly distributed across the sample.
+    Through the end of ${EL.split_year} the strategy had compounded to
+    ${n1(E.mult, 2)}× against SPY's ${n1(E.spy_mult, 2)}×, trailing the index at
+    every year-end from ${EL.first_year} to ${EL.split_year} and reaching a low
+    of ${n1(100 * EL.worst.ratio, 0)}% of its level in ${EL.worst.year}.
+    That comparison is the wrong one. Beta over those years is ${n1(E.beta, 3)}
+    and correlation ${n1(E.corr, 3)}, so returning ${n1(E.cagr_pct, 1)}% against
+    a ${n1(E.spy_cagr_pct, 1)}% index is a consequence of carrying no market
+    exposure rather than evidence about skill. On a risk-adjusted basis the
+    early period earns +${n1(E.alpha_annual_pct, 1)}% a year of alpha, against
+    +${n1(L.alpha_annual_pct, 1)}% in the years that follow. The difference
+    between the halves is one of magnitude, not of sign.
+    That difference is attributable to the anomaly rather than to the verdicts.
+    The mechanical baseline — the same trades with no model — runs
+    ${sgn(E.mech, 0)}bp across the early years against ${sgn(L.mech, 0)}bp
+    afterwards, while the selection spread is close to stable at
+    ${sgn(E.spread, 0)}bp and ${sgn(L.spread, 0)}bp respectively, with 2019 and
+    2020 exceeding every subsequent year. The verdicts continued to separate
+    winners from losers; there was less drift beneath them to separate, and the
+    gate cannot generate continuation the tape is not paying. Event supply
+    compounds the effect, at ${n1(E.per_year, 0)} qualifying events a year
+    against ${n1(L.per_year, 0)}, which reflects the frequency of
+    ${n1(D.gate_pct, 0)}% post-earnings moves rather than any property of the
+    strategy. The stability of the verdicts and the stability of the returns are
+    therefore separate claims, and only the first holds across the decade.
+    The gradient also runs against the memorisation hypothesis, since the
+    weakest years are the oldest and the oldest lie deepest within every model's
+    training corpus.`);
 
   setHTML("lim-early-txt", `On cumulative wealth the strategy trailed SPY at
-    every year-end from ${EL.first_year} through ${EL.split_year} and only
-    pulled ahead for good in ${EL.cross_year}. Alpha was positive throughout —
+    every year-end from ${EL.first_year} through ${EL.split_year}, pulling ahead
+    durably only in ${EL.cross_year}. Alpha is positive throughout, at
     +${n1(E.alpha_annual_pct, 1)}% a year early against
-    +${n1(L.alpha_annual_pct, 1)}% later — so this is a statement about
-    magnitude, not about sign. Section 5.5 attributes most of the difference to
-    the anomaly rather than the verdicts, but that distinction does not help an
-    account, which earns the product of the two and not the better of them.
-    Whether the later regime or the earlier one is the better guide to the
-    future is not something this sample can settle.`);
+    +${n1(L.alpha_annual_pct, 1)}% later, so the difference is one of magnitude
+    rather than sign. Section 5.5 attributes most of it to the anomaly rather
+    than to the verdicts; an account nonetheless earns the product of the two
+    and not the better of them. Which regime is the better guide to future
+    performance cannot be settled from this sample.`);
 })();
 
 const t1 = st("t1plain"), isoS = (t1.iso || {}).SPY || {}, isoQ = (t1.iso || {}).QQQ || {};
@@ -2252,7 +2232,7 @@ if (A.per_arm && A.per_arm.length > 1) {
            coefficient is not evidence of absence — whatever memorisation
            contributes is smaller than ±${n1(XM.bound_bp, 0)}bp, or
            ${n1((XM.ratio_of_edge || 0) * 100, 0)}% of the edge.`}
-      <b>Three things this does not do.</b> It does not reach the regime prior:
+      Three qualifications apply. The test does not reach the regime prior:
       every model here has read years of coverage of these issuers, and no
       training cutoff separates knowing what kind of company this is from
       recalling a specific release. It does not have the power to exclude a
@@ -2263,16 +2243,16 @@ if (A.per_arm && A.per_arm.length > 1) {
       training-cutoff dates being accurate, which is an assumption about the
       model provider that this study cannot independently verify.
       ${(LG.outcomes && !LG.unavailable)
-        ? `<b>The obvious way to buy more power does not work</b>, and Appendix B
-           reports the attempt: a model with a much earlier corpus adds
+        ? `Appendix B reports an attempt to increase that power. A model with a
+           considerably earlier corpus adds
            ${int((LG.regime_n || {}).R1)} pre-period events in which neither
-           model has an advantage, which should pin the skill gap and leave
-           memorisation as the residual. It widens the bound instead, to
-           ±${n1(LG.bound_bp, 0)}bp, because the limit is the
+           model holds an advantage, which should identify the skill gap
+           separately and leave memorisation as the residual. The bound widens
+           instead, to ±${n1(LG.bound_bp, 0)}bp, since the limit is the
            ${int((LG.regime_n || {}).R2)} straddle events rather than the
-           control — and no purchase changes a count the calendar sets. Every
-           model with a pre-2025 cutoff has since been retired, so this
-           limitation is now supply-constrained and permanent.`
+           control period, and that count is set by the calendar. Every model
+           with a pre-2025 cutoff has since been retired, so the constraint is
+           one of supply and is permanent.`
         : ""}`;
   }
 }
@@ -2337,14 +2317,13 @@ if (!HO.mutations) {
     ${sgn(full.insample && full.insample.bp)}bp. A rule that survives five and a
     half years it was never shown is a different kind of evidence from one that
     fits the years it was built on.
-    <b>It is not, however, evidence about memorisation.</b> These years are the
-    OLDEST in the sample, which puts them deep inside the training corpus of
-    every model tested — more thoroughly inside it than the recent years, not
-    less. What this holdout rules out is the study having been fitted to the
-    years it was designed on; the question of whether the model remembers these
-    events is a different one, and Section 5.9 is the section that addresses
-    it. Conflating the two would be the easiest mistake to make about this
-    table.`;
+    It is not, however, evidence bearing on memorisation. These are the oldest
+    years in the sample and therefore lie deeper within the training corpus of
+    every model tested than the recent years do. The holdout rules out the
+    study having been fitted to the years on which it was designed; whether the
+    model recalls these events is a separate question, addressed in Section
+    5.9. The two questions are distinct and this table speaks only to the
+    first.`;
   drawDecade();
 }
 
@@ -3383,10 +3362,10 @@ if (LG.unavailable || !LG.outcomes) {
     training cutoff before 2025 — Claude 3 Opus, Claude 3.5 and 3.7 Sonnet,
     Claude 4 and 4.1 Opus — returns a 404 as of this build, verified by calling
     them rather than by reading the deprecation schedule. The earliest corpus
-    still reachable is <b>Claude Haiku 4.5</b>, which closes ten months before
-    Claude Opus 5's. <b>The width of the out-of-corpus window is therefore
-    supply-constrained, not budget-constrained</b> — a finding in its own right,
-    since it means the bound in Section 5.9 cannot be narrowed by spending more.`);
+    still reachable is Claude Haiku 4.5, whose corpus closes ten months before
+    Claude Opus 5's. The width of the out-of-corpus window is therefore
+    supply-constrained rather than budget-constrained, which implies the bound
+    in Section 5.9 cannot be narrowed by additional expenditure.`);
 
   table($("lg-regime-table"),
     ["regime", "dates", "newer model", "earlier model", "events"],
@@ -3398,19 +3377,18 @@ if (LG.unavailable || !LG.outcomes) {
 
   const bd = LG.bound_bp, bl = LG.bound_bp_local;
   const worse = (bd > 85.9);
-  setHTML("lg-verdict", `The pre-period does not rescue the estimate. The bound
-    comes out at <b>±${n1(bd, 0)}bp</b> against the decade-wide control and
-    <b>±${n1(bl, 0)}bp</b> against the local one — ${worse ? "<b>wider</b>"
-    : "narrower"} than the ±85.9bp Section 5.9 reports, not narrower. The
-    arithmetic says why. The pre-period's standard error is
+  setHTML("lg-verdict", `The pre-period does not improve the estimate. The bound
+    is <b>±${n1(bd, 0)}bp</b> against the decade-wide control and
+    <b>±${n1(bl, 0)}bp</b> against the local one — ${worse ? "wider" : "narrower"} than the ±85.9bp reported in Section 5.9.
+    The pre-period's standard error is
     ${n1((SB.by_regime.R1 || {}).se, 1)}bp on ${int((SB.by_regime.R1 || {}).n)}
     events, while the straddle's is ${n1((SB.by_regime.R2 || {}).se, 1)}bp on
     ${int((SB.by_regime.R2 || {}).n)}; the difference of two means inherits
-    essentially all of the larger one. <b>The binding constraint was never the
-    control period — it is the number of straddle events, and the calendar
-    fixes that number.</b> This is the same wall Section 5.9 reaches, arrived at
-    from the opposite direction, which makes it a firmer conclusion rather than
-    a new one.`);
+    essentially all of the larger. The binding constraint is therefore the
+    number of straddle events rather than the length of the control period, and
+    that count is fixed by the calendar. Section 5.9 reaches the same limit by a
+    different route, which corroborates the conclusion rather than extending
+    it.`);
 
   const OUTS = [["signed_bp", "following the model's own direction", 1, "bp"],
                 ["gate_pnl", "the gate, scored per event", 1, "bp"],
@@ -3430,13 +3408,13 @@ if (LG.unavailable || !LG.outcomes) {
   table($("lg-did-table"), ["outcome", "R2 − R1", "90% CI", "vs local control",
     "placebo (R3 − R1)"], didRows);
 
-  setHTML("lg-controls", `<b>Every point estimate carries the wrong sign.</b>
-    Memorisation would make the newer model relatively <em>better</em> on the
-    events only it could have read; instead the gap ${
+  setHTML("lg-controls", `Every point estimate carries the sign opposite to the
+    one memorisation predicts. Recall would leave the newer model relatively
+    <em>stronger</em> on events only it could have read; the gap instead ${
     SB.did.estimate < 0 ? "narrows" : "widens"} there, by
     ${n1(Math.abs(SB.did.estimate), 0)}bp. Three outcomes and two controls agree
-    on the direction, and none is significant. The placebo column is reported for
-    completeness and should not be read: the both-out regime holds
+    on direction and none is significant. The placebo column is reported for
+    completeness only: the both-out regime holds
     ${int(RN.R3)} events, and on accuracy it has no variance at all, so a
     bootstrap over it returns an interval of zero width and a p-value that rests
     on nothing.`);
@@ -3444,26 +3422,26 @@ if (LG.unavailable || !LG.outcomes) {
   const q = (LG.event_study || []).filter((r) => r.regime !== "R3");
   const last1 = [...q].filter((r) => r.regime === "R1").slice(-1)[0] || {};
   const first2 = q.find((r) => r.regime === "R2") || {};
-  setHTML("lg-eventstudy", `<b>There is no step at the cutoff.</b> The last
+  setHTML("lg-eventstudy", `No step appears at the cutoff. The last
     quarter inside the earlier model's corpus reads
     ${sgn(last1.gap, 0)}bp; the first quarter outside it reads
     ${sgn(first2.gap, 0)}bp. A corpus effect has to be a discontinuity at that
-    line and there is not one. What the figure does show is a decline — from
-    roughly 150–250bp across 2016–2024 to double and then single digits — that
-    begins <em>well before</em> the boundary and is the same 2026 weakness
-    Section 5.2 documents. A test that read the level rather than the step
-    would have called that decline contamination and been wrong about it.`);
+    line, and none is present. The figure instead shows a decline, from roughly
+    150–250bp across 2016–2024 to double and then single digits, beginning well
+    before the boundary and coinciding with the 2026 weakness documented in
+    Section 5.2. A test reading the level rather than the step would have
+    attributed that decline to contamination.`);
 
   const hasSignal = (SK.legacy_has_signal === true);
-  setHTML("lg-caveat", `<b>One caveat, and it cuts in a specific direction.</b>
-    The earlier model is much the weaker: ${n1(100 * (SK.haiku45 || {}).accuracy, 1)}%
+  setHTML("lg-caveat", `One caveat bears on the interpretation. The earlier
+    model is substantially weaker: ${n1(100 * (SK.haiku45 || {}).accuracy, 1)}%
     directional accuracy against ${n1(100 * (SK.opus5 || {}).accuracy, 1)}%, and its
     own edge over the pre-period is ${hasSignal ? "" : "<b>not</b> "}separable
     from zero (t = ${n1((SK.haiku45 || {}).t, 2)}). ${hasSignal ? ""
-    : `A noisy control inflates the variance of the contrast — which is visible
-    in the width of the bound above — but it does <em>not</em> bias the point
-    estimate. So the wrong signs still count as evidence, and the interval is
-    honestly wide rather than falsely tight. `}The design is deliberately robust
+    : `A noisy control inflates the variance of the contrast, which the width
+    of the bound above reflects, but does not bias the point estimate. The
+    signs therefore remain informative and the interval is wide rather than
+    falsely tight. `}The design is robust
     to the earlier model being bad in every other respect: its weakness, its
     shallower reasoning budget and its different request shape are constants
     that the within-event differencing removes. It would break only if that
