@@ -10,6 +10,7 @@
 import { create } from "zustand";
 import {
   apiError,
+  deleteStrategy,
   enableStrategy,
   flattenStrategy,
   getSignals,
@@ -18,7 +19,11 @@ import {
   killAllStrategies,
   pauseStrategy,
   patchStrategyParams,
+  setStrategyAllocation,
+  setStrategyBreaker,
   triggerStrategy,
+  type Allocation,
+  type CircuitBreaker,
   type SignalRecord,
   type StrategyDecision,
   type StrategyInstance,
@@ -147,6 +152,11 @@ export const useStrategyRunnerStore = create<RunnerState>((set, get) => ({
 }));
 
 // Thin bound wrappers so the page reads declaratively.
+//
+// EVERY mutating action belongs here rather than being called directly from a
+// component. `act` is what re-reads the list afterwards, so an action that
+// skips it succeeds on the server and leaves the UI showing the old state —
+// which is indistinguishable from a broken button.
 export const actions = {
   enable: (id: string) => useStrategyRunnerStore.getState().act(() => enableStrategy(id)),
   pause: (id: string) => useStrategyRunnerStore.getState().act(() => pauseStrategy(id)),
@@ -157,4 +167,17 @@ export const actions = {
     useStrategyRunnerStore.getState().act(() => killAllStrategies(flatten)),
   saveParams: (id: string, params: Record<string, unknown>) =>
     useStrategyRunnerStore.getState().act(() => patchStrategyParams(id, params)),
+  setAllocation: (id: string, allocation: Allocation) =>
+    useStrategyRunnerStore.getState().act(() => setStrategyAllocation(id, allocation)),
+  setBreaker: (id: string, breaker: CircuitBreaker) =>
+    useStrategyRunnerStore.getState().act(() => setStrategyBreaker(id, breaker)),
+  remove: (id: string) =>
+    useStrategyRunnerStore.getState().act(async () => {
+      await deleteStrategy(id);
+      // Drop the selection too: the detail panels below the table are keyed
+      // to it and would otherwise keep rendering a strategy that is gone.
+      if (useStrategyRunnerStore.getState().selectedId === id) {
+        useStrategyRunnerStore.setState({ selectedId: null, decisions: [] });
+      }
+    }),
 };

@@ -380,3 +380,24 @@ class TestDelete:
             await session.commit()
         with pytest.raises(ValueError, match="flatten it first"):
             await runner.delete(row["id"])
+
+
+class TestReaderParams:
+    """Which model reads the release, and how hard. The paper's numbers are
+    one model at one effort; a silent upgrade underneath them is a different
+    experiment, so both are pinnable per instance."""
+
+    def test_model_defaults_to_the_engine_and_can_be_pinned(self):
+        assert PeadFlagship.default_params["model"] is None
+        pinned = PeadFlagship.validate_params({"model": "claude-opus-5"})
+        assert pinned["model"] == "claude-opus-5"
+
+    def test_effort_is_checked_against_what_the_gateway_understands(self):
+        assert PeadFlagship.default_params["effort"] == "medium"
+        with pytest.raises(ValueError, match="effort"):
+            PeadFlagship.validate_params({"effort": "maximum"})
+        assert PeadFlagship.validate_params({"effort": "high"})["effort"] == "high"
+
+    def test_blank_model_is_refused_rather_than_silently_defaulting(self):
+        with pytest.raises(ValueError, match="model"):
+            PeadFlagship.validate_params({"model": "   "})

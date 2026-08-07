@@ -9,13 +9,10 @@ import { useCallback, useEffect, useState } from "react";
 import {
   apiError,
   createStrategy,
-  deleteStrategy,
   getStrategyCatalog,
   getStrategyPerformance,
   getStrategySource,
   getStrategyTwin,
-  setStrategyAllocation,
-  setStrategyBreaker,
   type Allocation,
   type Capabilities,
   type CircuitBreaker,
@@ -313,16 +310,7 @@ function InstanceRow({
                     "that history is not recoverable.",
                 )
               )
-                void onAction(
-                  (async () => {
-                    try {
-                      await deleteStrategy(inst.id);
-                      return null;
-                    } catch (err) {
-                      return apiError(err);
-                    }
-                  })(),
-                );
+                void onAction(actions.remove(inst.id));
             }}
           >
             DELETE
@@ -345,7 +333,7 @@ function ParamsPanel({
   return (
     <div className="panel flex shrink-0 flex-col">
       <div className="panel-title">
-        PARAMS — {inst.name.toUpperCase()} (saving restarts the instance)
+        PARAMS — {inst.name.toUpperCase()}
       </div>
       <textarea
         className="h-40 w-full border-0 bg-black p-2 font-mono text-[11px] text-bb-amber outline-none"
@@ -400,10 +388,7 @@ function CommandPanel({
   return (
     <div className="panel flex shrink-0 flex-col">
       <div className="panel-title">
-        COMMAND — {inst.name.toUpperCase()}{" "}
-        <span className="text-bb-muted">
-          (journalled as a manual signal scoped to this instance)
-        </span>
+        COMMAND — {inst.name.toUpperCase()}
       </div>
       <div className="flex items-center gap-2 px-2 py-2">
         <input
@@ -432,18 +417,9 @@ function CommandPanel({
           SEND
         </button>
       </div>
-      <div className="px-2 pb-2 text-[9px] leading-tight text-bb-muted">
-        {parseError ? (
-          <span className="text-bb-loss">{parseError}</span>
-        ) : (
-          <>
-            The strategy decides what a payload means and journals what it did
-            with it. <code>{"{\"cmd\": \"build_watchlist\"}"}</code> freezes tonight's
-            watchlist now — the salvage for an engine that was down through the
-            15:30 ET tick.
-          </>
-        )}
-      </div>
+      {parseError && (
+        <div className="px-2 pb-2 text-[10px] text-bb-loss">{parseError}</div>
+      )}
     </div>
   );
 }
@@ -516,7 +492,7 @@ function PerformancePanel({ inst }: { inst: StrategyInstance }) {
   return (
     <div className="panel flex shrink-0 flex-col">
       <div className="panel-title">
-        PERFORMANCE — {inst.name.toUpperCase()} (plans carrying this strategy label)
+        PERFORMANCE — {inst.name.toUpperCase()}
       </div>
       {error ? (
         <div className="px-2 py-2 text-[11px] text-bb-loss">{error}</div>
@@ -557,9 +533,8 @@ function PerformancePanel({ inst }: { inst: StrategyInstance }) {
             </span>
           </div>
           {perf.plans.length === 0 ? (
-            <div className="flex h-10 items-center justify-center px-3 text-center text-[11px] text-bb-muted">
-              no plans yet — note-mode strategies journal would-be trades instead.
-              The PAPER TWIN below is what those would have done.
+            <div className="flex h-10 items-center justify-center text-[11px] text-bb-muted">
+              no plans yet
             </div>
           ) : (
             <div className="max-h-48 overflow-y-auto">
@@ -648,12 +623,12 @@ function CapitalPanel({
       <div className="grid gap-px md:grid-cols-2">
         {/* ---------------------------------------------------- allocation */}
         <div className="flex flex-col gap-1 p-2">
-          <div className="flex items-center gap-2">
-            <span className="text-[10px] tracking-widest text-bb-muted">ALLOCATION</span>
-            <span className="text-[9px] text-bb-muted">
-              the capital this strategy sizes against
-            </span>
-          </div>
+          <span
+            className="text-[10px] tracking-widest text-bb-muted"
+            title="The capital this strategy sizes against. Intents past what is left are refused."
+          >
+            ALLOCATION
+          </span>
           <div className="flex items-center gap-1">
             <input
               data-numeric
@@ -679,18 +654,7 @@ function CapitalPanel({
             <button
               className="border border-bb-profit px-1.5 text-[10px] text-bb-profit hover:bg-bb-profit hover:text-black disabled:opacity-30"
               disabled={!allocDirty}
-              onClick={() =>
-                void onAction(
-                  (async () => {
-                    try {
-                      await setStrategyAllocation(inst.id, alloc);
-                      return null;
-                    } catch (err) {
-                      return apiError(err);
-                    }
-                  })(),
-                )
-              }
+              onClick={() => void onAction(actions.setAllocation(inst.id, alloc))}
             >
               SET
             </button>
@@ -724,14 +688,12 @@ function CapitalPanel({
 
         {/* ------------------------------------------------ circuit breaker */}
         <div className="flex flex-col gap-1 border-l border-bb-border p-2">
-          <div className="flex items-center gap-2">
-            <span className="text-[10px] tracking-widest text-bb-muted">
-              CIRCUIT BREAKER
-            </span>
-            <span className="text-[9px] text-bb-muted">
-              drawdown that flattens and pauses this strategy
-            </span>
-          </div>
+          <span
+            className="text-[10px] tracking-widest text-bb-muted"
+            title="Drawdown from this strategy's high-water mark. Trips: flatten the book, pause the instance."
+          >
+            CIRCUIT BREAKER
+          </span>
           <div className="flex items-center gap-1">
             <label className="flex items-center gap-1 text-[10px] text-bb-muted">
               <input
@@ -770,18 +732,7 @@ function CapitalPanel({
             <button
               className="border border-bb-profit px-1.5 text-[10px] text-bb-profit hover:bg-bb-profit hover:text-black disabled:opacity-30"
               disabled={!breakerDirty}
-              onClick={() =>
-                void onAction(
-                  (async () => {
-                    try {
-                      await setStrategyBreaker(inst.id, breaker);
-                      return null;
-                    } catch (err) {
-                      return apiError(err);
-                    }
-                  })(),
-                )
-              }
+              onClick={() => void onAction(actions.setBreaker(inst.id, breaker))}
             >
               SET
             </button>
@@ -821,9 +772,11 @@ function CapitalPanel({
                 </div>
               )}
               {!breaker.enabled && (
-                <div className="text-[9px] leading-tight text-bb-orange">
-                  Disabled. This strategy trades with no per-position stop, so the
-                  breaker is the only thing bounding its loss.
+                <div
+                  className="text-[10px] text-bb-orange"
+                  title="An unbracketed strategy has no per-position stop, so nothing bounds its loss."
+                >
+                  OFF — unbounded
                 </div>
               )}
             </>
@@ -871,15 +824,15 @@ function TwinPanel({ inst }: { inst: StrategyInstance }) {
         title="Journalled would-be trades compounded through the session calendar. Not fills — a replay."
       >
         PAPER TWIN — {inst.name.toUpperCase()}
-        {twin ? ` (${twin.signals} would-be trades)` : ""}
+        {twin ? ` (${twin.signals})` : ""}
       </div>
       {error ? (
         <div className="px-2 py-2 text-[11px] text-bb-loss">{error}</div>
       ) : !twin ? (
         <div className="px-2 py-2 text-[11px] text-bb-muted">loading…</div>
       ) : twin.signals === 0 ? (
-        <div className="flex h-10 items-center justify-center px-3 text-center text-[11px] text-bb-muted">
-          nothing to replay — this instance has journalled no would-be trades yet
+        <div className="flex h-10 items-center justify-center text-[11px] text-bb-muted">
+          nothing to replay
         </div>
       ) : (
         <table className="w-full border-collapse text-[11px]">
@@ -920,10 +873,7 @@ function TwinPanel({ inst }: { inst: StrategyInstance }) {
           </tbody>
         </table>
       )}
-      <div className="border-t border-bb-border px-2 py-1 text-[9px] leading-tight text-bb-muted">
-        A replay, not a record: every entry assumes a fill at the journalled
-        price, which is the assumption a live account has to earn.
-      </div>
+
     </div>
   );
 }

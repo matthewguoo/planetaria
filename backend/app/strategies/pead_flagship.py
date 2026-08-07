@@ -105,6 +105,11 @@ NUMS_HEADLINE = ("EPS", "Sales", "Revenue", "Q1", "Q2", "Q3", "Q4")
 # entry — the horizon rule must never key off the outcome.
 GUIDANCE_MOVED = ("raised", "lowered")
 
+# Reasoning budgets the gateway understands. §5.6 measured all three on the
+# same events: the gated return is flat from medium upward, so the default is
+# the cheapest one that is not worse.
+EFFORTS = ("low", "medium", "high")
+
 
 @register
 class PeadFlagship(Strategy):
@@ -151,6 +156,13 @@ class PeadFlagship(Strategy):
         "max_spread_pct": 2.0,
         "live": False,
         "max_text": 12_000,
+        # THE READER. `model` null follows the engine default (LLM_MODEL in
+        # .env); naming one here pins THIS strategy to it, which matters
+        # because the paper's numbers are that model at that effort and a
+        # silent upgrade underneath them is a different experiment. §5.6
+        # measured the arms: effort buys more than model choice does, and
+        # `medium` is where the gated return stops improving.
+        "model": None,
         "effort": "medium",
         "analysis_timeout_s": 90.0,
     }
@@ -197,6 +209,10 @@ class PeadFlagship(Strategy):
             raise ValueError("max_text must be 1000-20000")
         if not (10.0 <= float(clean["analysis_timeout_s"]) <= 200.0):
             raise ValueError("analysis_timeout_s must be 10-200")
+        if clean["effort"] not in EFFORTS:
+            raise ValueError(f"effort must be one of {sorted(EFFORTS)}")
+        if clean["model"] is not None and not str(clean["model"]).strip():
+            raise ValueError("model must be null (engine default) or a model id")
         return clean
 
     # ---------------------------------------------------------------- events
@@ -432,7 +448,8 @@ class PeadFlagship(Strategy):
         try:
             analysis = await ctx.analyze(
                 task=task, data=text, schema=SURPRISE_SCHEMA, symbols=(sym,),
-                signal_ids=signal_ids, effort=ctx.params["effort"],
+                signal_ids=signal_ids, model=ctx.params["model"],
+                effort=ctx.params["effort"],
                 timeout_s=float(ctx.params["analysis_timeout_s"]),
             )
         except AnalysisError as exc:
