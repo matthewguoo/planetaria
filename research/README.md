@@ -44,11 +44,44 @@ second renders `docs/report.html` from `docs/report_template.html` plus that
 payload. Nothing in the paper is transcribed by hand, so the paper cannot
 drift from the harness — and `report.html` is generated, never hand-edited.
 
-**The payload is the regression gate.** Every change in this tree is a
-refactor whose only success criterion is that the numbers do not move:
-snapshot `docs/report_data.json`, make the change, rebuild, and diff. A
-byte-identical payload is the pass. Anything else is a bug in the refactor,
-not an improvement.
+**The regression gate has two tiers, and the second is the real one.**
+
+1. `docs/report_data.json` should rebuild byte-identical. It does — but only
+   between stage runs. `curve_raw.updated` is a timestamp read out of
+   `payload/study-curve.json`, so re-running a stage legitimately moves it,
+   and `curve_bracketed` carries stage output the paper never renders.
+2. **`docs/report.html` must rebuild byte-identical.** This is the invariant.
+   It is built from an allowlist (`build_paper.KEEP`) plus the trade
+   appendix, so it is immune to churn in fields nothing reads and it fails
+   loudly on any change to a number the paper actually cites.
+
+Diff tier 1 first because it localises a break; trust tier 2 to decide
+whether a break matters.
+
+### payload/ is an input, not an output
+
+`payload/` is gitignored and looks disposable. It is not:
+`build_report_data.py` READS `study-curve.json` and `study-curve-bracketed.json`
+to populate `curve_raw` and `curve_bracketed`, and `build_paper.py` reads
+`study-trades.json` for the appendix. Deleting them silently degrades the
+payload — every headline number survives, the equity curves and the flagship
+spec table vanish, and the paper renders its "not computed" guards instead.
+That happened on 2026-08-06 when the two curve files were mistaken for
+frontend assets.
+
+Regenerate (no inference, just compute — the verdicts are cached):
+
+```bash
+cd research/pead-llm-gate && ../../backend/.venv/Scripts/python.exe scripts/research_holding_period.py best
+```
+
+and, for the bracketed curve,
+
+```bash
+cd research/pead-llm-gate && ../../backend/.venv/Scripts/python.exe scripts/research_llm_contamination.py curve --brackets --effort medium
+```
+
+`study-trades.json` comes from `research_holding_period.py trades`.
 
 Two silent-failure modes have already cost an hour each, and neither raises:
 
