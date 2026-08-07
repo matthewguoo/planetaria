@@ -86,19 +86,34 @@ function SystemButton() {
   );
 }
 
-export function Header() {
+/** The two shells differ only in what sits left of the tabs and which tabs
+ * exist: the ops console has no chart, so no symbol, no price readout, and
+ * no TERMINAL tab. Everything to the right — audio, system, feed status,
+ * the PAPER badge — is identical, which is why this is one component with a
+ * variant rather than two headers that drift apart. */
+const TABS = {
+  terminal: ["terminal", "account", "strategies", "monitor"],
+  ops: ["strategies", "account", "monitor"],
+} as const;
+
+export function Header({ variant = "terminal" }: { variant?: "terminal" | "ops" }) {
   const symbol = useTradingStore((s) => s.symbol);
-  const quote = useTradingStore((s) => s.quote);
   const view = useUiStore((s) => s.view);
   const setView = useUiStore((s) => s.setView);
 
   return (
     <header className="panel flex h-9 shrink-0 items-center gap-6 px-3">
       <span className="tracking-widest text-bb-amber">PLANETARIA</span>
-      <span className="text-white">{symbol}</span>
-      <PriceReadout />
+      {variant === "terminal" ? (
+        <>
+          <span className="text-white">{symbol}</span>
+          <PriceReadout />
+        </>
+      ) : (
+        <span className="text-[11px] tracking-widest text-bb-muted">OPS</span>
+      )}
       <div className="ml-auto flex items-center gap-4">
-        {(["terminal", "account", "strategies", "monitor"] as const).map((v) => (
+        {TABS[variant].map((v) => (
           <button
             key={v}
             onClick={() => setView(v)}

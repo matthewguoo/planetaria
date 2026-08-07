@@ -67,7 +67,7 @@ import sys
 import time as _time
 from datetime import date, datetime, timezone
 
-from _paths import BACKEND, CACHE, ENV, NOTES, PUBLIC
+from _paths import BACKEND, CACHE, ENV, NOTES, PAYLOAD
 from zoneinfo import ZoneInfo
 
 sys.path.insert(0, str(BACKEND))
@@ -1434,7 +1434,7 @@ def stage_arms(args) -> None:
     print(f"\nwrote {doc}")
 
 
-STATUS_FILE = (PUBLIC
+STATUS_FILE = (PAYLOAD
                / "study-status.json")
 
 
@@ -1495,7 +1495,7 @@ def stage_watch(args) -> None:
         _time.sleep(args.poll_s)
 
 
-CURVE_FILE = (PUBLIC
+CURVE_FILE = (PAYLOAD
               / "study-curve.json")
 PER_NAME_CAP = 0.20      # engine dial
 GROSS_CAP = 1.00         # engine dial

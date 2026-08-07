@@ -1,8 +1,20 @@
 # planetaria
 
-A disciplined 0-3 DTE options trading terminal: FastAPI backend against Alpaca
-(paper), React/canvas frontend. The core design rule: **every position has a
-server-enforced exit plan** (TP / SL / hard time stop) that survives restarts.
+A FastAPI backend against Alpaca (paper) with two React front ends over the
+same API. The core design rule: **every position has a server-enforced exit
+plan** (TP / SL / hard time stop) that survives restarts.
+
+| entry | what it is |
+|---|---|
+| `/` | **ops console** — broker connection, account, and the strategy runners. Kind-agnostic: a new strategy appears here by being registered in `app/strategies/__init__.py`, with no frontend change. |
+| `/terminal.html` | **options terminal** — the discretionary 0-3 DTE cockpit: chart, chain, payoff designer, sizing, order ticket. |
+
+Neither front end holds a privileged path; both are clients of the same
+`/api/*` routes the headless engine exposes.
+
+`research/` holds studies — code that produces evidence, kept out of
+`backend/` so the dependency runs one way: research reads the app, the app
+never reads research. See [research/README.md](research/README.md).
 
 ## Screenshots
 
@@ -14,7 +26,7 @@ a running app with `node scripts/screenshots.mjs` from `frontend/` (needs
 ## Architecture
 
 ```
-frontend (Vite/React, canvas chart + payoff designer)
+frontend (Vite/React — ops console at /, options terminal at /terminal.html)
    │  REST /api/*        WebSocket /ws/stream (snapshot-then-stream)
 backend (FastAPI, single process)
    ├─ MarketDataService   one stock + one option stream, ref-counted subs,

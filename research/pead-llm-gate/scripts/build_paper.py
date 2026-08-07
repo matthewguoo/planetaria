@@ -20,10 +20,10 @@ import argparse
 import json
 import sys
 
-from _paths import DOCS, PUBLIC
+from _paths import DOCS, PAYLOAD
 
 DATA = DOCS / "report_data.json"
-TRADES = PUBLIC / "study-trades.json"
+TRADES = PAYLOAD / "study-trades.json"
 TEMPLATE = DOCS / "report_template.html"
 OUT = DOCS / "report.html"
 

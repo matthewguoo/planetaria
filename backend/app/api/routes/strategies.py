@@ -11,9 +11,20 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from app.services.signals.events import Event
+from app.services.sim_account import (
+    DEFAULT_EQUITY,
+    DEFAULT_FLAT_PCT,
+    signals_from_decisions,
+    simulate,
+)
 from app.strategies import REGISTRY
 
 router = APIRouter(prefix="/api", tags=["strategies"])
+
+# The twin replays the whole journal, not a page of it — a curve built from
+# the most recent 100 decisions is not the account's history, it is a
+# suffix of it.
+TWIN_MAX_DECISIONS = 5_000
 
 
 class CreateIn(BaseModel):
@@ -164,6 +175,51 @@ async def performance(request: Request, row_id: str) -> dict:
         return await request.app.state.strategy_runner.performance(row_id)
     except ValueError as exc:
         raise HTTPException(404, str(exc))
+
+
+@router.get("/strategies/{row_id}/twin")
+async def twin(request: Request, row_id: str,
+               equity: float = DEFAULT_EQUITY, risk_pct: float = 0.5,
+               flat_pct: float = DEFAULT_FLAT_PCT) -> dict:
+    """The paper twin: this instance's journaled decisions compounded into an
+    equity curve, under the live vol-weighted allocator and a flat-notional
+    one.
+
+    Note-mode strategies place nothing, so `performance` above is empty for
+    them by construction and a shadow run has no readable outcome. This is
+    that outcome: what the account WOULD have done. It reads the decision
+    journal and nothing else, so it works for any strategy kind that journals
+    a would-be trade — it is deliberately not the earnings-specific deck it
+    replaced.
+    """
+    if equity <= 0:
+        raise HTTPException(422, "equity must be positive")
+    runner = request.app.state.strategy_runner
+    try:
+        await runner.get(row_id)
+    except ValueError as exc:
+        raise HTTPException(404, str(exc))
+
+    decisions = await runner.decisions(row_id, TWIN_MAX_DECISIONS)
+    signals = signals_from_decisions(decisions)
+    market = getattr(request.app.state, "market", None)
+
+    def bars_for(symbol: str) -> list[dict]:
+        return market.bars.get_bars(symbol, "1m") if market else []
+
+    def mark_for(symbol: str) -> float | None:
+        quote = market.latest_quote(symbol) if market else None
+        return quote.get("mid") if quote else None
+
+    return {
+        "signals": len(signals),
+        "params": {"equity": equity, "risk_pct": risk_pct, "flat_pct": flat_pct},
+        "policies": [
+            simulate(signals, bars_for, mark_for, policy=policy,
+                     start_equity=equity, risk_pct=risk_pct, flat_pct=flat_pct)
+            for policy in ("vol", "flat")
+        ],
+    }
 
 
 @router.get("/signals")

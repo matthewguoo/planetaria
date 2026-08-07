@@ -62,7 +62,7 @@ import time as _time
 from datetime import datetime
 from pathlib import Path
 
-from _paths import BACKEND, NOTES, PUBLIC, SCRIPTS
+from _paths import BACKEND, NOTES, PAYLOAD, SCRIPTS
 
 sys.path.insert(0, str(BACKEND))
 sys.path.insert(0, str(SCRIPTS))
@@ -644,7 +644,7 @@ def stage_best(args) -> None:
 
     # Publish the corrected curves for the deck. The old study-curve.json was
     # built on the mislabeled 2-4 session exit; this replaces it.
-    curve_file = (PUBLIC
+    curve_file = (PAYLOAD
                   / "study-curve.json")
     spy_curve = (spy_close / spy_close[0]).tolist()
     series, stats_out = {"spy": [round(v, 5) for v in spy_curve]}, {}
@@ -1117,7 +1117,7 @@ def stage_mutations(args) -> None:
     print(f"wrote {CACHE / 'gate_mutations.parquet'}")
 
 
-TRADES_FILE = (PUBLIC
+TRADES_FILE = (PAYLOAD
                / "study-trades.json")
 
 

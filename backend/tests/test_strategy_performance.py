@@ -1,4 +1,5 @@
-"""Per-strategy performance rollup + read-only source endpoint."""
+"""Per-strategy performance rollup, the paper twin, and the read-only source
+endpoint."""
 
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -7,7 +8,7 @@ import pytest
 import pytest_asyncio
 from fastapi import HTTPException
 
-from app.api.routes.strategies import catalog_source
+from app.api.routes.strategies import catalog_source, twin
 from app.db.session import Database
 from app.models.trade import TradePlan
 from app.services.risk import RiskService
@@ -60,6 +61,40 @@ async def test_performance_rollup(runner):
 
     with pytest.raises(ValueError):
         await runner.performance("nope")
+
+
+@pytest.mark.asyncio
+async def test_twin_replays_any_kind_from_the_journal(runner):
+    """The twin replaced a deck hardwired to one strategy kind, so the test
+    that matters is that it works on a kind that has nothing to do with
+    earnings — it reads journalled would-be trades and nothing else."""
+    row = await runner.create("ref_tick", "ref", {})
+    await runner.journal_note(row["id"], {"would_trade": {
+        "symbol": "AMD", "side": 1, "px": 100.0, "move_pct": 6.0,
+        "verdict": {"direction": "bullish", "confidence": "medium",
+                    "quality_flags": []},
+        "bracket": {"sl_pct": 0.05, "tp_pct": 0.10},
+        "intent": {"time_stop_utc":
+                   (datetime.now(timezone.utc) + timedelta(hours=20)).isoformat()},
+    }})
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(
+        strategy_runner=runner, market=None)))
+
+    out = await twin(request, row["id"])
+    assert out["signals"] == 1
+    assert [p["policy"] for p in out["policies"]] == ["vol", "flat"]
+    # No bars and no marks: the position stays open and marked at entry, so
+    # the curve exists and is flat rather than absent.
+    assert all(p["start_equity"] == out["params"]["equity"] for p in out["policies"])
+    assert all(p["curve"] for p in out["policies"])
+
+    with pytest.raises(HTTPException) as bad_id:
+        await twin(request, "nope")
+    assert bad_id.value.status_code == 404
+
+    with pytest.raises(HTTPException) as bad_equity:
+        await twin(request, row["id"], equity=0)
+    assert bad_equity.value.status_code == 422
 
 
 @pytest.mark.asyncio

@@ -29,7 +29,7 @@ import math
 import sys
 from datetime import date, timedelta
 
-from _paths import BACKEND, DOCS, PUBLIC, SCRIPTS
+from _paths import BACKEND, DOCS, PAYLOAD, SCRIPTS
 
 sys.path.insert(0, str(BACKEND))
 sys.path.insert(0, str(SCRIPTS))
@@ -62,7 +62,6 @@ from research_llm_contamination import (  # noqa: E402
     load_universe,
 )
 
-PUBLIC = PUBLIC
 OUT = DOCS / "report_data.json"
 
 
@@ -1127,7 +1126,7 @@ def main() -> None:
 
     for tag, name in (("raw", "study-curve.json"),
                       ("bracketed", "study-curve-bracketed.json")):
-        path = PUBLIC / name
+        path = PAYLOAD / name
         if path.exists():
             data[f"curve_{tag}"] = json.loads(path.read_text(encoding="utf-8"))
 

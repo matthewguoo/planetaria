@@ -26,5 +26,10 @@ BACKEND = ROOT / "backend"
 CACHE = STUDY / "cache"                            # bars, filings, verdicts
 NOTES = STUDY / "notes"                            # dated run logs
 DOCS = ROOT / "docs"                               # the paper (published output)
-PUBLIC = ROOT / "frontend" / "public"              # study payloads the Lab reads
 ENV = ROOT / ".env"
+
+# Stage exports: the trade table the paper's appendix is built from, plus the
+# curve and progress files. These lived in `frontend/public/` while a UI read
+# them live; that UI is gone, and a study writing into the frontend's static
+# assets was always the wrong direction of dependency.
+PAYLOAD = STUDY / "payload"

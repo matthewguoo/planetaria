@@ -23,8 +23,6 @@ import {
 } from "../../lib/api";
 import { fmtUsd, pnlCls } from "../../lib/format";
 import { useAccountStore } from "../../store/accountStore";
-import { useTradingStore } from "../../store/tradingStore";
-import { useUiStore } from "../../store/uiStore";
 
 function StatCard({ label, value, cls }: { label: string; value: string; cls?: string }) {
   return (
@@ -285,13 +283,14 @@ function EquityCurve({ history }: { history: PortfolioHistory | null }) {
   return <canvas ref={ref} className="h-full w-full" />;
 }
 
-export function AccountPage() {
+/** `onViewPlan` hands a position off to the chart. The terminal shell passes
+ * it; the ops console has no chart, so it passes nothing and the row simply
+ * stops being clickable — the page itself stays shell-agnostic. */
+export function AccountPage({ onViewPlan }: { onViewPlan?: (plan: Plan) => void } = {}) {
   const account = useAccountStore((s) => s.account);
   const positions = useAccountStore((s) => s.positions);
   const untracked = useAccountStore((s) => s.untracked);
   const refreshPositions = useAccountStore((s) => s.refreshPositions);
-  const viewPosition = useUiStore((s) => s.viewPosition);
-  const setSymbol = useTradingStore((s) => s.setSymbol);
 
   const [history, setHistory] = useState<PortfolioHistory | null>(null);
   const [period, setPeriod] = useState("1M");
@@ -326,10 +325,6 @@ export function AccountPage() {
   }, [refresh]);
 
   const unrealized = positions.reduce((acc, p) => acc + (p.unrealized_pnl ?? 0), 0);
-  const openView = (plan: Plan) => {
-    setSymbol(plan.underlying);
-    viewPosition(plan.id);
-  };
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-px overflow-y-auto">
@@ -423,9 +418,12 @@ export function AccountPage() {
             {positions.map((p) => (
               <tr
                 key={p.id}
-                className="cursor-pointer border-b border-bb-border/50 hover:bg-bb-hover"
-                onClick={() => openView(p)}
-                title="View this position on the chart (entry-anchored P/L surface)"
+                className={
+                  "border-b border-bb-border/50 hover:bg-bb-hover " +
+                  (onViewPlan ? "cursor-pointer" : "")
+                }
+                onClick={onViewPlan ? () => onViewPlan(p) : undefined}
+                title={onViewPlan ? "View this position on the chart (entry-anchored P/L surface)" : ""}
               >
                 <td className="px-2 py-1 text-white">
                   {p.underlying}
@@ -452,15 +450,17 @@ export function AccountPage() {
                   {account?.equity ? `${((planStopRisk(p) / account.equity) * 100).toFixed(1)}%` : "—"}
                 </td>
                 <td className="px-2 py-1 text-right">
-                  <button
-                    className="border border-bb-amber px-1.5 text-[10px] text-bb-amber hover:bg-bb-amber hover:text-black"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      openView(p);
-                    }}
-                  >
-                    VIEW
-                  </button>
+                  {onViewPlan && (
+                    <button
+                      className="border border-bb-amber px-1.5 text-[10px] text-bb-amber hover:bg-bb-amber hover:text-black"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onViewPlan(p);
+                      }}
+                    >
+                      VIEW
+                    </button>
+                  )}
                   <button
                     className="ml-1 border border-bb-loss px-1.5 text-[10px] text-bb-loss hover:bg-bb-loss hover:text-black"
                     onClick={async (e) => {

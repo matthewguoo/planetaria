@@ -1,25 +1,25 @@
 import { useEffect, useState } from "react";
-import { AccountPage } from "./components/Account/AccountPage";
-import { EnforcementBanner } from "./components/EnforcementBanner";
-import { Header } from "./components/Header";
-import { CandlePane } from "./components/Chart/CandlePane";
-import { ChainPanel } from "./components/Chart/ChainPanel";
-import { ChartControls } from "./components/Chart/ChartControls";
-import { ChartHud } from "./components/Chart/ChartHud";
-import { LegRail } from "./components/Chart/LegRail";
-import { sharedBars } from "./lib/chartShared";
-import { MobileApp } from "./components/Mobile/MobileApp";
-import { OrderPanel } from "./components/Panels/OrderPanel";
-import { SizingPanel } from "./components/Panels/SizingPanel";
-import { StrategyPanel } from "./components/Panels/StrategyPanel";
-import { PositionsDrawer } from "./components/Positions/PositionsDrawer";
-import MonitorPage from "./components/Monitor/MonitorPage";
-import StrategiesPage from "./components/Strategies/StrategiesPage";
-import { useDesigner } from "./lib/useDesigner";
-import { useAccountStore } from "./store/accountStore";
-import { useStrategyStore } from "./store/strategyStore";
-import { useTradingStore } from "./store/tradingStore";
-import { useUiStore } from "./store/uiStore";
+import { AccountPage } from "../components/Account/AccountPage";
+import { EnforcementBanner } from "../components/EnforcementBanner";
+import { Header } from "../components/Header";
+import { CandlePane } from "../components/Chart/CandlePane";
+import { ChainPanel } from "../components/Chart/ChainPanel";
+import { ChartControls } from "../components/Chart/ChartControls";
+import { ChartHud } from "../components/Chart/ChartHud";
+import { LegRail } from "../components/Chart/LegRail";
+import { sharedBars } from "../lib/chartShared";
+import { MobileApp } from "../components/Mobile/MobileApp";
+import { OrderPanel } from "../components/Panels/OrderPanel";
+import { SizingPanel } from "../components/Panels/SizingPanel";
+import { StrategyPanel } from "../components/Panels/StrategyPanel";
+import { PositionsDrawer } from "../components/Positions/PositionsDrawer";
+import MonitorPage from "../components/Monitor/MonitorPage";
+import StrategiesPage from "../components/Strategies/StrategiesPage";
+import { useDesigner } from "../lib/useDesigner";
+import { useAccountStore } from "../store/accountStore";
+import { useStrategyStore } from "../store/strategyStore";
+import { useTradingStore } from "../store/tradingStore";
+import { useUiStore } from "../store/uiStore";
 
 // Below this width the dedicated phone layout takes over (chart-first,
 // bottom-sheet panels — see components/Mobile/).
@@ -45,7 +45,7 @@ function useDataPumps() {
   const [cadence, setCadence] = useState({ chain: 10_000, account: 30_000, positions: 5_000 });
 
   useEffect(() => {
-    import("./lib/api").then(({ getFeedSettings }) =>
+    import("../lib/api").then(({ getFeedSettings }) =>
       getFeedSettings()
         .then((cfg) =>
           setCadence({
@@ -79,12 +79,14 @@ function useDataPumps() {
 // ?unlock forces the desktop layout in small panes (QA/testing).
 const UNLOCKED = new URLSearchParams(window.location.search).has("unlock");
 
-export default function App() {
+export default function TerminalApp() {
   const phone = usePhoneViewport();
   useDataPumps();
   const designer = useDesigner();
   const view = useUiStore((s) => s.view);
   const chainOpen = useUiStore((s) => s.chainOpen);
+  const viewPosition = useUiStore((s) => s.viewPosition);
+  const setSymbol = useTradingStore((s) => s.setSymbol);
 
   if (phone && !UNLOCKED) return <MobileApp />;
 
@@ -94,7 +96,12 @@ export default function App() {
       <EnforcementBanner />
 
       {view === "account" ? (
-        <AccountPage />
+        <AccountPage
+          onViewPlan={(plan) => {
+            setSymbol(plan.underlying);
+            viewPosition(plan.id);
+          }}
+        />
       ) : view === "strategies" ? (
         <StrategiesPage />
       ) : view === "monitor" ? (
