@@ -29,7 +29,7 @@ import math
 import sys
 from datetime import date, timedelta
 
-from _paths import BACKEND, DOCS, PAYLOAD, SCRIPTS
+from _paths import BACKEND, PAPER, PAYLOAD, SCRIPTS
 
 sys.path.insert(0, str(BACKEND))
 sys.path.insert(0, str(SCRIPTS))
@@ -62,7 +62,7 @@ from research_llm_contamination import (  # noqa: E402
     load_universe,
 )
 
-OUT = DOCS / "report_data.json"
+OUT = PAPER / "report_data.json"
 
 
 def _f(x) -> float | None:
@@ -115,11 +115,16 @@ def funnel() -> list[dict]:
 
 
 def spec() -> list[dict]:
-    """The production configuration, read out of the strategy class rather
-    than paraphrased — the paper must not be able to drift from the engine."""
-    from app.strategies.earnings_reaction import EXIT_ET, WATCHLIST_ET, EarningsReaction
+    """The configuration the engine ran while the study was written.
 
-    p = EarningsReaction.default_params
+    Was read live out of the strategy class so the paper could not drift from
+    the engine. The engine no longer runs it — `pead_flagship` replaced it —
+    so a live read would now make Table 2 track a strategy the table is not
+    about. Frozen in _shipped_config.py, with the reasoning there.
+    """
+    from _shipped_config import DEFAULT_PARAMS, EXIT_ET, WATCHLIST_ET
+
+    p = DEFAULT_PARAMS
     rows = [
         ("watchlist freeze", WATCHLIST_ET + " ET",
          "tonight's AMC reporters, ranked by prior-session dollar volume"),

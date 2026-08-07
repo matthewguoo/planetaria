@@ -1,7 +1,7 @@
 """Render the working paper from the harness output.
 
-docs/report_template.html holds the prose, the design system and the render
-code; every NUMBER comes from docs/report_data.json and the trade appendix
+paper/report_template.html holds the prose, the design system and the render
+code; every NUMBER comes from paper/report_data.json and the trade appendix
 from frontend/public/study-trades.json. Nothing is transcribed by hand, so
 the paper cannot drift from the study that produced it — re-run the pipeline
 and the paper restates itself.
@@ -20,12 +20,12 @@ import argparse
 import json
 import sys
 
-from _paths import DOCS, PAYLOAD
+from _paths import PAPER, PAYLOAD
 
-DATA = DOCS / "report_data.json"
+DATA = PAPER / "report_data.json"
 TRADES = PAYLOAD / "study-trades.json"
-TEMPLATE = DOCS / "report_template.html"
-OUT = DOCS / "report.html"
+TEMPLATE = PAPER / "report_template.html"
+OUT = PAPER / "report.html"
 
 # Everything the page renders. Anything not listed is dropped, which is how
 # a 228 KB data file and a 1.0 MB trade export become a payload that fits in

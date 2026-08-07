@@ -47,7 +47,7 @@ echo; echo "=== 9/9 PDF ==="
   --run-all-compositor-stages-before-draw --virtual-time-budget=60000 \
   --print-to-pdf-no-header \
   --print-to-pdf="$OUTDIR/planetaria-llm-pead-working-paper.pdf" \
-  "file:///C:/Users/matth/Desktop/planetaria/docs/report_print.html" 2>&1 | tail -1
+  "file:///C:/Users/matth/Desktop/planetaria/research/pead-llm-gate/paper/report_print.html" 2>&1 | tail -1
 
 $PY - <<'PYEOF'
 from pathlib import Path

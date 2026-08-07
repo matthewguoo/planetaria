@@ -8,8 +8,17 @@ computed once.
 
 The rule the anchors encode: the study READS the app (`BACKEND` on sys.path,
 so `from app.config import get_settings` resolves) and the app never reads
-the study. `DOCS` is the published paper — the study writes `report_data.json`
-and `report.html` there and nothing else.
+the study.
+
+`PAPER` is the study's own paper — template, payload and both rendered
+formats. It sat in `docs/` until 2026-08-07 on the theory that a published
+artefact belongs with the docs, which does not survive contact with two
+facts: `report_template.html` is 205 KB of working source rather than
+anything published, and `research/` is organised one directory per study, so
+a second study's `report.html` would have collided. A study that cannot be
+moved or archived as a unit is not really self-contained. `DOCS` now holds
+only what is genuinely cross-cutting — the explainer, the runbook, the
+briefs.
 """
 
 from pathlib import Path
@@ -25,7 +34,8 @@ BACKEND = ROOT / "backend"
 
 CACHE = STUDY / "cache"                            # bars, filings, verdicts
 NOTES = STUDY / "notes"                            # dated run logs
-DOCS = ROOT / "docs"                               # the paper (published output)
+PAPER = STUDY / "paper"                            # template, payload, renders
+DOCS = ROOT / "docs"                               # cross-cutting docs only
 ENV = ROOT / ".env"
 
 # Stage exports: the trade table the paper's appendix is built from, plus the
