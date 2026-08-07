@@ -62,8 +62,10 @@ import time as _time
 from datetime import datetime
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _paths import BACKEND, NOTES, PUBLIC, SCRIPTS
+
+sys.path.insert(0, str(BACKEND))
+sys.path.insert(0, str(SCRIPTS))
 
 import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
@@ -79,7 +81,7 @@ from research_llm_contamination import (  # noqa: E402
 )
 
 PATHS = CACHE / "event_paths_multi.parquet"
-DOC = Path(__file__).resolve().parents[2] / "docs" / "notes"
+DOC = NOTES
 
 LEVELS = np.round(np.arange(0.5, 40.01, 0.5), 2)
 MAX_SESSIONS = 5
@@ -642,7 +644,7 @@ def stage_best(args) -> None:
 
     # Publish the corrected curves for the deck. The old study-curve.json was
     # built on the mislabeled 2-4 session exit; this replaces it.
-    curve_file = (Path(__file__).resolve().parents[2] / "frontend" / "public"
+    curve_file = (PUBLIC
                   / "study-curve.json")
     spy_curve = (spy_close / spy_close[0]).tolist()
     series, stats_out = {"spy": [round(v, 5) for v in spy_curve]}, {}
@@ -1115,7 +1117,7 @@ def stage_mutations(args) -> None:
     print(f"wrote {CACHE / 'gate_mutations.parquet'}")
 
 
-TRADES_FILE = (Path(__file__).resolve().parents[2] / "frontend" / "public"
+TRADES_FILE = (PUBLIC
                / "study-trades.json")
 
 

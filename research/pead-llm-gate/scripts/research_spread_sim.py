@@ -34,10 +34,11 @@ from __future__ import annotations
 import argparse
 import sys
 from datetime import datetime
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _paths import BACKEND, NOTES, SCRIPTS
+
+sys.path.insert(0, str(BACKEND))
+sys.path.insert(0, str(SCRIPTS))
 
 import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
@@ -459,7 +460,7 @@ def stage_report(args) -> None:
         print(f"{'SPY':>10}{'—':>10}{'':>11}{dep['spy_cagr_pct']:>7.1f}%"
               f"{dep['spy_max_dd_pct']:>7.1f}%")
 
-    doc = Path(__file__).resolve().parents[2] / "docs" / "notes"
+    doc = NOTES
     doc.mkdir(parents=True, exist_ok=True)
     out = doc / f"spread_sim_{datetime.now().strftime('%Y%m%d_%H%M')}.md"
     lines = ["# Fill costs, measured", "",

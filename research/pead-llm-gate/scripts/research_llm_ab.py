@@ -33,10 +33,11 @@ import json
 import sys
 import time as _time
 from datetime import datetime
-from pathlib import Path
+
+from _paths import BACKEND, CACHE, NOTES
 from zoneinfo import ZoneInfo
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(BACKEND))
 
 import httpx  # noqa: E402
 import numpy as np  # noqa: E402
@@ -47,7 +48,7 @@ from app.services.signals.edgar import EdgarFeed, strip_html  # noqa: E402
 from app.strategies.earnings_reaction import SURPRISE_SCHEMA  # noqa: E402
 
 ET = ZoneInfo("America/New_York")
-CACHE = Path(__file__).resolve().parent / "_leadup_cache"
+CACHE = CACHE
 TEXTS = CACHE / "texts"
 OUT = CACHE / "llm_ab"
 SEC_UA = {"User-Agent": "planetaria/0.1 (contact: matthewguo.x86@gmail.com)"}
@@ -268,7 +269,7 @@ def score(sample: pd.DataFrame) -> None:
                   f" | LLM-gated n={len(agree):3d} {agree['mech_pnl'].mean():+7.1f}bp"
                   f" | vetoed n={len(veto):3d} {veto['mech_pnl'].mean():+7.1f}bp")
     stamp = datetime.now(ET).strftime("%Y%m%d_%H%M")
-    doc = (Path(__file__).resolve().parent.parent.parent / "docs" / "notes"
+    doc = (NOTES
            / f"llm_ab_{stamp}.md")
     doc.write_text(f"# LLM A/B — {stamp}\n\nSee script docstring for method; "
                    f"raw verdicts in scripts/_leadup_cache/llm_ab/.\n",

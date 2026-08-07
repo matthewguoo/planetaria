@@ -66,10 +66,11 @@ import re
 import sys
 import time as _time
 from datetime import date, datetime, timezone
-from pathlib import Path
+
+from _paths import BACKEND, CACHE, ENV, NOTES, PUBLIC
 from zoneinfo import ZoneInfo
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(BACKEND))
 
 import httpx  # noqa: E402
 import numpy as np  # noqa: E402
@@ -80,7 +81,7 @@ from app.services.signals.edgar import EdgarFeed, strip_html  # noqa: E402
 from app.strategies.earnings_reaction import SURPRISE_SCHEMA  # noqa: E402
 
 ET = ZoneInfo("America/New_York")
-CACHE = Path(__file__).resolve().parent / "_leadup_cache"
+CACHE = CACHE
 TEXTS = CACHE / "texts"
 OUT = CACHE / "llm_contam"
 SEC_UA = {"User-Agent": "planetaria/0.1 (contact: matthewguo.x86@gmail.com)"}
@@ -671,7 +672,7 @@ def client():
     # the engine must not grow a dependency on the API because of a study.
     key = os.environ.get("ANTHROPIC_API_KEY") or get_settings().anthropic_api_key
     if not key:
-        env = Path(__file__).resolve().parents[2] / ".env"
+        env = ENV
         if env.exists():
             for line in env.read_text(encoding="utf-8").splitlines():
                 name, _, value = line.partition("=")
@@ -1174,7 +1175,7 @@ def stage_score(args) -> None:
     spent = _spent_so_far()
     emit(f"measured API spend: ${spent:.2f}")
     stamp = datetime.now(ET).strftime("%Y%m%d_%H%M")
-    doc = (Path(__file__).resolve().parent.parent.parent / "docs" / "notes"
+    doc = (NOTES
            / f"llm_contamination_{stamp}.md")
     doc.write_text("\n".join(lines) + "\n", encoding="utf-8")
     print(f"\nwrote {doc}")
@@ -1427,13 +1428,13 @@ def stage_arms(args) -> None:
     dict, so the note and the paper cannot disagree about a number."""
     data = compute_arms(args)
     stamp = datetime.now(ET).strftime("%Y%m%d_%H%M")
-    doc = (Path(__file__).resolve().parents[2] / "docs" / "notes"
+    doc = (NOTES
            / f"contamination_arms_{stamp}.md")
     doc.write_text("\n".join(data["lines"]) + "\n", encoding="utf-8")
     print(f"\nwrote {doc}")
 
 
-STATUS_FILE = (Path(__file__).resolve().parents[2] / "frontend" / "public"
+STATUS_FILE = (PUBLIC
                / "study-status.json")
 
 
@@ -1494,7 +1495,7 @@ def stage_watch(args) -> None:
         _time.sleep(args.poll_s)
 
 
-CURVE_FILE = (Path(__file__).resolve().parents[2] / "frontend" / "public"
+CURVE_FILE = (PUBLIC
               / "study-curve.json")
 PER_NAME_CAP = 0.20      # engine dial
 GROSS_CAP = 1.00         # engine dial

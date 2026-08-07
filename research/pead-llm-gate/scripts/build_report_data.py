@@ -28,10 +28,11 @@ import json
 import math
 import sys
 from datetime import date, timedelta
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _paths import BACKEND, DOCS, PUBLIC, SCRIPTS
+
+sys.path.insert(0, str(BACKEND))
+sys.path.insert(0, str(SCRIPTS))
 
 import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
@@ -61,8 +62,8 @@ from research_llm_contamination import (  # noqa: E402
     load_universe,
 )
 
-PUBLIC = Path(__file__).resolve().parents[2] / "frontend" / "public"
-OUT = Path(__file__).resolve().parents[2] / "docs" / "report_data.json"
+PUBLIC = PUBLIC
+OUT = DOCS / "report_data.json"
 
 
 def _f(x) -> float | None:

@@ -41,10 +41,11 @@ import argparse
 import sys
 import time as _time
 from datetime import datetime, timedelta
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _paths import BACKEND, SCRIPTS
+
+sys.path.insert(0, str(BACKEND))
+sys.path.insert(0, str(SCRIPTS))
 
 import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402

@@ -29,10 +29,11 @@ import argparse
 import sys
 import time as _time
 from datetime import date, datetime, timedelta
-from pathlib import Path
+
+from _paths import BACKEND, CACHE, NOTES
 from zoneinfo import ZoneInfo
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(BACKEND))
 
 import httpx  # noqa: E402
 import numpy as np  # noqa: E402
@@ -45,7 +46,7 @@ from alpaca.data.timeframe import TimeFrame  # noqa: E402
 from app.config import get_settings  # noqa: E402
 
 ET = ZoneInfo("America/New_York")
-CACHE = Path(__file__).resolve().parent / "_leadup_cache"
+CACHE = CACHE
 
 ENTRY_DAYS = (5, 3, 2)     # sessions before announce-day to enter (at close)
 N_BOOT = 200
@@ -306,7 +307,7 @@ def run(months: int, min_dollar_vol: float, refresh: bool) -> None:
           "net of costs; null = matched-horizon random holds) ===")
     print(out.to_string(index=False))
     stamp = datetime.now(ET).strftime("%Y%m%d")
-    doc = (Path(__file__).resolve().parent.parent.parent / "docs" / "notes"
+    doc = (NOTES
            / f"leadup_backtest_{stamp}.md")
     doc.parent.mkdir(parents=True, exist_ok=True)
     doc.write_text(

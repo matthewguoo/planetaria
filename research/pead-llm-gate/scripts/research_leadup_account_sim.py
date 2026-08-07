@@ -32,10 +32,11 @@ import argparse
 import sys
 import time as _time
 from datetime import date, datetime, timedelta
-from pathlib import Path
+
+from _paths import BACKEND, CACHE, NOTES
 from zoneinfo import ZoneInfo
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(BACKEND))
 
 import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
@@ -47,7 +48,7 @@ from alpaca.data.timeframe import TimeFrame  # noqa: E402
 from app.config import get_settings  # noqa: E402
 
 ET = ZoneInfo("America/New_York")
-CACHE = Path(__file__).resolve().parent / "_leadup_cache"
+CACHE = CACHE
 
 COST_BP_SIDE = 3.0
 RISK_PCT = 0.5           # % of current equity at the stop
@@ -431,7 +432,7 @@ def main() -> None:
           else "SPY unavailable")
 
     stamp = datetime.now(ET).strftime("%Y%m%d")
-    doc = (Path(__file__).resolve().parent.parent.parent / "docs" / "notes"
+    doc = (NOTES
            / f"leadup_account_sim_{stamp}_{win_start}_{int(args.equity/1000)}k.md")
     doc.write_text(
         f"# Lead-up ACCOUNT sim — ${args.equity:,.0f}, {win_start}..{win_end}"

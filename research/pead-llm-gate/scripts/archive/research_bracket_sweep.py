@@ -29,8 +29,14 @@ import time as _time
 from datetime import datetime
 from pathlib import Path
 
+# Archived: one level below the study scripts, so reach _paths and the
+# sibling research modules explicitly.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from _paths import BACKEND, NOTES, SCRIPTS
+
+sys.path.insert(0, str(BACKEND))
+sys.path.insert(0, str(SCRIPTS))
 
 import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
@@ -50,7 +56,7 @@ from research_llm_contamination import (  # noqa: E402
 )
 
 PATHS = CACHE / "event_paths.parquet"
-DOC = Path(__file__).resolve().parents[2] / "docs" / "notes"
+DOC = NOTES
 
 # Excursion grid, percent. Storing first-touch time per level makes any
 # (stop, target) resolvable without keeping the raw bars.

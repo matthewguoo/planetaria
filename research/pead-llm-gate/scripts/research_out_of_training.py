@@ -53,10 +53,11 @@ from __future__ import annotations
 import argparse
 import sys
 from datetime import datetime
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _paths import BACKEND, NOTES, SCRIPTS
+
+sys.path.insert(0, str(BACKEND))
+sys.path.insert(0, str(SCRIPTS))
 
 import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
@@ -664,7 +665,7 @@ def stage_report(args) -> None:
               f"{d.get('ratio_of_edge')} of the edge")
     print(f"Verdict: {d['verdict']} ({d['verdict_short']}).")
 
-    doc = Path(__file__).resolve().parents[2] / "docs" / "notes"
+    doc = NOTES
     doc.mkdir(parents=True, exist_ok=True)
     out = doc / f"out_of_training_{datetime.now().strftime('%Y%m%d_%H%M')}.md"
     lines = [f"# Out-of-training test ({d['span'][0]}..{d['span'][1]})", "",

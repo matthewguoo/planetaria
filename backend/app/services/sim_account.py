@@ -31,7 +31,7 @@ ledger. Honesty rails:
   last quote rather than being silently closed at a made-up price.
 - Costs are the research harness's convention (10bp AH entry, 3bp RTH
   exit), so a twin curve is directly comparable to the backtests in
-  docs/notes/pead_*.
+  research/pead-llm-gate/notes/pead_*.
 """
 
 from __future__ import annotations

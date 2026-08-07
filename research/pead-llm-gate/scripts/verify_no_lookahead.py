@@ -41,8 +41,10 @@ import time as _time
 from datetime import datetime
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _paths import BACKEND, NOTES, SCRIPTS
+
+sys.path.insert(0, str(BACKEND))
+sys.path.insert(0, str(SCRIPTS))
 
 import httpx  # noqa: E402
 import numpy as np  # noqa: E402
@@ -66,7 +68,7 @@ from research_llm_contamination import (  # noqa: E402
     ticker_map,
 )
 
-DOC = Path(__file__).resolve().parents[2] / "docs" / "notes"
+DOC = NOTES
 
 # The entry print. research_pead_backtest measures the reaction as the last
 # print in [16:00, 16:05 + 15min]; Alpaca stamps a minute bar with the minute

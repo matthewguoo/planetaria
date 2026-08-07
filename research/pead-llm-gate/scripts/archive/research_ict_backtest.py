@@ -49,9 +49,15 @@ import sys
 import time as _time
 from datetime import datetime
 from pathlib import Path
+
+# Archived: one level below the study scripts, so reach _paths and the
+# sibling research modules explicitly.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from _paths import BACKEND, NOTES
 from zoneinfo import ZoneInfo
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(BACKEND))
 
 import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
@@ -350,7 +356,7 @@ def main() -> None:
           "entries with the SAME exit engine) ===")
     print(out.to_string(index=False))
     stamp = datetime.now(ET).strftime("%Y%m%d")
-    doc = (Path(__file__).resolve().parent.parent.parent / "docs" / "notes"
+    doc = (NOTES
            / f"ict_backtest_{stamp}.md")
     doc.parent.mkdir(parents=True, exist_ok=True)
     doc.write_text(

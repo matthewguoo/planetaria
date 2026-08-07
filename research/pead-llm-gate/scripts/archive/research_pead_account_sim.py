@@ -20,15 +20,20 @@ import json
 import sys
 from datetime import datetime
 from pathlib import Path
+
+# Archived: one level below the study scripts, so reach _paths and the
+# sibling research modules explicitly.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from _paths import BACKEND, CACHE, NOTES
 from zoneinfo import ZoneInfo
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(BACKEND))
 
 import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 
 ET = ZoneInfo("America/New_York")
-CACHE = Path(__file__).resolve().parent / "_leadup_cache"
 
 GATE = 5.0
 RISK_PCT = 0.5
@@ -185,7 +190,7 @@ def main() -> None:
           f"$100k, engine sizing/caps/brackets) ===")
     print(out.to_string(index=False))
     stamp = datetime.now(ET).strftime("%Y%m%d_%H%M")
-    doc = (Path(__file__).resolve().parent.parent.parent / "docs" / "notes"
+    doc = (NOTES
            / f"pead_account_sim_{stamp}.md")
     doc.write_text(f"# Flagship account sim — {span} — {stamp}\n\n"
                    f"```\n{out.to_string(index=False)}\n```\n",

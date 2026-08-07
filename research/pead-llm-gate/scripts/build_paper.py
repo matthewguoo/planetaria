@@ -19,13 +19,13 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[2]
-DATA = ROOT / "docs" / "report_data.json"
-TRADES = ROOT / "frontend" / "public" / "study-trades.json"
-TEMPLATE = ROOT / "docs" / "report_template.html"
-OUT = ROOT / "docs" / "report.html"
+from _paths import DOCS, PUBLIC
+
+DATA = DOCS / "report_data.json"
+TRADES = PUBLIC / "study-trades.json"
+TEMPLATE = DOCS / "report_template.html"
+OUT = DOCS / "report.html"
 
 # Everything the page renders. Anything not listed is dropped, which is how
 # a 228 KB data file and a 1.0 MB trade export become a payload that fits in
