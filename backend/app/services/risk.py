@@ -246,7 +246,10 @@ class RiskService:
         *,
         account_equity: float,
         entry_cost_dollars: float,
-        max_loss_dollars: float,
+        # None = a time-stop-only plan, which has no stop and therefore no
+        # per-position loss bound to check. That is deliberate, not missing
+        # data: see the max_loss_pct check below.
+        max_loss_dollars: float | None,
         time_stop_utc: datetime,
         expiry_date_et: str,
         legs: list[dict] | None = None,
@@ -358,7 +361,18 @@ class RiskService:
                     "add a long call wing to cover"
                 )
 
-        if max_loss_dollars > account_equity * cfg["max_loss_pct"] + 0.01:
+        # PER-POSITION LOSS BOUND. Only meaningful when there IS a stop.
+        # A time-stop-only plan passes `None` and is bounded a level up
+        # instead: by its strategy's allocation, which caps how much capital
+        # it can commit at all, and by that strategy's drawdown circuit
+        # breaker, which flattens the whole book when the loss is realised
+        # across positions rather than inside one. That is the deliberate
+        # trade the PEAD research forces — the shipped 5% stop cost more edge
+        # (38.3bp/trade against 138.6bp unbracketed) than it bought safety —
+        # and moving the bound up a level is the honest way to take it.
+        # The gross-exposure and buying-power caps below still apply.
+        if (max_loss_dollars is not None
+                and max_loss_dollars > account_equity * cfg["max_loss_pct"] + 0.01):
             violations.append(
                 f"max loss ${max_loss_dollars:.0f} exceeds "
                 f"{cfg['max_loss_pct']:.1%} of equity (${account_equity * cfg['max_loss_pct']:.0f})"

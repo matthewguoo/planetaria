@@ -40,7 +40,7 @@ import httpx  # noqa: E402
 
 from app.config import get_settings  # noqa: E402
 from app.services.market_data import is_overnight_et  # noqa: E402
-from app.strategies.earnings_reaction import QUOTE_MAX_AGE_S  # noqa: E402
+from app.strategies.pead_flagship import QUOTE_MAX_AGE_S  # noqa: E402
 
 ET = ZoneInfo("America/New_York")
 DATA = "https://data.alpaca.markets/v2/stocks"

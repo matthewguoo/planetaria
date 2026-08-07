@@ -17,13 +17,16 @@ import asyncio
 import logging
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import delete, func, select
 
 from app.models.strategies import (
     STRATEGY_STATES,
     StrategyDecisionRow,
     StrategyInstanceRow,
+    validate_allocation,
+    validate_breaker,
 )
 from app.models.trade import OPEN_STATUSES, TradePlan
 from app.services.llm import LLMAnalyst
@@ -210,6 +213,48 @@ class StrategyRunner:
                 await self._despawn(row_id)
         return row.to_dict()
 
+    async def delete(self, row_id: str) -> dict:
+        """Remove an instance for good. Stops its task first, then the row.
+
+        Refused while it has OPEN PLANS: the plans carry the instance's name
+        as their only link back to it, so deleting the row would strand
+        positions whose provenance no longer resolves. Flatten first.
+
+        The decision journal is deleted with it — those rows have a foreign
+        key to this id and would otherwise become unreadable orphans. That is
+        a real loss, so it is stated rather than silent, and it is why the
+        console asks before calling this.
+        """
+        async with self._lock:
+            async with self.db.session() as session:
+                row = await session.get(StrategyInstanceRow, row_id)
+                if row is None:
+                    raise ValueError("no such strategy instance")
+                name, kind = row.name, row.kind
+            open_plans = await self._open_plans(name)
+            if open_plans:
+                raise ValueError(
+                    f"{name!r} has {len(open_plans)} open plan(s) — flatten it "
+                    "first, or the positions lose their link back to the "
+                    "strategy that opened them")
+            await self._despawn(row_id)
+            async with self.db.session() as session:
+                journalled = await session.scalar(
+                    select(func.count()).select_from(StrategyDecisionRow)
+                    .where(StrategyDecisionRow.strategy_id == row_id)
+                )
+                await session.execute(
+                    delete(StrategyDecisionRow).where(
+                        StrategyDecisionRow.strategy_id == row_id))
+                await session.execute(
+                    delete(StrategyInstanceRow).where(
+                        StrategyInstanceRow.id == row_id))
+                await session.commit()
+        log.warning("deleted strategy instance %s (%s) and %d journal rows",
+                    name, kind, journalled or 0)
+        return {"ok": True, "name": name, "kind": kind,
+                "decisions_deleted": int(journalled or 0)}
+
     async def update_params(self, row_id: str, patch: dict) -> dict:
         async with self._lock:
             async with self.db.session() as session:
@@ -303,13 +348,43 @@ class StrategyRunner:
             if dup is not None:
                 raise await refuse("skip", f"dedupe: {intent.dedupe_key!r} already placed")
 
+        multiplier = 1 if intent.asset_class == "equity" else 100
+        notional = abs(intent.entry_limit) * multiplier * intent.qty
+
+        # CIRCUIT BREAKER, checked before the trade rather than only on the
+        # loop: a strategy that has just blown through its drawdown limit must
+        # not get one more position in before the next sweep notices.
+        try:
+            breaker = await self.breaker_state(row_id)
+        except Exception:                                     # noqa: BLE001
+            breaker = {"tripped": False}
+        if breaker.get("tripped"):
+            raise await refuse(
+                "rejected",
+                f"circuit breaker: drawdown ${breaker['drawdown']:,.0f} has "
+                f"reached the ${breaker['limit']:,.0f} limit")
+
+        # ALLOCATION. The operator's answer to "how much of the account does
+        # this strategy get", enforced rather than advertised: ctx.account()
+        # already told the strategy its `available`, and this refuses the
+        # trade if it sized past it anyway. Layered under the global guards —
+        # all of them must pass.
+        alloc = await self.allocation_state(row_id)
+        if notional > alloc["available"] + 0.01:
+            raise await refuse(
+                "rejected",
+                f"allocation: ${notional:,.0f} exceeds ${alloc['available']:,.0f} "
+                f"left of this strategy's ${alloc['allocated']:,.0f} "
+                f"({alloc['allocation']['value']:g}"
+                f"{'%' if alloc['allocation']['mode'] == 'pct' else ' USD'}"
+                f"), ${alloc['deployed']:,.0f} already deployed")
+
         # Per-strategy budget (layered UNDER the global guards, both must pass).
         params = running.ctx.params if running else {}
-        multiplier = 1 if intent.asset_class == "equity" else 100
         violations = await self.risk.validate_strategy_budget(
             strategy_name=name,
             budget=(params or {}).get("budget"),
-            intent_notional=abs(intent.entry_limit) * multiplier * intent.qty,
+            intent_notional=notional,
             symbol=intent.underlying,
         )
         if violations:
@@ -362,8 +437,209 @@ class StrategyRunner:
                            signal_ids: tuple[int, ...] = ()) -> None:
         await self._journal(row_id, "note", detail=detail, signal_ids=list(signal_ids))
 
-    async def account(self) -> dict:
-        return await self.trade.get_account()
+    async def allocation_state(self, row_id: str) -> dict:
+        """This instance's capital envelope: what it was given, what its open
+        plans already commit, and what is left.
+
+        `deployed` is entry notional, not mark — a strategy's claim on capital
+        is what it committed, and marking to market would let a losing book
+        quietly free up room to double down.
+        """
+        async with self.db.session() as session:
+            row = await session.get(StrategyInstanceRow, row_id)
+        alloc = validate_allocation(row.allocation if row is not None else None)
+        # A broker we cannot reach means an allocation of zero, not an
+        # unbounded one: `available` gates real orders, so it must fail closed.
+        try:
+            account = await self.trade.get_account()
+            equity = float(account.get("equity") or 0.0)
+        except Exception:                                     # noqa: BLE001
+            equity = 0.0
+        allocated = (equity * alloc["value"] / 100.0 if alloc["mode"] == "pct"
+                     else alloc["value"])
+        # A dollar allocation larger than the account is not capital, it is a
+        # typo. Cap it at equity so `available` can never invite a trade the
+        # account cannot fund.
+        allocated = min(allocated, equity) if equity > 0 else 0.0
+        deployed = 0.0
+        if row is not None:
+            for plan in await self._open_plans(row.name):
+                multiplier = 100 if (plan.legs and plan.legs[0].get("right")) else 1
+                deployed += abs(plan.entry_limit or 0.0) * multiplier * (plan.qty or 0)
+        return {
+            "allocation": alloc,
+            "allocated": round(allocated, 2),
+            "deployed": round(deployed, 2),
+            "available": round(max(allocated - deployed, 0.0), 2),
+            "account_equity": round(equity, 2),
+            "pct_of_account": (round(allocated / equity * 100, 2) if equity > 0 else None),
+        }
+
+    async def account(self, row_id: str | None = None) -> dict:
+        """The broker account, or — given an instance — that instance's own
+        book. See StrategyContext.account for why the view is scoped."""
+        account = await self.trade.get_account()
+        if row_id is None:
+            return account
+        state = await self.allocation_state(row_id)
+        return {
+            **account,
+            # The scoped view the strategy sizes against...
+            "equity": state["allocated"],
+            "cash": min(float(account.get("cash") or 0.0), state["available"]),
+            "buying_power": min(float(account.get("buying_power") or 0.0),
+                                state["available"]),
+            # ...and the truth, still readable.
+            "account_equity": state["account_equity"],
+            "account_cash": account.get("cash"),
+            "account_buying_power": account.get("buying_power"),
+            "allocation": state["allocation"],
+            "deployed": state["deployed"],
+            "available": state["available"],
+        }
+
+    async def breaker_state(self, row_id: str) -> dict:
+        """This strategy's drawdown against its own high-water mark.
+
+        THE HIGH-WATER MARK IS RECOMPUTED, NEVER STORED. Realised P&L is
+        replayed in close order and the running maximum taken, then current
+        unrealised is added to the tail. A stored peak would drift on restart
+        and could be silently reset by anyone who edited a row — this cannot,
+        and it costs one query.
+
+        Unrealised is marked from the live quote where there is one. A missing
+        quote marks the position at entry (contributing zero) rather than
+        dropping it: an unmarkable position must not be able to make a
+        drawdown look smaller than it is.
+        """
+        async with self.db.session() as session:
+            row = await session.get(StrategyInstanceRow, row_id)
+            if row is None:
+                raise ValueError("no such strategy instance")
+            plans = list(await session.scalars(
+                select(TradePlan).where(TradePlan.strategy == row.name)
+            ))
+        breaker = validate_breaker(row.circuit_breaker)
+        alloc = await self.allocation_state(row_id)
+
+        closed = sorted(
+            (p for p in plans if p.realized_pnl is not None),
+            key=lambda p: (p.exited_at or p.created_at or datetime.min.replace(
+                tzinfo=timezone.utc)),
+        )
+        equity, peak, worst = 0.0, 0.0, 0.0
+        for plan in closed:
+            equity += float(plan.realized_pnl or 0.0)
+            peak = max(peak, equity)
+            worst = max(worst, peak - equity)   # historical, reported not acted on
+
+        unrealized = 0.0
+        for plan in plans:
+            if plan.status not in OPEN_STATUSES or plan.realized_pnl is not None:
+                continue
+            mark = None
+            if self.market is not None:
+                quote = self.market.latest_quote(plan.underlying)
+                mark = (quote or {}).get("mid")
+            if mark is None:
+                continue                      # marked at entry: contributes 0
+            side = plan.legs[0].get("side", 1) if plan.legs else 1
+            multiplier = 100 if (plan.legs and plan.legs[0].get("right")) else 1
+            qty = plan.filled_qty or plan.qty or 0
+            unrealized += side * (float(mark) - abs(plan.entry_limit)) * qty * multiplier
+
+        live = equity + unrealized
+        peak = max(peak, live)            # the live point can BE the new peak
+        # CURRENT drawdown from the high-water mark, not the historical worst.
+        # Tripping on the worst-ever would mean a strategy that dipped and
+        # recovered stays tripped for good, which is a different (and useless)
+        # instrument. `max_drawdown` is reported beside it for the operator.
+        drawdown = max(peak - live, 0.0)
+        limit = (alloc["allocated"] * breaker["value"] / 100.0
+                 if breaker["mode"] == "pct" else breaker["value"])
+        return {
+            "breaker": breaker,
+            "realized": round(equity, 2),
+            "unrealized": round(unrealized, 2),
+            "pnl": round(live, 2),
+            "peak": round(peak, 2),
+            "drawdown": round(drawdown, 2),
+            "max_drawdown": round(max(worst, drawdown), 2),
+            "limit": round(limit, 2),
+            "tripped": bool(breaker["enabled"] and limit > 0
+                            and drawdown >= limit),
+            "headroom": round(max(limit - drawdown, 0.0), 2),
+        }
+
+    async def check_breakers(self) -> list[dict]:
+        """Trip any strategy past its drawdown limit: flatten its book, pause
+        it, journal why. Called on a loop AND before every intent, because a
+        drawdown develops between trades as much as at one."""
+        async with self.db.session() as session:
+            rows = (await session.scalars(
+                select(StrategyInstanceRow).where(
+                    StrategyInstanceRow.state == "enabled")
+            )).all()
+        tripped = []
+        for row in rows:
+            try:
+                state = await self.breaker_state(row.id)
+            except Exception:                                 # noqa: BLE001
+                log.exception("breaker check failed for %s", row.name)
+                continue
+            if not state["tripped"]:
+                continue
+            log.error("CIRCUIT BREAKER: %s drew down $%.0f against a $%.0f "
+                      "limit — flattening and pausing",
+                      row.name, state["drawdown"], state["limit"])
+            await self._journal(row.id, "error", detail={
+                "circuit_breaker": state,
+                "why": f"drawdown ${state['drawdown']:,.0f} reached the "
+                       f"${state['limit']:,.0f} limit "
+                       f"({state['breaker']['value']:g}"
+                       f"{'%' if state['breaker']['mode'] == 'pct' else ' USD'})"
+                       f" — book flattened, instance paused",
+            })
+            result = await self.flatten(row.id)
+            tripped.append({"name": row.name, "id": row.id,
+                            "closed": result["closed"], **state})
+        return tripped
+
+    async def breaker_loop(self, interval_s: float = 30.0) -> None:
+        """A drawdown does not wait for the next trade, so neither does this."""
+        while True:
+            await asyncio.sleep(interval_s)
+            try:
+                await self.check_breakers()
+            except Exception:                                 # noqa: BLE001
+                log.exception("breaker loop iteration failed")
+
+    async def set_breaker(self, row_id: str, breaker: dict) -> dict:
+        clean = validate_breaker(breaker)
+        async with self._lock:
+            async with self.db.session() as session:
+                row = await session.get(StrategyInstanceRow, row_id)
+                if row is None:
+                    raise ValueError("no such strategy instance")
+                row.circuit_breaker = clean
+                await session.commit()
+                await session.refresh(row)
+        return row.to_dict()
+
+    async def set_allocation(self, row_id: str, alloc: dict) -> dict:
+        clean = validate_allocation(alloc)
+        async with self._lock:
+            async with self.db.session() as session:
+                row = await session.get(StrategyInstanceRow, row_id)
+                if row is None:
+                    raise ValueError("no such strategy instance")
+                row.allocation = clean
+                await session.commit()
+                await session.refresh(row)
+        # Deliberately NOT a respawn: allocation is read per-decision through
+        # ctx.account(), not captured at spawn, so a change takes effect on the
+        # next event without interrupting a strategy mid-night.
+        return row.to_dict()
 
     # ------------------------------------------------------------ queries
 
@@ -401,6 +677,43 @@ class StrategyRunner:
             # outage would break replayability - log loudly.
             log.exception("DECISION JOURNAL WRITE FAILED (%s/%s)", row_id, action)
 
+    async def capability_state(self) -> dict:
+        """What the platform currently provides, against what strategies
+        declare they need (Strategy.requires).
+
+        Reported, never enforced. A strategy whose requirements are unmet
+        still runs — that is exactly how a shadow night tells you what the
+        missing entitlement costs. What must not happen is the engine
+        journalling "no fresh quote" for six hours while the console shows
+        a green light.
+        """
+        feed = str(getattr(self.settings, "alpaca_stock_feed", "iex"))
+        try:
+            risk_cfg = await self.risk.get_settings()
+        except Exception:                                     # noqa: BLE001
+            risk_cfg = {}
+        return {
+            "sip": {
+                "met": feed == "sip",
+                "detail": f"stock feed is {feed}"
+                          + ("" if feed == "sip" else
+                             " — IEX is dead outside 08:00–17:00 ET, so "
+                             "after-hours entries cannot price"),
+            },
+            "shorts": {
+                "met": not risk_cfg.get("equity_long_only", True),
+                "detail": ("enabled" if not risk_cfg.get("equity_long_only", True)
+                           else "equity_long_only is on — sells with no "
+                                "position are refused engine-wide"),
+            },
+            "options": {"met": True, "detail": "account trades multi-leg options"},
+            "llm": {
+                "met": bool(self.llm.configured),
+                "detail": (f"backend {getattr(self.settings, 'llm_backend', '?')}"
+                           if self.llm.configured else "no model backend configured"),
+            },
+        }
+
     async def instances(self) -> list[dict]:
         async with self.db.session() as session:
             rows = (await session.scalars(
@@ -412,6 +725,14 @@ class StrategyRunner:
             data["open_plans"] = len(await self._open_plans(row.name))
             running = self._running.get(row.id)
             data["runtime"] = self._runtime_status(running)
+            cls = REGISTRY.get(row.kind)
+            data["requires"] = sorted(cls.requires) if cls else []
+            # Allocation AND drawdown, because the console shows both on the
+            # row. A handful of extra queries per poll for a handful of
+            # strategies; the alternative is a list that cannot show whether
+            # a strategy is near its breaker without clicking into it.
+            data["capital"] = {**await self.allocation_state(row.id),
+                               "breaker": await self.breaker_state(row.id)}
             out.append(data)
         return out
 

@@ -43,7 +43,7 @@ def plan(strategy: str, status: str, realized: float | None) -> TradePlan:
 
 @pytest.mark.asyncio
 async def test_performance_rollup(runner):
-    row = await runner.create("earnings_reaction", "earn", {})
+    row = await runner.create("pead_flagship", "earn", {})
     async with runner.db.session() as session:
         session.add(plan("earn", "closed", 100.0))
         session.add(plan("earn", "closed", -40.0))
@@ -65,10 +65,10 @@ async def test_performance_rollup(runner):
 
 @pytest.mark.asyncio
 async def test_twin_replays_any_kind_from_the_journal(runner):
-    """The twin replaced a deck hardwired to one strategy kind, so the test
-    that matters is that it works on a kind that has nothing to do with
-    earnings — it reads journalled would-be trades and nothing else."""
-    row = await runner.create("ref_tick", "ref", {})
+    """The twin replaced a deck hardwired to one strategy kind. It reads
+    journalled would-be trades and nothing else, so it works for any kind
+    that journals one."""
+    row = await runner.create("pead_flagship", "ref", {})
     await runner.journal_note(row["id"], {"would_trade": {
         "symbol": "AMD", "side": 1, "px": 100.0, "move_pct": 6.0,
         "verdict": {"direction": "bullish", "confidence": "medium",
@@ -99,9 +99,9 @@ async def test_twin_replays_any_kind_from_the_journal(runner):
 
 @pytest.mark.asyncio
 async def test_catalog_source_serves_module_source():
-    out = await catalog_source("earnings_reaction")
-    assert out["file"] == "earnings_reaction.py"
-    assert "class EarningsReaction" in out["source"]
+    out = await catalog_source("pead_flagship")
+    assert out["file"] == "pead_flagship.py"
+    assert "class PeadFlagship" in out["source"]
     assert "SURPRISE_SCHEMA" in out["source"]
 
     with pytest.raises(HTTPException):

@@ -8,8 +8,6 @@
  * is". Health of every subsystem, the state of every background task, the
  * signal feeds and the bus that carries them, and the live call flow — what
  * the process is saying to whom, right now.
- *
- * The blocks are shared with the options terminal's ⚙ drawer (SystemPanels).
  */
 
 import { CallFlow } from "../Monitor/MonitorPage";
@@ -163,24 +161,9 @@ export default function SystemPage() {
         <CallFlow />
       </div>
 
-      <div className="grid shrink-0 gap-px lg:grid-cols-2">
+      <div className="grid shrink-0 gap-px">
         <Panel title="FEED / API SETTINGS">
           <FeedSettingsPanel />
-        </Panel>
-        <Panel title="ELSEWHERE">
-          <a
-            className="flex items-center justify-between border-b border-bb-border/40 px-2 py-2 text-[11px] text-bb-amber hover:bg-bb-hover"
-            href="/terminal.html"
-            title="The discretionary 0-3 DTE options cockpit: chart, chain, payoff designer, order ticket"
-          >
-            <span>OPTIONS TERMINAL</span>
-            <span className="text-bb-muted">/terminal.html ↗</span>
-          </a>
-          <div className="px-2 py-2 text-[9px] leading-relaxed text-bb-muted">
-            Manual trading lives in its own app now. It shares this backend,
-            these accounts and the same exit enforcer — it is a different front
-            end, not a different engine.
-          </div>
         </Panel>
       </div>
     </div>

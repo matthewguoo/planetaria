@@ -739,8 +739,20 @@ class ExitEnforcer:
                 self.market.broadcast.subscribe(f"quote:{underlying}", queue)
             self.market.broadcast.subscribe("plans", queue)
 
-            log.info("monitor armed: plan %s TP=%.2f SL=%.2f stop=%s",
-                     plan.id, plan.tp_premium, plan.sl_premium, plan.time_stop_utc)
+            # A plan with neither bracket is time-stop only. That is a real
+            # exit plan — the engine's invariant is that every position has
+            # one, not that every position has a stop — and it is what the
+            # PEAD research concludes for: a stop inside the whipsaw band of a
+            # name that just moved 5% is where most of that strategy's edge
+            # goes. Per-strategy circuit breakers bound the risk instead.
+            bracketless = plan.tp_premium is None and plan.sl_premium is None
+            if bracketless:
+                log.info("monitor armed: plan %s NO BRACKET, time stop %s",
+                         plan.id, plan.time_stop_utc)
+            else:
+                log.info("monitor armed: plan %s TP=%.2f SL=%.2f stop=%s",
+                         plan.id, plan.tp_premium, plan.sl_premium,
+                         plan.time_stop_utc)
             # Seed the quote cache NOW over REST: a leg that never ticks on
             # the stream must not leave TP/SL unevaluable.
             try:
@@ -830,6 +842,7 @@ class ExitEnforcer:
                     # backoff on failure — never spam a broken broker).
                     if (
                         self.resting_tp
+                        and not bracketless          # nothing to rest
                         and self.trade.alpaca.configured
                         and plan.status == "filled"
                         and not plan.tp_order_id
@@ -873,6 +886,15 @@ class ExitEnforcer:
                         # Exiting: nothing to evaluate here — idle at the far
                         # cadence (the near-threshold cadence would REST-poll
                         # quotes every second for the whole exit).
+                        wait_s = self.quote_poll_s
+                        continue
+                    if bracketless:
+                        # No TP and no SL: the time stop above IS the exit
+                        # plan, and there is no threshold to evaluate. Skip the
+                        # quote machinery entirely rather than run a Kalman
+                        # filter against triggers that do not exist — and idle
+                        # at the far cadence, because nothing here gets more
+                        # urgent as a price approaches anything.
                         wait_s = self.quote_poll_s
                         continue
 

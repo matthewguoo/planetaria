@@ -9,10 +9,16 @@ import { useCallback, useEffect, useState } from "react";
 import {
   apiError,
   createStrategy,
+  deleteStrategy,
   getStrategyCatalog,
   getStrategyPerformance,
   getStrategySource,
   getStrategyTwin,
+  setStrategyAllocation,
+  setStrategyBreaker,
+  type Allocation,
+  type Capabilities,
+  type CircuitBreaker,
   type SignalRecord,
   type StrategyDecision,
   type StrategyInstance,
@@ -32,6 +38,52 @@ import {
 
 const POLL_MS = 5_000;
 
+const fmtUsd = (n: number) =>
+  `$${Math.round(n).toLocaleString()}`;
+
+/** A capability a strategy declares it needs, coloured by whether the
+ * platform currently provides it. The point is not decoration: an earnings
+ * strategy journalling "no fresh quote" every night because the account has
+ * no SIP entitlement looks identical to a quiet market without this. */
+function RequirementBadges({
+  requires,
+  capabilities,
+}: {
+  requires: string[];
+  capabilities: Capabilities | null;
+}) {
+  if (!requires.length) return null;
+  return (
+    <span className="ml-2 inline-flex gap-1 align-middle">
+      {requires.map((cap) => {
+        const state = capabilities?.[cap];
+        const met = state?.met ?? true;   // unknown reads as neutral, not broken
+        return (
+          <span
+            key={cap}
+            title={
+              state
+                ? `${met ? "available" : "NOT AVAILABLE"} — ${state.detail}`
+                : `this strategy requires ${cap}`
+            }
+            className={
+              "border px-1 text-[9px] uppercase tracking-wider " +
+              (state == null
+                ? "border-bb-border text-bb-muted"
+                : met
+                  ? "border-bb-profit/60 text-bb-profit"
+                  : "border-bb-loss text-bb-loss")
+            }
+          >
+            {cap}
+            {state && !met ? " ✕" : ""}
+          </span>
+        );
+      })}
+    </span>
+  );
+}
+
 export default function StrategiesPage() {
   const instances = useStrategyRunnerStore((s) => s.instances);
   const decisions = useStrategyRunnerStore((s) => s.decisions);
@@ -41,12 +93,21 @@ export default function StrategiesPage() {
   const refresh = useStrategyRunnerStore((s) => s.refresh);
   const select = useStrategyRunnerStore((s) => s.select);
   const [error, setError] = useState<string | null>(null);
+  const [capabilities, setCapabilities] = useState<Capabilities | null>(null);
 
   useEffect(() => {
     void refresh();
     const t = window.setInterval(() => void refresh(), POLL_MS);
     return () => window.clearInterval(t);
   }, [refresh]);
+
+  // Capabilities move only on a restart or a settings change, so they are
+  // fetched once rather than on the instance poll.
+  useEffect(() => {
+    getStrategyCatalog()
+      .then((c) => setCapabilities(c.capabilities))
+      .catch(() => setCapabilities(null));
+  }, []);
 
   const run = useCallback(async (p: Promise<string | null>) => {
     setError(await p);
@@ -107,6 +168,15 @@ export default function StrategiesPage() {
                 <th className="px-2 py-1 text-left">NAME</th>
                 <th className="px-2 py-1 text-left">KIND</th>
                 <th className="px-2 py-1 text-left">STATE</th>
+                <th className="px-2 py-1 text-right" title="capital this strategy may deploy">
+                  ALLOCATION
+                </th>
+                <th
+                  className="px-2 py-1 text-right"
+                  title="drawdown against the circuit breaker that would flatten it"
+                >
+                  DRAWDOWN
+                </th>
                 <th className="px-2 py-1 text-right">PLANS</th>
                 <th className="px-2 py-1 text-left">RUNTIME</th>
                 <th className="px-2 py-1 text-right">ACTIONS</th>
@@ -117,6 +187,7 @@ export default function StrategiesPage() {
                 <InstanceRow
                   key={inst.id}
                   inst={inst}
+                  capabilities={capabilities}
                   selected={inst.id === selectedId}
                   onSelect={() => select(inst.id === selectedId ? null : inst.id)}
                   onAction={run}
@@ -127,7 +198,9 @@ export default function StrategiesPage() {
         )}
       </div>
 
+      {selected && <CapitalPanel key={`cap-${selected.id}`} inst={selected} onAction={run} />}
       {selected && <ParamsPanel key={selected.id} inst={selected} onAction={run} />}
+      {selected && <CommandPanel key={`cmd-${selected.id}`} inst={selected} onAction={run} />}
       {selected && <PerformancePanel key={`perf-${selected.id}`} inst={selected} />}
       {selected && <TwinPanel key={`twin-${selected.id}`} inst={selected} />}
       {selected && <DecisionsPanel inst={selected} decisions={decisions} />}
@@ -141,16 +214,20 @@ export default function StrategiesPage() {
 
 function InstanceRow({
   inst,
+  capabilities,
   selected,
   onSelect,
   onAction,
 }: {
   inst: StrategyInstance;
+  capabilities: Capabilities | null;
   selected: boolean;
   onSelect: () => void;
   onAction: (p: Promise<string | null>) => void;
 }) {
   const stop = (e: React.MouseEvent) => e.stopPropagation();
+  const cap = inst.capital;
+  const bs = cap?.breaker;
   return (
     <tr
       className={
@@ -160,11 +237,39 @@ function InstanceRow({
       onClick={onSelect}
       title="Click to inspect params and the decision journal"
     >
-      <td className="px-2 py-1 text-bb-amber">{inst.name}</td>
+      <td className="px-2 py-1 text-bb-amber">
+        {inst.name}
+        <RequirementBadges requires={inst.requires ?? []} capabilities={capabilities} />
+      </td>
       <td className="px-2 py-1 text-bb-muted">{inst.kind}</td>
       <td className={"px-2 py-1 " + stateColor(inst.state, inst.runtime?.task ?? "")}>
         {inst.state}
         {inst.runtime?.task?.startsWith("DEAD") ? " (task dead)" : ""}
+      </td>
+      <td
+        className="px-2 py-1 text-right"
+        data-numeric
+        title={
+          cap
+            ? `${fmtUsd(cap.deployed)} deployed of ${fmtUsd(cap.allocated)} allocated`
+            : ""
+        }
+      >
+        {cap ? fmtUsd(cap.allocated) : "—"}
+      </td>
+      <td
+        className={
+          "px-2 py-1 text-right " +
+          (bs?.tripped ? "text-bb-loss" : bs && bs.drawdown > 0 ? "text-bb-orange" : "text-bb-muted")
+        }
+        data-numeric
+        title={
+          bs
+            ? `drawdown ${fmtUsd(bs.drawdown)} of a ${fmtUsd(bs.limit)} limit`
+            : ""
+        }
+      >
+        {bs ? (bs.tripped ? "TRIPPED" : `${fmtUsd(bs.drawdown)}/${fmtUsd(bs.limit)}`) : "—"}
       </td>
       <td className="px-2 py-1 text-right" data-numeric>
         {inst.open_plans}
@@ -188,14 +293,6 @@ function InstanceRow({
             </button>
           )}
           <button
-            title="Journal a manual signal scoped to this instance"
-            className="border border-bb-amber px-1.5 text-[10px] text-bb-amber hover:bg-bb-amber hover:text-black disabled:opacity-30"
-            disabled={inst.state !== "enabled"}
-            onClick={() => void onAction(actions.trigger(inst.id, {}))}
-          >
-            TRIGGER
-          </button>
-          <button
             title="Pause this instance and close its open plans via the enforcer"
             className="border border-bb-loss px-1.5 text-[10px] text-bb-loss hover:bg-bb-loss hover:text-black disabled:opacity-30"
             disabled={inst.open_plans === 0 && inst.state !== "enabled"}
@@ -205,6 +302,30 @@ function InstanceRow({
             }}
           >
             FLATTEN
+          </button>
+          <button
+            title="Delete this instance and its decision journal. Refused while it holds open plans."
+            className="border border-bb-loss px-1.5 text-[10px] text-bb-loss hover:bg-bb-loss hover:text-black"
+            onClick={() => {
+              if (
+                window.confirm(
+                  `Delete ${inst.name} permanently?\n\nIts decision journal goes with it — ` +
+                    "that history is not recoverable.",
+                )
+              )
+                void onAction(
+                  (async () => {
+                    try {
+                      await deleteStrategy(inst.id);
+                      return null;
+                    } catch (err) {
+                      return apiError(err);
+                    }
+                  })(),
+                );
+            }}
+          >
+            DELETE
           </button>
         </div>
       </td>
@@ -250,6 +371,78 @@ function ParamsPanel({
         >
           SAVE PARAMS
         </button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Operator commands. This replaced the TRIGGER button, which posted an empty
+ * payload — for an autonomous strategy that is a no-op that looks like an
+ * action, and it filled the signals feed with `manual`/`api-trigger` rows
+ * that did nothing.
+ *
+ * Strategies are autonomous; this is not a trading path. It exists for the
+ * commands a strategy genuinely understands, like the flagship's late-boot
+ * watchlist salvage after an engine restart past 15:30 ET.
+ */
+function CommandPanel({
+  inst,
+  onAction,
+}: {
+  inst: StrategyInstance;
+  onAction: (p: Promise<string | null>) => void;
+}) {
+  const [text, setText] = useState('{"cmd": "build_watchlist"}');
+  const [parseError, setParseError] = useState<string | null>(null);
+  const disabled = inst.state !== "enabled";
+
+  return (
+    <div className="panel flex shrink-0 flex-col">
+      <div className="panel-title">
+        COMMAND — {inst.name.toUpperCase()}{" "}
+        <span className="text-bb-muted">
+          (journalled as a manual signal scoped to this instance)
+        </span>
+      </div>
+      <div className="flex items-center gap-2 px-2 py-2">
+        <input
+          className="min-w-0 flex-1 border border-bb-border bg-black px-1 py-0.5 font-mono text-[11px] text-bb-amber outline-none focus:border-bb-amber"
+          spellCheck={false}
+          value={text}
+          onChange={(e) => {
+            setText(e.target.value);
+            setParseError(null);
+          }}
+          aria-label="Command payload"
+        />
+        <button
+          className="border border-bb-amber px-1.5 text-[10px] text-bb-amber hover:bg-bb-amber hover:text-black disabled:opacity-30"
+          disabled={disabled}
+          title={disabled ? "the instance must be enabled to receive commands" : ""}
+          onClick={() => {
+            try {
+              const payload = JSON.parse(text) as Record<string, unknown>;
+              void onAction(actions.trigger(inst.id, payload));
+            } catch (err) {
+              setParseError(`invalid JSON: ${String(err)}`);
+            }
+          }}
+        >
+          SEND
+        </button>
+      </div>
+      <div className="px-2 pb-2 text-[9px] leading-tight text-bb-muted">
+        {parseError ? (
+          <span className="text-bb-loss">{parseError}</span>
+        ) : (
+          <>
+            The strategy decides what a payload means and journals what it did
+            with it. <code>{"{\"cmd\": \"build_watchlist\"}"}</code> freezes tonight's
+            watchlist now — the salvage for an engine that was down through the
+            15:30 ET tick.
+          </>
+        )}
       </div>
     </div>
   );
@@ -415,6 +608,233 @@ function PerformancePanel({ inst }: { inst: StrategyInstance }) {
 }
 
 /**
+ * CAPITAL — the two dials that decide how much this strategy can lose.
+ *
+ * `allocation` is the universe the runner sees: ctx.account() reports it as
+ * the strategy's equity, so the strategy sizes against its own book rather
+ * than the account, and execute_intent refuses anything past what is left.
+ *
+ * `circuit breaker` is what replaced the per-position stop for strategies
+ * that run unbracketed. A stop bounds one trade and costs edge on every
+ * trade; a breaker bounds the strategy and costs nothing until it fires,
+ * at which point the book is flattened and the instance paused.
+ */
+function CapitalPanel({
+  inst,
+  onAction,
+}: {
+  inst: StrategyInstance;
+  onAction: (p: Promise<string | null>) => void;
+}) {
+  const [alloc, setAlloc] = useState<Allocation>(inst.allocation);
+  const [breaker, setBreaker] = useState<CircuitBreaker>(inst.circuit_breaker);
+  const cap = inst.capital;
+  const bs = cap?.breaker;
+
+  const allocDirty =
+    alloc.mode !== inst.allocation.mode || alloc.value !== inst.allocation.value;
+  const breakerDirty =
+    breaker.mode !== inst.circuit_breaker.mode ||
+    breaker.value !== inst.circuit_breaker.value ||
+    breaker.enabled !== inst.circuit_breaker.enabled;
+
+  const used = cap && cap.allocated > 0 ? cap.deployed / cap.allocated : 0;
+  const dd = bs && bs.limit > 0 ? Math.min(bs.drawdown / bs.limit, 1) : 0;
+
+  return (
+    <div className="panel flex shrink-0 flex-col">
+      <div className="panel-title">CAPITAL — {inst.name.toUpperCase()}</div>
+
+      <div className="grid gap-px md:grid-cols-2">
+        {/* ---------------------------------------------------- allocation */}
+        <div className="flex flex-col gap-1 p-2">
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] tracking-widest text-bb-muted">ALLOCATION</span>
+            <span className="text-[9px] text-bb-muted">
+              the capital this strategy sizes against
+            </span>
+          </div>
+          <div className="flex items-center gap-1">
+            <input
+              data-numeric
+              type="number"
+              min={0}
+              step={alloc.mode === "pct" ? 1 : 500}
+              value={alloc.value}
+              onChange={(e) => setAlloc((a) => ({ ...a, value: Number(e.target.value) }))}
+              className="w-24 border border-bb-border bg-black px-1 py-0.5 text-right text-[11px] text-bb-amber outline-none focus:border-bb-amber"
+              aria-label="Allocation value"
+            />
+            <select
+              value={alloc.mode}
+              onChange={(e) =>
+                setAlloc((a) => ({ ...a, mode: e.target.value as "pct" | "usd" }))
+              }
+              className="border border-bb-border bg-black px-1 py-0.5 text-[11px] text-bb-amber outline-none"
+              aria-label="Allocation mode"
+            >
+              <option value="pct">% of equity</option>
+              <option value="usd">USD</option>
+            </select>
+            <button
+              className="border border-bb-profit px-1.5 text-[10px] text-bb-profit hover:bg-bb-profit hover:text-black disabled:opacity-30"
+              disabled={!allocDirty}
+              onClick={() =>
+                void onAction(
+                  (async () => {
+                    try {
+                      await setStrategyAllocation(inst.id, alloc);
+                      return null;
+                    } catch (err) {
+                      return apiError(err);
+                    }
+                  })(),
+                )
+              }
+            >
+              SET
+            </button>
+          </div>
+          {cap && (
+            <>
+              <div className="mt-1 h-1.5 w-full bg-bb-border/40">
+                <div
+                  className="h-full bg-bb-amber"
+                  style={{ width: `${Math.min(used * 100, 100)}%` }}
+                />
+              </div>
+              <div className="flex justify-between text-[10px]" data-numeric>
+                <span className="text-bb-muted">
+                  deployed <span className="text-bb-amber">{fmtUsd(cap.deployed)}</span>
+                </span>
+                <span className="text-bb-muted">
+                  available <span className="text-white">{fmtUsd(cap.available)}</span>
+                </span>
+                <span
+                  className="text-bb-muted"
+                  title="of the account's total equity"
+                >
+                  {fmtUsd(cap.allocated)}
+                  {cap.pct_of_account != null && ` · ${cap.pct_of_account.toFixed(0)}%`}
+                </span>
+              </div>
+            </>
+          )}
+        </div>
+
+        {/* ------------------------------------------------ circuit breaker */}
+        <div className="flex flex-col gap-1 border-l border-bb-border p-2">
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] tracking-widest text-bb-muted">
+              CIRCUIT BREAKER
+            </span>
+            <span className="text-[9px] text-bb-muted">
+              drawdown that flattens and pauses this strategy
+            </span>
+          </div>
+          <div className="flex items-center gap-1">
+            <label className="flex items-center gap-1 text-[10px] text-bb-muted">
+              <input
+                type="checkbox"
+                checked={breaker.enabled}
+                onChange={(e) =>
+                  setBreaker((b) => ({ ...b, enabled: e.target.checked }))
+                }
+                aria-label="Circuit breaker enabled"
+              />
+              on
+            </label>
+            <input
+              data-numeric
+              type="number"
+              min={0}
+              step={breaker.mode === "pct" ? 1 : 250}
+              value={breaker.value}
+              onChange={(e) =>
+                setBreaker((b) => ({ ...b, value: Number(e.target.value) }))
+              }
+              className="w-20 border border-bb-border bg-black px-1 py-0.5 text-right text-[11px] text-bb-amber outline-none focus:border-bb-amber"
+              aria-label="Breaker value"
+            />
+            <select
+              value={breaker.mode}
+              onChange={(e) =>
+                setBreaker((b) => ({ ...b, mode: e.target.value as "pct" | "usd" }))
+              }
+              className="border border-bb-border bg-black px-1 py-0.5 text-[11px] text-bb-amber outline-none"
+              aria-label="Breaker mode"
+            >
+              <option value="pct">% of allocation</option>
+              <option value="usd">USD</option>
+            </select>
+            <button
+              className="border border-bb-profit px-1.5 text-[10px] text-bb-profit hover:bg-bb-profit hover:text-black disabled:opacity-30"
+              disabled={!breakerDirty}
+              onClick={() =>
+                void onAction(
+                  (async () => {
+                    try {
+                      await setStrategyBreaker(inst.id, breaker);
+                      return null;
+                    } catch (err) {
+                      return apiError(err);
+                    }
+                  })(),
+                )
+              }
+            >
+              SET
+            </button>
+          </div>
+          {bs && (
+            <>
+              <div className="mt-1 h-1.5 w-full bg-bb-border/40">
+                <div
+                  className={
+                    "h-full " +
+                    (bs.tripped ? "bg-bb-loss" : dd > 0.6 ? "bg-bb-orange" : "bg-bb-profit")
+                  }
+                  style={{ width: `${dd * 100}%` }}
+                />
+              </div>
+              <div className="flex justify-between text-[10px]" data-numeric>
+                <span className="text-bb-muted">
+                  P&L{" "}
+                  <span className={bs.pnl >= 0 ? "text-bb-profit" : "text-bb-loss"}>
+                    {bs.pnl >= 0 ? "+" : ""}
+                    {fmtUsd(bs.pnl)}
+                  </span>
+                </span>
+                <span
+                  className="text-bb-muted"
+                  title={`peak ${fmtUsd(bs.peak)} · worst ever ${fmtUsd(bs.max_drawdown)}`}
+                >
+                  drawdown <span className="text-bb-orange">{fmtUsd(bs.drawdown)}</span>
+                </span>
+                <span className="text-bb-muted">
+                  limit <span className="text-white">{fmtUsd(bs.limit)}</span>
+                </span>
+              </div>
+              {bs.tripped && (
+                <div className="text-[10px] text-bb-loss">
+                  TRIPPED — book flattened, instance paused
+                </div>
+              )}
+              {!breaker.enabled && (
+                <div className="text-[9px] leading-tight text-bb-orange">
+                  Disabled. This strategy trades with no per-position stop, so the
+                  breaker is the only thing bounding its loss.
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
  * The paper twin: the instance's journalled would-be trades compounded into
  * an equity curve, under two allocators. This is the ONLY readable outcome a
  * note-mode strategy has — PERFORMANCE above is empty for them by
@@ -554,7 +974,7 @@ function CreatePanel({ onAction }: { onAction: (p: Promise<string | null>) => vo
 
   useEffect(() => {
     getStrategyCatalog()
-      .then((ks) => {
+      .then(({ kinds: ks }) => {
         setKinds(ks);
         if (ks.length && !kind) setKind(ks[0].kind);
       })

@@ -66,8 +66,13 @@ class TradePlan(Base):
     qty: Mapped[int] = mapped_column(Integer)  # contract sets / shares
 
     entry_limit: Mapped[float] = mapped_column(Float)   # net debit limit / share
-    tp_premium: Mapped[float] = mapped_column(Float)    # position value / share
-    sl_premium: Mapped[float] = mapped_column(Float)
+    # BOTH NULL = a time-stop-only plan (added 0007). The engine's invariant is
+    # that every position has a server-enforced exit plan, not that every
+    # position has a stop: a hard time stop IS one. Strategies that run
+    # unbracketed are bounded by their allocation and their circuit breaker
+    # instead. Nulling only ONE is not meaningful and is refused at placement.
+    tp_premium: Mapped[float | None] = mapped_column(Float, nullable=True)
+    sl_premium: Mapped[float | None] = mapped_column(Float, nullable=True)
     time_stop_utc: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
     status: Mapped[str] = mapped_column(String(16), default="planned", index=True)

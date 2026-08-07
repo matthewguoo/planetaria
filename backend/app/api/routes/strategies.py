@@ -37,6 +37,19 @@ class ParamsIn(BaseModel):
     params: dict
 
 
+class AllocationIn(BaseModel):
+    mode: str = Field(pattern="^(pct|usd)$")
+    value: float = Field(gt=0)
+
+
+class BreakerIn(BaseModel):
+    enabled: bool = True
+    # `pct` is of the strategy's ALLOCATION, not of the account: a breaker
+    # must not silently loosen because the account grew.
+    mode: str = Field(pattern="^(pct|usd)$")
+    value: float = Field(gt=0)
+
+
 class KillAllIn(BaseModel):
     flatten: bool = False
 
@@ -46,17 +59,21 @@ class TriggerIn(BaseModel):
 
 
 @router.get("/strategies/catalog")
-async def catalog() -> dict:
+async def catalog(request: Request) -> dict:
+    """Every registered kind, plus what the platform currently provides
+    against what those kinds declare they need."""
     return {
         "kinds": [
             {
                 "kind": cls.kind,
                 "subscriptions": list(cls.subscriptions),
                 "default_params": cls.default_params,
+                "requires": sorted(cls.requires),
                 "doc": (cls.__doc__ or "").strip().split("\n")[0],
             }
             for cls in REGISTRY.values()
-        ]
+        ],
+        "capabilities": await request.app.state.strategy_runner.capability_state(),
     }
 
 
@@ -102,10 +119,61 @@ async def get_instance(request: Request, row_id: str) -> dict:
         raise HTTPException(404, str(exc))
 
 
+@router.delete("/strategies/{row_id}")
+async def delete_instance(request: Request, row_id: str) -> dict:
+    """Remove an instance and its decision journal. Refused while it holds
+    open plans — flatten first."""
+    try:
+        return await request.app.state.strategy_runner.delete(row_id)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+
+
 @router.patch("/strategies/{row_id}")
 async def patch_params(request: Request, row_id: str, body: ParamsIn) -> dict:
     try:
         return await request.app.state.strategy_runner.update_params(row_id, body.params)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+
+
+@router.put("/strategies/{row_id}/allocation")
+async def set_allocation(request: Request, row_id: str, body: AllocationIn) -> dict:
+    """How much of the account this strategy may deploy — a percent of equity
+    or a fixed dollar ceiling. Read per-decision through ctx.account() and
+    enforced in execute_intent, so a change lands on the next event without
+    restarting a strategy mid-night."""
+    try:
+        return await request.app.state.strategy_runner.set_allocation(
+            row_id, body.model_dump())
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+
+
+@router.get("/strategies/{row_id}/capital")
+async def capital(request: Request, row_id: str) -> dict:
+    """Allocated / deployed / available, plus the drawdown against this
+    strategy's circuit breaker."""
+    runner = request.app.state.strategy_runner
+    try:
+        await runner.get(row_id)
+    except ValueError as exc:
+        raise HTTPException(404, str(exc))
+    return {**await runner.allocation_state(row_id),
+            "breaker": await runner.breaker_state(row_id)}
+
+
+@router.put("/strategies/{row_id}/breaker")
+async def set_breaker(request: Request, row_id: str, body: BreakerIn) -> dict:
+    """The drawdown that flattens this strategy's book and pauses it.
+
+    This is what replaced the per-position stop for strategies that run
+    unbracketed: a stop bounds one trade and costs edge on every trade, a
+    breaker bounds the strategy and costs nothing until it fires.
+    """
+    try:
+        return await request.app.state.strategy_runner.set_breaker(
+            row_id, body.model_dump())
     except ValueError as exc:
         raise HTTPException(422, str(exc))
 
@@ -142,7 +210,8 @@ async def kill_all(request: Request, body: KillAllIn) -> dict:
 @router.post("/strategies/{row_id}/trigger")
 async def trigger(request: Request, row_id: str, body: TriggerIn) -> dict:
     """Journal a manual signal and publish it scoped to this instance —
-    the human-in-the-loop entry point (and the ref_tick proof knob)."""
+    the operator's entry point for a command the strategy understands, not a
+    trading path -- strategies are autonomous."""
     runner = request.app.state.strategy_runner
     try:
         instance = await runner.get(row_id)

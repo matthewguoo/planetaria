@@ -163,6 +163,13 @@ async def startup(app: FastAPI, settings: Settings) -> None:
     # awake for feeds and timer ticks even with zero open plans (note-mode).
     app.state.keep_awake.runner = runner
     await runner.start()
+    # Per-strategy circuit breakers. Supervised like every other loop: an
+    # unsupervised breaker that dies is worse than none, because the console
+    # would still show a limit that is no longer being enforced.
+    app.state.breaker_loop_task = asyncio.create_task(
+        supervise("strategy-breakers", runner.breaker_loop),
+        name="strategy-breakers",
+    )
 
 
 async def _reconcile_with_retry(enforcer: ExitEnforcer, attempts: int = 5) -> None:
@@ -181,6 +188,8 @@ async def shutdown(app: FastAPI) -> None:
     state = app.state
     # Order matters: stop generating intents (runner), then stop event intake
     # (feeds), THEN the enforcer — in-flight exits must finish enforced.
+    if getattr(state, "breaker_loop_task", None):
+        state.breaker_loop_task.cancel()
     if getattr(state, "strategy_runner", None):
         await state.strategy_runner.shutdown()
     for task in getattr(state, "feed_tasks", ()):

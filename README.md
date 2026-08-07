@@ -10,7 +10,7 @@ destinations, and they are peers:
 | page | what it answers |
 |---|---|
 | ACCOUNT | the money — balances, exposure, equity curve, open and closed P&L, and which paper account the engine trades |
-| STRATEGIES | the book — instances, params, decision journals, performance, and the paper twin for strategies that place nothing yet |
+| STRATEGIES | the book — instances, their capital, decision journals, performance, and the paper twin for strategies that place nothing yet |
 | MARKET | what the engine can see — session clock, the majors, the earnings calendar, the news tape |
 | SYSTEM | whether the machine works — subsystem health, background tasks, signal feeds, the event bus, and the live call flow |
 
@@ -20,12 +20,34 @@ screen everywhere else.
 
 Nothing in the console knows what a particular strategy *does*. A new strategy
 appears there by being registered in `app/strategies/__init__.py`, with no
-frontend change.
+frontend change. Each instance declares what it needs from the platform
+(`requires = {"sip", "shorts", ...}`) and the console shows whether it has it,
+so an engine journalling "no fresh quote" all night is visible rather than
+indistinguishable from a quiet market.
 
-`/terminal.html` is the **options terminal** — the discretionary 0-3 DTE
-cockpit (chart, chain, payoff designer, sizing, order ticket), linked from
-SYSTEM. Neither front end holds a privileged path; both are clients of the
-same `/api/*` routes the headless engine exposes.
+### Risk is bounded per strategy, not per position
+
+Each instance carries two dials:
+
+- **allocation** — a percent of equity or a dollar ceiling. `ctx.account()`
+  reports it as the strategy's equity, so a strategy sizes against its own
+  book rather than the account, and an intent past what is left is refused.
+- **circuit breaker** — a drawdown against that strategy's own high-water
+  mark. When it trips, the book is flattened and the instance paused.
+
+That pair replaced the per-position stop-loss requirement. Plans may now carry
+no TP and no SL at all, because the PEAD research measures a stop inside the
+whipsaw band of a name that just moved 5% as where most of the edge goes
+(38.3bp per trade with a bracket against 138.6bp without). The core invariant
+is unchanged — every position still has a server-enforced exit plan, and a
+hard time stop is one. A stop bounds one trade and costs edge on every trade;
+a breaker bounds the strategy and costs nothing until it fires.
+
+The discretionary options terminal was retired on 2026-08-07. **Everything
+from "Architecture" onward still describes it** — the chart, the payoff
+designer, the chain, the mobile shell — and is stale pending a rewrite. The
+backend half of those sections (the FSM, the enforcer, the options math) is
+still accurate; the UI half is not.
 
 `research/` holds studies — code that produces evidence, kept out of
 `backend/` so the dependency runs one way: research reads the app, the app
@@ -54,8 +76,13 @@ backend (FastAPI, single process)
    │                      (option ticks -> underlying-tick model checks ->
    │                      adaptive REST polling); escalation ladder
    │                      (limit @ mid-2% -> mid-6% -> market -> verify loop)
-   ├─ RiskService         per-trade max loss, BP cap, max positions,
-   │                      daily circuit breaker — server-side, not advisory
+   ├─ RiskService         BP cap, gross exposure, max positions, daily
+   │                      circuit breaker — server-side, not advisory.
+   │                      Per-trade max loss applies only to BRACKETED
+   │                      plans; unbracketed strategies are bounded by
+   │                      their allocation + circuit breaker instead
+   ├─ StrategyRunner      one supervised task per enabled instance, with
+   │                      per-strategy allocation and drawdown breakers
    └─ Postgres/Redis      SQLite/in-memory graceful fallbacks for dev
 ```
 

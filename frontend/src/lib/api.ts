@@ -335,11 +335,48 @@ export type StrategyRuntime = {
   last_event_age_s?: number | null;
 };
 
+/** How much of the account a strategy may deploy. `pct` moves with equity;
+ * `usd` is a fixed ceiling that does not. */
+export type Allocation = { mode: "pct" | "usd"; value: number };
+
+/** The drawdown that flattens a strategy's book and pauses it. `pct` is of
+ * the strategy's ALLOCATION, not the account — a breaker must not loosen
+ * because the account grew. This is what replaced the per-position stop. */
+export type CircuitBreaker = { enabled: boolean; mode: "pct" | "usd"; value: number };
+
+export type StrategyCapital = {
+  allocation: Allocation;
+  allocated: number;
+  deployed: number;
+  available: number;
+  account_equity: number;
+  pct_of_account: number | null;
+  breaker?: BreakerState;
+};
+
+export type BreakerState = {
+  breaker: CircuitBreaker;
+  realized: number;
+  unrealized: number;
+  pnl: number;
+  peak: number;
+  drawdown: number;
+  max_drawdown: number;
+  limit: number;
+  tripped: boolean;
+  headroom: number;
+};
+
 export type StrategyInstance = {
   id: string;
   kind: string;
   name: string;
   params: Record<string, unknown>;
+  allocation: Allocation;
+  circuit_breaker: CircuitBreaker;
+  /** Platform capabilities this KIND declares it needs (sip/shorts/…). */
+  requires: string[];
+  capital: StrategyCapital;
   state: "enabled" | "paused" | "disabled";
   created_at: string;
   updated_at: string;
@@ -351,8 +388,23 @@ export type StrategyKind = {
   kind: string;
   subscriptions: string[];
   default_params: Record<string, unknown>;
+  requires: string[];
   doc: string;
 };
+
+/** What the platform currently provides, against what strategies declare. */
+export type Capabilities = Record<string, { met: boolean; detail: string }>;
+
+export const setStrategyAllocation = (id: string, allocation: Allocation) =>
+  api.put<StrategyInstance>(`/api/strategies/${id}/allocation`, allocation)
+    .then((r) => r.data);
+export const setStrategyBreaker = (id: string, breaker: CircuitBreaker) =>
+  api.put<StrategyInstance>(`/api/strategies/${id}/breaker`, breaker).then((r) => r.data);
+export const getStrategyCapital = (id: string) =>
+  api.get<StrategyCapital>(`/api/strategies/${id}/capital`).then((r) => r.data);
+export const deleteStrategy = (id: string) =>
+  api.delete<{ name: string; decisions_deleted: number }>(`/api/strategies/${id}`)
+    .then((r) => r.data);
 
 export type StrategyDecision = {
   id: number;
@@ -406,7 +458,9 @@ export type SignalRecord = {
 export const getStrategies = () =>
   api.get<{ instances: StrategyInstance[] }>("/api/strategies").then((r) => r.data.instances);
 export const getStrategyCatalog = () =>
-  api.get<{ kinds: StrategyKind[] }>("/api/strategies/catalog").then((r) => r.data.kinds);
+  api
+    .get<{ kinds: StrategyKind[]; capabilities: Capabilities }>("/api/strategies/catalog")
+    .then((r) => r.data);
 export const createStrategy = (kind: string, name: string, params: Record<string, unknown>) =>
   api.post<StrategyInstance>("/api/strategies", { kind, name, params }).then((r) => r.data);
 export const patchStrategyParams = (id: string, params: Record<string, unknown>) =>

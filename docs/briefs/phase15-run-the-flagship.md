@@ -45,10 +45,17 @@ Eight deltas, in descending order of how much each is worth:
 | 7 | \|reaction\| ≥ 5% vs the official close | ✓ same | — |
 | 8 | one call, medium effort, 12k chars, no tools | ✓ same | — |
 
-Deltas 7 and 8 are already right. **This is a new strategy class, not an edit
-to that one.** `earnings_reaction.py` is read into the paper's Table 2 by
-`/api/strategies/catalog/{kind}/source`; mutating it silently changes a
-published table. Add `pead_flagship.py` and leave the control alone.
+Deltas 7 and 8 are already right.
+
+> **BUILT 2026-08-07 as `app/strategies/pead_flagship.py`**, a new class
+> rather than an edit to the control. `earnings_reaction` is retired from the
+> registry along with the two integration-proof strategies; the values Table 2
+> documented are frozen at `research/pead-llm-gate/scripts/_shipped_config.py`
+> rather than read live, because a live read would now make the table track a
+> strategy it is not about. The paper rebuilds byte-identical.
+>
+> Stages 0 and 2–4 below are still open. What exists is the class, its
+> allocation and breaker, and a note-mode instance.
 
 ---
 
@@ -93,28 +100,36 @@ the fill probe is only meaningful when shorts can actually be borrowed.
 (`max_loss_pct`, risk.py:18). A 16.67% position with no stop declares a
 16.67% max loss. Every intent is refused, correctly, by a gate doing its job.
 
-There is also a schema problem underneath it: `tp_premium` and `sl_premium`
-are non-nullable, and `ExitEnforcer` *is* the bracket — "no stop, no target"
-is not currently expressible as a plan.
+There was also a schema problem underneath it: `tp_premium` and `sl_premium`
+were non-nullable, and `ExitEnforcer` *is* the bracket — "no stop, no target"
+was not expressible as a plan.
 
-Three ways out, and the third is the recommendation:
-
-1. **Raise `max_loss_pct`.** Weakens the gate for every strategy to
-   accommodate one. No.
-2. **Make the bracket nullable** and add a time-stop-only monitor path, plus
-   a modelled loss bound for sizing. Honest, and it is what the paper
-   actually trades — but it is a migration, an enforcer branch, and a new way
-   for the core invariant ("every position has a server-enforced exit plan")
-   to be read. Real work, and worth doing eventually.
-3. **Keep a catastrophic stop at 20%.** Table 12 measured it: 116.5bp per
-   trade against 138.6bp unbracketed. It costs **22.1bp per trade, 16% of
-   the edge**, and in exchange the position keeps a hard loss bound, the
-   enforcer keeps working unchanged, no migration is needed, and
-   `max_loss_pct` at 20% × 16.67% ≈ 3.3% of equity is a small, defensible
-   raise instead of a large one.
-
-Option 3 is a deliberate, measured deviation from the paper. Write it down
-as one — the whole point of a stated cost is that it is not silent.
+> **RESOLVED 2026-08-07 (migration 0007), and not the way this brief first
+> recommended.** The original recommendation was a catastrophic 20% stop,
+> priced from Table 12 at 22.1bp per trade. Matthew's call was better: retire
+> the per-position stop requirement entirely and move the bound up a level.
+>
+> - `tp_premium` / `sl_premium` are nullable. **Both** null is a
+>   time-stop-only plan; one alone is refused, because it is neither a target
+>   nor a stop. The enforcer skips its whole quote-evaluation path for such a
+>   plan rather than running a Kalman filter against triggers that do not
+>   exist.
+> - `RiskService` takes `max_loss_dollars=None` for those plans and skips
+>   only the per-position loss check. Gross exposure and the BP cap still
+>   apply.
+> - Two new bounds replace it, both per strategy: an **allocation** (percent
+>   of equity or a dollar ceiling) that caps what the instance can commit at
+>   all and that `ctx.account()` reports as its equity, and a **circuit
+>   breaker** — a drawdown against the strategy's own high-water mark that
+>   flattens its book and pauses it.
+>
+> The reasoning, in one line: a per-position stop bounds one trade and costs
+> edge on **every** trade; a breaker bounds the strategy and costs nothing
+> until it fires. The engine's invariant survives intact — every position
+> still has a server-enforced exit plan, and a hard time stop is one.
+>
+> Do not run an unbracketed strategy with its breaker disabled. The console
+> says so where the toggle is.
 
 ---
 
@@ -128,11 +143,12 @@ what that implies — *a pre-registered test on genuinely forward data is worth
 more than any further sweep.* This is the cheapest item on the list and the
 only one that buys evidence nothing else can.
 
-Write `docs/pre-registration-flagship.md`: the exact parameter set, the
-deviation in §2.3, the metric (per-trade bp and the account curve), the
-sample (every qualifying event from the first live night), and the stopping
-rule from §4. Commit it, and record the commit hash. A number chosen after
-that commit is a new hypothesis, not a result.
+Write `docs/pre-registration-flagship.md`: the exact parameter set (read it
+out of `PeadFlagship.default_params`), the allocation and breaker settings,
+the metric (per-trade bp and the account curve), the sample (every qualifying
+event from the first live night), and the stopping rule from §4. Commit it,
+and record the commit hash. A number chosen after that commit is a new
+hypothesis, not a result.
 
 ### Stage 1 — the strategy class
 

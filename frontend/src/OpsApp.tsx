@@ -67,17 +67,10 @@ function useDataPumps() {
 export default function OpsApp() {
   useDataPumps();
   const view = useUiStore((s) => s.view);
-  const setView = useUiStore((s) => s.setView);
-
-  // The store's default view is the terminal's chart, which this shell does
-  // not render. Land on ACCOUNT instead — the money is the first question.
-  useEffect(() => {
-    if (view === "terminal") setView("account");
-  }, [view, setView]);
 
   return (
     <div className="flex h-full flex-col gap-px bg-bb-black p-px">
-      <Header variant="ops" />
+      <Header />
       <EnforcementBanner />
       {view === "strategies" ? (
         <StrategiesPage />

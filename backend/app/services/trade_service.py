@@ -278,8 +278,20 @@ class TradeService:
         legs = payload["legs"]
         qty = int(payload["qty"])
         entry_limit = float(payload["entry_limit"])
-        tp = float(payload["tp_premium"])
-        sl = float(payload["sl_premium"])
+        # BOTH null = a time-stop-only plan. The exit enforcer runs it without
+        # thresholds and the hard time stop is the exit plan; risk bounds it at
+        # the strategy level (allocation + circuit breaker) rather than at the
+        # position. One null is not a thing — see the check below.
+        tp = payload.get("tp_premium")
+        sl = payload.get("sl_premium")
+        bracketless = tp is None and sl is None
+        if not bracketless:
+            if tp is None or sl is None:
+                raise ValueError(
+                    "tp_premium and sl_premium must both be set, or both be "
+                    "null for a time-stop-only plan — one bracket alone is "
+                    "neither a target nor a stop")
+            tp, sl = float(tp), float(sl)
         asset_class = payload.get("asset_class") or "option"
         extended_hours = bool(payload.get("extended_hours", False))
         time_stop = datetime.fromisoformat(payload["time_stop_utc"])
@@ -302,7 +314,7 @@ class TradeService:
                     raise ValueError("option legs require right/strike/expiry")
         if abs(entry_limit) < TICK:
             raise ValueError("net premium must be at least one tick")
-        if not (sl < entry_limit < tp):
+        if not bracketless and not (sl < entry_limit < tp):
             raise ValueError(
                 f"exits must bracket entry: SL {sl} < entry {entry_limit} < TP {tp}"
             )
@@ -314,7 +326,7 @@ class TradeService:
             # expiry. max_loss is the SL distance in dollars (x1); the signed
             # convention makes it positive for shorts too (SL sits below the
             # negative entry credit on the position-value axis).
-            max_loss = (entry_limit - sl) * qty
+            max_loss = None if bracketless else (entry_limit - sl) * qty
             # Capital consumed: longs claim their notional. Shorts claim
             # Reg-T initial — 150% of market value (100% proceeds held +50%)
             # — so the per-name and gross caps count the true BP bite.
@@ -325,7 +337,7 @@ class TradeService:
             # standard 20%-of-spot formula rather than full cash-secured value —
             # a jade lizard's short put must not consume $70k/set of "BP" that
             # Alpaca itself would never require in a margin account.
-            max_loss = (entry_limit - sl) * 100 * qty
+            max_loss = None if bracketless else (entry_limit - sl) * 100 * qty
             from app.services.options_math import Leg, bp_per_set_estimate
 
             spot = self.market.spot(payload["underlying"].upper())
@@ -338,7 +350,15 @@ class TradeService:
                 from app.services.options_math import structural_max_loss
 
                 structural = structural_max_loss(leg_objs)
-                entry_cost = (structural * 100 * qty) if structural is not None else max_loss * 3
+                if structural is not None:
+                    entry_cost = structural * 100 * qty
+                else:
+                    # Last resort. Without a stop there is no max_loss to
+                    # scale, so fall back to the credit/debit itself — an
+                    # under-estimate, but the gross-exposure cap still bites
+                    # and inventing a number here would be worse.
+                    entry_cost = (max_loss * 3 if max_loss is not None
+                                  else abs(entry_limit) * 100 * qty)
             expiry = max(leg["expiry"] for leg in legs)
         stream_age: float | None = None
         if self.alpaca.configured:

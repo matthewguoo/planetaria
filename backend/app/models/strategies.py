@@ -22,6 +22,59 @@ from app.models.trade import Base, as_utc, utcnow
 STRATEGY_STATES = {"disabled", "enabled", "paused"}
 DECISION_ACTIONS = {"intent", "placed", "rejected", "skip", "error", "note"}
 
+# How much of the account an instance may deploy. `pct` is of current account
+# equity and so moves with the account; `usd` is a fixed dollar ceiling that
+# does not. Default 10% rather than 100%: a strategy that has never traded
+# should not inherit the whole account by omission.
+ALLOCATION_MODES = {"pct", "usd"}
+DEFAULT_ALLOCATION = {"mode": "pct", "value": 10.0}
+
+
+# The per-strategy circuit breaker. Replaces the per-position stop as the
+# thing that bounds a strategy's loss: stops protect one trade, a breaker
+# protects the strategy, which is the unit capital is actually allocated to.
+# `pct` is of the strategy's allocation, so a breaker does not silently loosen
+# when the account grows. None (disabled) is allowed and is what an
+# unbracketed strategy should NOT be run with.
+DEFAULT_BREAKER = {"enabled": True, "mode": "pct", "value": 20.0}
+
+
+def validate_breaker(breaker: dict | None) -> dict:
+    if breaker is None:
+        return dict(DEFAULT_BREAKER)
+    enabled = bool(breaker.get("enabled", True))
+    mode = str(breaker.get("mode", "pct"))
+    if mode not in ALLOCATION_MODES:
+        raise ValueError(f"breaker mode must be one of {sorted(ALLOCATION_MODES)}")
+    try:
+        value = float(breaker.get("value"))
+    except (TypeError, ValueError):
+        raise ValueError("breaker value must be a number")
+    if value <= 0:
+        raise ValueError("breaker value must be positive")
+    if mode == "pct" and value > 100:
+        raise ValueError("breaker percent cannot exceed 100")
+    return {"enabled": enabled, "mode": mode, "value": round(value, 4)}
+
+
+def validate_allocation(alloc: dict | None) -> dict:
+    """Normalise and bounds-check. Returns the default for None so every row
+    has an allocation whether or not the operator set one."""
+    if alloc is None:
+        return dict(DEFAULT_ALLOCATION)
+    mode = str(alloc.get("mode", "pct"))
+    if mode not in ALLOCATION_MODES:
+        raise ValueError(f"allocation mode must be one of {sorted(ALLOCATION_MODES)}")
+    try:
+        value = float(alloc.get("value"))
+    except (TypeError, ValueError):
+        raise ValueError("allocation value must be a number")
+    if value <= 0:
+        raise ValueError("allocation value must be positive")
+    if mode == "pct" and value > 100:
+        raise ValueError("allocation percent cannot exceed 100")
+    return {"mode": mode, "value": round(value, 4)}
+
 
 def _uuid() -> str:
     return uuid.uuid4().hex
@@ -36,6 +89,13 @@ class StrategyInstanceRow(Base):
     # to the instance until the strategy_id FK lands on trade_plans.
     name: Mapped[str] = mapped_column(String(24), unique=True)
     params: Mapped[dict] = mapped_column(JSON)
+    # {"mode": "pct"|"usd", "value": N}. Nullable so pre-0006 rows read as the
+    # default rather than as zero — an unallocated strategy must not silently
+    # become one that can trade nothing, or one that can trade everything.
+    allocation: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # {"enabled": bool, "mode": "pct"|"usd", "value": N} — drawdown from this
+    # strategy's own high-water mark that flattens its book and pauses it.
+    circuit_breaker: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     state: Mapped[str] = mapped_column(String(12), default="disabled")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(
@@ -48,6 +108,8 @@ class StrategyInstanceRow(Base):
             "kind": self.kind,
             "name": self.name,
             "params": self.params,
+            "allocation": validate_allocation(self.allocation),
+            "circuit_breaker": validate_breaker(self.circuit_breaker),
             "state": self.state,
             "created_at": as_utc(self.created_at).isoformat() if self.created_at else None,
             "updated_at": as_utc(self.updated_at).isoformat() if self.updated_at else None,

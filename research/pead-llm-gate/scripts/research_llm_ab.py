@@ -45,7 +45,7 @@ import pandas as pd  # noqa: E402
 
 from app.services.llm import HARDENED_SYSTEM, ClaudeCliClient  # noqa: E402
 from app.services.signals.edgar import EdgarFeed, strip_html  # noqa: E402
-from app.strategies.earnings_reaction import SURPRISE_SCHEMA  # noqa: E402
+from app.strategies.pead_flagship import SURPRISE_SCHEMA  # noqa: E402
 
 ET = ZoneInfo("America/New_York")
 CACHE = CACHE

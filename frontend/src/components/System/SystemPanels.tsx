@@ -1,11 +1,10 @@
 /**
- * The three System blocks, as components rather than as one screen.
+ * The System blocks, as components rather than as one screen.
  *
- * They render in two places with different chrome: the ops console's SYSTEM
- * page (full width, three columns) and the options terminal's ⚙ drawer
- * (narrow, stacked). Extracted so the two cannot drift — the drawer and the
- * page previously would have been two hand-maintained copies of the same
- * health rows, which is exactly how a health display starts lying.
+ * They were extracted when the console page and the options terminal's drawer
+ * both needed them; the drawer is gone, and they stay split because ACCOUNT
+ * renders AccountsPanel while SYSTEM renders the other two — choosing the
+ * broker account is account management, not a setting.
  *
  * Each panel owns its own fetching. That costs a few duplicate requests when
  * several are mounted together and buys the property that any one of them can

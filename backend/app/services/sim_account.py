@@ -6,7 +6,7 @@ sent make money". This answers the question underneath it — "is the SIZING
 rule earning its complexity" — by replaying the SAME decision stream through
 two allocators and letting them compound side by side:
 
-  vol   — the engine's live math (strategies/earnings_reaction._size_position):
+  vol   — the retired earnings_reaction sizer (conviction-scaled stop risk):
           risk_pct of current equity at the stop, so notional = equity *
           risk_pct / sl_eff, then conviction multipliers (confidence,
           quality flags, spent-move). Wilder name -> wider stop -> fewer
@@ -85,7 +85,7 @@ def signals_from_decisions(decisions: list[dict]) -> list[dict]:
     """The tradeable decisions, oldest first.
 
     Note-mode journals `would_trade`; live mode journals `decision` right
-    before submitting (earnings_reaction._decide_text). Both carry the same
+    before submitting. Both carry the same
     shape, so the twin does not care which mode the instance is in — that is
     the point: the shadow instance and the live instance produce comparable
     curves.
@@ -108,7 +108,7 @@ def _size(policy: str, equity: float, signal: dict, sl_pct: float,
           risk_pct: float, flat_pct: float) -> float:
     if policy == "flat":
         return equity * flat_pct / 100.0
-    # vol: mirror of earnings_reaction._size_position
+    # vol: mirror of the retired earnings_reaction sizer
     sizing = signal.get("sizing") or {}
     verdict = signal.get("verdict") or {}
     conf = {"high": 1.5, "medium": 1.0, "low": 0.5}.get(

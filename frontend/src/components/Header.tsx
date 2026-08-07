@@ -1,11 +1,11 @@
 import { useEffect, useState } from "react";
 import { cycleAudioMode, getAudioMode, onAudioModeChange } from "../lib/audio";
-import { SystemMenu } from "./System/SystemMenu";
-import { useTradingStore } from "../store/tradingStore";
-import { PriceReadout } from "./PriceReadout";
-import { useUiStore } from "../store/uiStore";
+import { useSystemState } from "./System/SystemPanels";
+import { useUiStore, type View } from "../store/uiStore";
 
 const AUDIO_LABEL = { off: "🔇 OFF", fx: "🔊 FX", vox: "🔊 VOX" } as const;
+
+const TABS: View[] = ["account", "strategies", "market", "system"];
 
 function AudioToggle() {
   const [mode, setMode] = useState(getAudioMode());
@@ -27,40 +27,39 @@ function AudioToggle() {
   );
 }
 
+/**
+ * Feed health, read from the BACKEND's view rather than from a browser
+ * socket.
+ *
+ * This used to reflect the terminal's WebSocket connection. The ops console
+ * has no socket — it polls — so that pill would have sat on "CONNECTING"
+ * forever, which is worse than no pill at all: a permanently wrong light
+ * teaches you to ignore the light. What matters here is whether the ENGINE
+ * is receiving market data, which is what system state reports.
+ */
 function StatusPill() {
-  const status = useTradingStore((s) => s.status);
-  const symbol = useTradingStore((s) => s.symbol);
+  const state = useSystemState();
+  if (!state) {
+    return <span className="text-bb-muted" title="reading system state…">…</span>;
+  }
+  const age = state.feed.stream_age_s;
   let label = "LIVE";
   let cls = "text-bb-profit";
-  let title = "Real-time Alpaca market data";
-  if (status.connection !== "open") {
-    label = status.connection === "connecting" ? "CONNECTING" : "DISCONNECTED";
-    cls = "text-bb-loss";
-    title = "Feed socket is not connected";
-  } else if (status.demo) {
-    // Keyless mode: real public prices when the public feed is reachable,
-    // synthetic random walk only as a last resort. Never tradeable.
-    if (status.sources[symbol] === "public") {
-      label = "PUBLIC DATA";
-      cls = "text-bb-amber";
-      title =
-        "Real prices from a keyless public feed (Yahoo, ~5s poll). " +
-        "Options chain is modeled from this spot. Set Alpaca keys in .env for tradeable data.";
-    } else {
-      label = "DEMO DATA";
-      cls = "text-bb-neutral";
-      title =
-        "Synthetic random-walk prices — public feed unreachable and no Alpaca keys. " +
-        "NOT real market data.";
-    }
-  } else if (!status.configured) {
+  let title = "Engine is receiving real-time market data";
+  if (!state.feed.configured) {
     label = "NO KEYS";
     cls = "text-bb-loss";
-    title = "Alpaca keys missing";
-  } else if (status.stream_age_s !== null && status.stream_age_s > 30) {
-    label = `STALE ${Math.floor(status.stream_age_s)}s`;
+    title = "Alpaca keys missing — the engine cannot price anything";
+  } else if (age == null) {
+    label = "NO STREAM";
     cls = "text-bb-orange";
-    title = "No stream message for a while — quotes may be stale";
+    title = "Keys are configured but no stream message has arrived yet";
+  } else if (age > 30) {
+    label = `STALE ${Math.floor(age)}s`;
+    cls = "text-bb-orange";
+    title =
+      "No stream message for a while. Outside 08:00–17:00 ET on the free IEX " +
+      "feed this is expected, not a fault.";
   }
   return (
     <span className={`${cls} font-semibold`} title={title}>
@@ -69,51 +68,16 @@ function StatusPill() {
   );
 }
 
-function SystemButton() {
-  const [open, setOpen] = useState(false);
-  return (
-    <>
-      <button
-        className="px-1 text-[13px] text-bb-muted hover:text-bb-amber"
-        onClick={() => setOpen(true)}
-        title="System state + feed/API settings"
-        aria-label="System menu"
-      >
-        ⚙
-      </button>
-      {open && <SystemMenu onClose={() => setOpen(false)} />}
-    </>
-  );
-}
-
-/** The two shells differ only in what sits left of the tabs and which tabs
- * exist: the ops console has no chart, so no symbol, no price readout, and
- * no TERMINAL tab. Everything to the right — audio, system, feed status,
- * the PAPER badge — is identical, which is why this is one component with a
- * variant rather than two headers that drift apart. */
-const TABS = {
-  terminal: ["terminal", "account", "strategies"],
-  ops: ["account", "strategies", "market", "system"],
-} as const;
-
-export function Header({ variant = "terminal" }: { variant?: "terminal" | "ops" }) {
-  const symbol = useTradingStore((s) => s.symbol);
+export function Header() {
   const view = useUiStore((s) => s.view);
   const setView = useUiStore((s) => s.setView);
 
   return (
     <header className="panel flex h-9 shrink-0 items-center gap-6 px-3">
       <span className="tracking-widest text-bb-amber">PLANETARIA</span>
-      {variant === "terminal" ? (
-        <>
-          <span className="text-white">{symbol}</span>
-          <PriceReadout />
-        </>
-      ) : (
-        <span className="text-[11px] tracking-widest text-bb-muted">OPS</span>
-      )}
+      <span className="text-[11px] tracking-widest text-bb-muted">OPS</span>
       <div className="ml-auto flex items-center gap-4">
-        {TABS[variant].map((v) => (
+        {TABS.map((v) => (
           <button
             key={v}
             onClick={() => setView(v)}
@@ -128,10 +92,6 @@ export function Header({ variant = "terminal" }: { variant?: "terminal" | "ops" 
           </button>
         ))}
         <AudioToggle />
-        {/* The ops console has a whole SYSTEM page; the ⚙ drawer is the
-            cockpit's version of it and would be a second door to the same
-            room here. */}
-        {variant === "terminal" && <SystemButton />}
         <StatusPill />
         <span className="border border-bb-border px-2 py-0.5 text-bb-orange">PAPER</span>
       </div>

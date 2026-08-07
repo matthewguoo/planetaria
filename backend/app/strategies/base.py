@@ -28,6 +28,19 @@ EVENT_TIMEOUT_S = 30.0
 # refused. A restart or a backed-up queue can never trade on old news.
 MAX_EVENT_AGE_S = 300.0
 
+# What a strategy needs from the platform before it can trade for real. These
+# are DECLARATIONS, not gates: a strategy whose requirements are unmet still
+# runs and still journals, because a shadow run against an unmet requirement
+# is exactly how you find out what the requirement costs. The runtime surfaces
+# the gap; it does not refuse the instance.
+#
+#   sip      real-time consolidated quotes. The free IEX feed is dead outside
+#            08:00-17:00 ET, so anything entering after the close needs this.
+#   shorts   sells with no position. Gated engine-wide by equity_long_only.
+#   options  multi-leg option orders rather than shares.
+#   llm      a configured model backend for ctx.analyze().
+CAPABILITIES = frozenset({"sip", "shorts", "options", "llm"})
+
 
 @dataclass(slots=True)
 class TradeIntent:
@@ -39,8 +52,13 @@ class TradeIntent:
     legs: list[dict]
     qty: int                      # contract sets / shares
     entry_limit: float            # signed net premium / share price
-    tp: float                     # position-value targets, per-share terms
-    sl: float
+    # Position-value targets, per-share terms. BOTH None = a time-stop-only
+    # plan: the enforcer evaluates no thresholds and the time stop is the exit.
+    # One None alone is refused at placement — it is neither a target nor a
+    # stop. Strategies that run unbracketed are bounded by their allocation and
+    # their circuit breaker instead of by a per-position stop.
+    tp: float | None
+    sl: float | None
     time_stop_utc: datetime
     extended_hours: bool = False  # equity single-leg DAY limits only (Phase 4)
     reason: str = ""              # human-readable "why" for the journal
@@ -74,7 +92,22 @@ class StrategyContext:
         await self._runner.journal_note(self._instance_id, action_detail, signal_ids)
 
     async def account(self) -> dict:
-        return await self._runner.account()
+        """THE STRATEGY'S OWN BOOK, not the broker account.
+
+        `equity` here is this instance's allocation, so the ordinary sizing
+        formula (risk_pct of equity, or a fraction per position) sizes against
+        the capital the operator gave this strategy rather than against the
+        whole account. Two strategies at 25% each cannot both size as if they
+        owned everything.
+
+        The real broker numbers are still present under `account_equity` and
+        `account_cash` — scoping the view must not mean hiding the truth from
+        a strategy that has a reason to look. `deployed` and `available` are
+        this instance's own open notional and what is left of its allocation;
+        execute_intent enforces the same figure, so a strategy that ignores
+        `available` gets refused rather than silently over-committing.
+        """
+        return await self._runner.account(self._instance_id)
 
     async def analyze(
         self,
@@ -111,6 +144,12 @@ class Strategy(abc.ABC):
     kind: ClassVar[str]                        # registry key
     subscriptions: ClassVar[tuple[str, ...]]   # event types to receive
     default_params: ClassVar[dict] = {}
+    # Platform requirements, from CAPABILITIES above. Declared so the console
+    # can show what a strategy needs and whether it currently has it — an
+    # earnings strategy silently journalling "no fresh quote" every night
+    # because the account has no SIP entitlement is the failure this exists
+    # to make visible.
+    requires: ClassVar[frozenset[str]] = frozenset()
     # Per-event wall-clock budget. Raise on strategies whose on_event
     # legitimately blocks (ctx.analyze) — the queue is per-instance, so a
     # longer budget only delays THIS strategy's own later events.
