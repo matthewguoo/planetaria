@@ -8,7 +8,10 @@ import type { Plan } from "../lib/api";
 
 export type PnlMode = "entry" | "live";
 
-export type View = "terminal" | "account" | "strategies" | "monitor";
+/** `terminal` exists only in the options cockpit; the ops console renders
+ * the other four. Both shells share this store because they are separate
+ * bundles with separate state — the union is a superset, not a coupling. */
+export type View = "terminal" | "account" | "strategies" | "market" | "system";
 
 type UiState = {
   view: View;

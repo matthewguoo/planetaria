@@ -92,8 +92,8 @@ function SystemButton() {
  * the PAPER badge — is identical, which is why this is one component with a
  * variant rather than two headers that drift apart. */
 const TABS = {
-  terminal: ["terminal", "account", "strategies", "monitor"],
-  ops: ["strategies", "account", "monitor"],
+  terminal: ["terminal", "account", "strategies"],
+  ops: ["account", "strategies", "market", "system"],
 } as const;
 
 export function Header({ variant = "terminal" }: { variant?: "terminal" | "ops" }) {

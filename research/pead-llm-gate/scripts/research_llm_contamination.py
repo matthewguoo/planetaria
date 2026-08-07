@@ -519,6 +519,36 @@ NOTEXT_SYSTEM = (
     "guessing is worse than admitting the gap."
 )
 
+# THE FORCED ARM. On 290 events across the decade the model answered
+# `neutral`, and the policy the paper concludes for fades every one of them.
+# That treatment was worth +407bp in 2020 and is worth nothing in the last two
+# years, so the question is whether an abstention carries information the fade
+# is throwing away, or is just the model declining to commit.
+#
+# The arm removes `neutral` from the enum and asks the SAME question of the
+# SAME releases. Everything else — system prompt, task text, effort, model,
+# thinking — is unchanged, so the only difference between a verdict here and
+# its cached counterpart is that this one had to pick a side.
+#
+# Derived from the app's schema rather than copied, so a change to the live
+# contract propagates instead of silently diverging. The app is never edited
+# for the study's benefit: the study reads the app, not the other way round.
+FORCED_SCHEMA = {
+    **SURPRISE_SCHEMA,
+    "properties": {
+        **SURPRISE_SCHEMA["properties"],
+        "direction": {"type": "string", "enum": ["bullish", "bearish"]},
+    },
+}
+
+FORCED_SYSTEM = (
+    HARDENED_SYSTEM + "\n\nThis release requires a directional call. "
+    "'neutral' is not available: choose bullish or bearish even when the "
+    "evidence is balanced, and use `confidence` to say how thin the basis is. "
+    "A low-confidence call is the correct answer to a genuinely ambiguous "
+    "release; refusing to choose is not."
+)
+
 
 def task_named(sym: str, run5d: float | None) -> str:
     """Mirrors earnings_reaction._decide_text. Consensus reads 'unknown'
@@ -602,6 +632,13 @@ def build_request(row, arm: str, text: str | None, company: str,
             return None      # nothing was scrubbed: not a blind sample
         system, schema = BLIND_SYSTEM, BLIND_SCHEMA
         content = f"{task_blind(run5d)}\n\n<data>\n{scrubbed}\n</data>"
+    elif arm == "forced":
+        if not text:
+            return None
+        # Identical task text to the named arm on purpose — the only change
+        # is the schema's enum and the sentence that explains it.
+        system, schema = FORCED_SYSTEM, FORCED_SCHEMA
+        content = f"{task_named(row['symbol'], run5d)}\n\n<data>\n{text}\n</data>"
     else:
         if not text:
             return None
@@ -813,6 +850,22 @@ def stage_submit(args) -> None:
         universe = universe[universe["date"].astype(str) >= args.from_date]
     if getattr(args, "to_date", ""):
         universe = universe[universe["date"].astype(str) <= args.to_date]
+    if getattr(args, "only_neutral", False):
+        # The forced arm re-asks the SAME question of the events the model
+        # declined to call, so the sample is defined by the cached verdicts
+        # rather than by the calendar. Keyed off the named arm at the same
+        # effort — a neutral at low effort is a different event from a
+        # neutral at medium, and pooling them would compare two populations.
+        prior = _load_results()
+        prior = prior[(prior["arm"] == "named") & (prior["effort"] == args.effort)]
+        neutral = {(s, str(d)) for s, d, v in
+                   zip(prior["symbol"], prior["date"], prior["direction"])
+                   if v == "neutral"}
+        before = len(universe)
+        universe = universe[[(s, str(d)) in neutral for s, d
+                             in zip(universe["symbol"], universe["date"])]]
+        print(f"neutral-only: {len(universe)} of {before} events had a "
+              f"'neutral' verdict from the named arm at effort {args.effort}")
     if args.sample:
         before = len(universe)
         universe = stratified_sample(universe, args.sample, args.seed)
@@ -2034,7 +2087,7 @@ def main() -> None:
     ap.add_argument("stage", choices=["texts", "scrub", "calibrate", "submit",
                                       "collect", "watch", "score", "curve",
                                       "brackets", "arms"])
-    ap.add_argument("--arm", default="named", choices=["named", "blind", "notext"])
+    ap.add_argument("--arm", default="named", choices=["named", "blind", "notext", "forced"])
     ap.add_argument("--effort", default="low", choices=["low", "medium", "high"])
     ap.add_argument("--window", default="", help="comma-separated years")
     ap.add_argument("--panel", default="v2", choices=["v1", "v2"],
@@ -2046,6 +2099,10 @@ def main() -> None:
     ap.add_argument("--rank-lo", dest="rank_lo", type=int, default=1)
     ap.add_argument("--rank-hi", dest="rank_hi", type=int, default=TOP_PER_DAY)
     ap.add_argument("--limit", type=int, default=None)
+    ap.add_argument("--only-neutral", dest="only_neutral",
+                    action="store_true",
+                    help="restrict to events the named arm called "
+                         "neutral — the forced arm's sample")
     ap.add_argument("--sample", type=int, default=None,
                     help="year-stratified random subset; deterministic "
                          "in (sample, seed) so two arms share events")

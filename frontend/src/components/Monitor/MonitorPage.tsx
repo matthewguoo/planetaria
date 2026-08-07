@@ -28,7 +28,11 @@ const COLUMNS = [
   },
 ];
 
-export default function MonitorPage() {
+/** The three call streams side by side. Exported on its own because the ops
+ * console embeds it inside the SYSTEM page rather than giving it a tab —
+ * "what is the process saying to whom" is one of the tech stats, not a
+ * separate destination. */
+export function CallFlow() {
   return (
     <div className="flex min-h-0 flex-1 gap-px overflow-hidden">
       {COLUMNS.map((col) => (
@@ -36,6 +40,10 @@ export default function MonitorPage() {
       ))}
     </div>
   );
+}
+
+export default function MonitorPage() {
+  return <CallFlow />;
 }
 
 function CallColumn({

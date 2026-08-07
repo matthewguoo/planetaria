@@ -206,7 +206,19 @@ export type SystemState = {
     stock_symbols: string[];
     option_symbols: number;
   };
-  broker: { configured: boolean; paper: boolean; account_status: string };
+  broker: {
+    configured: boolean;
+    paper: boolean;
+    account_status: string;
+    /** Broker calendar as the enforcer caches it. `known: false` until the
+     * first successful fetch — absent is not the same as closed. */
+    market_clock: {
+      known: boolean;
+      is_open?: boolean | null;
+      next_open?: string | null;
+      next_close?: string | null;
+    };
+  };
   db: { ok: boolean; latency_ms: number | null; engine: string };
   redis: { ok: boolean };
   enforcer: {
@@ -215,9 +227,31 @@ export type SystemState = {
     ghost_keys: number;
     last_reconcile_age_s: number | null;
     monitors_without_mid: Record<string, string>;
+    parked_exits?: string[];
   };
+  /** The strategy data plane. A dead feed shows here as a task state plus a
+   * climbing last_event_age — never as quiet non-trading. */
+  signals?: {
+    feeds: Record<string, { task: string } & Record<string, unknown>>;
+    event_bus: Record<string, unknown>;
+  };
+  strategies?: Record<string, unknown>;
   tasks: Record<string, string>;
+  power?: { keep_awake_supported: boolean; keep_awake_active: boolean };
 };
+
+export type Quote = {
+  symbol?: string;
+  bid?: number | null;
+  ask?: number | null;
+  mid?: number | null;
+  ts?: number | null;
+};
+
+/** Single REST quote. 503 when keys are missing or the feed is down — the
+ * market page renders that as "no data" rather than as a zero. */
+export const getQuote = (symbol: string) =>
+  api.get<Quote>(`/api/quote/${encodeURIComponent(symbol)}`).then((r) => r.data);
 
 export type FeedSettings = {
   chain_refresh_s: number;
