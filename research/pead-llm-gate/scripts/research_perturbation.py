@@ -310,7 +310,11 @@ def stage_generate(args) -> None:
             except (TypeError, ValueError):
                 rejected += 1
                 continue
-            variant, sym, ymd = r.custom_id.split("_")
+            # The id carries a 3-letter tag, not the variant name. Storing the
+            # tag looked harmless and silently emptied every downstream
+            # groupby, because they all key off the full name.
+            tag, sym, ymd = r.custom_id.split("_")
+            variant = next((v for v in VARIANTS if tag == f"pert{v[:3]}"), tag)
             day = f"{ymd[:4]}-{ymd[4:6]}-{ymd[6:8]}"
             src = TEXTS / f"{sym}_{day}.txt"
             if not doc.get("feasible") or not doc.get("edits") or not src.exists():
@@ -498,20 +502,49 @@ def _text_sensitive_backtest(sens: pd.Series) -> None:
     key = list(zip(m["symbol"], m["date"]))
     m["sensitive"] = [sens.get(k, None) for k in key]
     k = m[m["sensitive"].notna()]
-    print("\n-- the gated edge on the events that demonstrably read "
-          + "-" * 20)
-    print(f"  {'subset':<28}{'n':>6}{'gated':>10}{'refused':>10}{'spread':>10}{'t':>7}")
-    for lab, sub in (("verdict followed the text", k[k["sensitive"] == True]),   # noqa: E712
-                     ("verdict ignored the text", k[k["sensitive"] == False])):  # noqa: E712
+
+    def spread(sub):
         g = sub[sub["gated"]]["bp"].to_numpy()
         r = sub[~sub["gated"]]["bp"].to_numpy()
         if len(g) < 8 or len(r) < 8:
-            print(f"  {lab:<28}{len(sub):>6}   too few to report")
-            continue
+            return None
         sp = g.mean() - r.mean()
-        se = (g.var(ddof=1)/len(g) + r.var(ddof=1)/len(r)) ** 0.5
-        print(f"  {lab:<28}{len(sub):>6}{g.mean():>10.1f}{r.mean():>10.1f}"
-              f"{sp:>10.1f}{sp/se:>7.2f}")
+        se = (g.var(ddof=1) / len(g) + r.var(ddof=1) / len(r)) ** 0.5
+        return sp, se, g.mean(), r.mean(), len(g), len(r)
+
+    print("\n-- WHAT IT IS WORTH IN BASIS POINTS " + "-" * 38)
+    print(f"  {'subset':<33}{'n':>5}{'gated':>9}{'refused':>9}"
+          f"{'spread':>9}{'se':>7}{'t':>6}")
+    rows = [("whole panel, for reference", m),
+            ("the perturbation sample", k),
+            ("  of it: verdict FOLLOWED text", k[k["sensitive"].astype(bool)]),
+            ("  of it: verdict IGNORED text", k[~k["sensitive"].astype(bool)])]
+    got = {}
+    for lab, sub in rows:
+        res = spread(sub)
+        if res is None:
+            print(f"  {lab:<33}{len(sub):>5}   too few to report")
+            continue
+        sp, se, gm, rm, ng, nr = res
+        got[lab.strip()] = (sp, se)
+        print(f"  {lab:<33}{ng + nr:>5}{gm:>9.1f}{rm:>9.1f}"
+              f"{sp:>9.1f}{se:>7.1f}{sp / se:>6.2f}")
+
+    a = got.get("of it: verdict FOLLOWED text")
+    b = got.get("of it: verdict IGNORED text")
+    if a and b:
+        d = a[0] - b[0]
+        sed = (a[1] ** 2 + b[1] ** 2) ** 0.5
+        print(f"\n  reading premium: {d:+.1f}bp (se {sed:.1f}, z = {d / sed:+.2f})")
+        print("  A positive premium means the edge is LARGER where the verdict")
+        print("  provably followed the document, which is the reverse of what a")
+        print("  memorisation story predicts.")
+    if a:
+        print("\n  CARRY AWAY: conditioned on demonstrated reading, the gate earns")
+        print(f"  {a[0]:+.0f}bp of selection spread, se {a[1]:.0f}. The study's")
+        print("  headline is +278.9bp on the full 1,787-event panel; this rests on")
+        print("  the perturbation sample alone, so its interval is far wider and")
+        print("  the two are not a like-for-like comparison.")
 
 
 def main() -> None:
