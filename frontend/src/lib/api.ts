@@ -240,6 +240,19 @@ export type SystemState = {
   power?: { keep_awake_supported: boolean; keep_awake_active: boolean };
 };
 
+export type MarketClock = {
+  known: boolean;
+  is_open?: boolean | null;
+  next_open?: string | null;
+  next_close?: string | null;
+  error?: string;
+};
+
+/** Forces the broker calendar fetch. `/api/system/state` only reports the
+ * enforcer's cached clock, which stays unknown until something asks. */
+export const getMarketClock = () =>
+  api.get<MarketClock>("/api/market/clock").then((r) => r.data);
+
 export type Quote = {
   symbol?: string;
   bid?: number | null;
@@ -351,6 +364,33 @@ export type StrategyDecision = {
   plan_id: string | null;
   detail: Record<string, unknown> | null;
 };
+
+/** One allocator's replay of a strategy's journalled would-be trades. */
+export type TwinPolicy = {
+  policy: string;
+  start_equity: number;
+  equity: number;
+  realized: number;
+  unrealized: number;
+  return_pct: number;
+  max_drawdown: number;
+  trades: number;
+  open: number;
+  closed: number;
+  win_rate: number | null;
+  curve: { ts: string | null; equity: number }[];
+};
+
+export type StrategyTwin = {
+  signals: number;
+  params: { equity: number; risk_pct: number; flat_pct: number };
+  policies: TwinPolicy[];
+};
+
+/** The paper twin. Note-mode strategies place nothing, so `performance` is
+ * empty for them by construction — this is the outcome they DO have. */
+export const getStrategyTwin = (id: string) =>
+  api.get<StrategyTwin>(`/api/strategies/${id}/twin`).then((r) => r.data);
 
 export type SignalRecord = {
   id: number;

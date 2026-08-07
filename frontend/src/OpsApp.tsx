@@ -1,28 +1,34 @@
 /**
- * The ops console — the default app.
+ * The ops console — the default app. A portal for running a book of
+ * strategies, not a trading terminal.
  *
- * Two jobs and nothing else: manage the live broker connection, and run
- * strategies. There is no chart, no options designer and no per-strategy
- * surface here, deliberately. A console that knows what `earnings_reaction`
- * is has to be edited every time a strategy is added, and the previous
- * version of this app had exactly that problem: a whole second entry point
- * hardcoded to one strategy kind.
+ * Four destinations, and they are peers:
+ *   ACCOUNT     the money — balances, exposure, open and closed P&L
+ *   STRATEGIES  the book — instances, params, journals, performance
+ *   MARKET      what the engine can see — clock, majors, calendar, tape
+ *   SYSTEM      whether the machine works — health, tasks, feeds, call flow
  *
- * What replaced it is the STRATEGIES page, which is kind-agnostic all the
- * way down — params are JSON, the decision journal renders whatever the
- * strategy journaled, and SOURCE reads the module the engine is actually
- * running. A new strategy shows up here by being registered in
- * app/strategies/__init__.py and needs no frontend change at all.
+ * SYSTEM earns equal billing because an engine that trades unattended fails
+ * silently by default: a dead feed and a quiet market produce the same empty
+ * screen everywhere else in the app.
  *
- * The options terminal still exists, at /terminal.html.
+ * Nothing here knows what a particular strategy does. A console that knows
+ * what `earnings_reaction` is has to be edited every time a strategy is
+ * added, and the previous version had exactly that problem — a whole second
+ * entry point hardcoded to one kind. A new strategy appears here by being
+ * registered in app/strategies/__init__.py and needs no frontend change.
+ *
+ * The discretionary options cockpit is filed away at /terminal.html, linked
+ * from SYSTEM.
  */
 
 import { useEffect, useState } from "react";
 import { AccountPage } from "./components/Account/AccountPage";
 import { EnforcementBanner } from "./components/EnforcementBanner";
 import { Header } from "./components/Header";
-import MonitorPage from "./components/Monitor/MonitorPage";
+import MarketPage from "./components/Market/MarketPage";
 import StrategiesPage from "./components/Strategies/StrategiesPage";
+import SystemPage from "./components/System/SystemPage";
 import { useAccountStore } from "./store/accountStore";
 import { useUiStore } from "./store/uiStore";
 
@@ -64,21 +70,23 @@ export default function OpsApp() {
   const setView = useUiStore((s) => s.setView);
 
   // The store's default view is the terminal's chart, which this shell does
-  // not render. Land on STRATEGIES instead — it is what the console is for.
+  // not render. Land on ACCOUNT instead — the money is the first question.
   useEffect(() => {
-    if (view === "terminal") setView("strategies");
+    if (view === "terminal") setView("account");
   }, [view, setView]);
 
   return (
     <div className="flex h-full flex-col gap-px bg-bb-black p-px">
       <Header variant="ops" />
       <EnforcementBanner />
-      {view === "account" ? (
-        <AccountPage />
-      ) : view === "monitor" ? (
-        <MonitorPage />
-      ) : (
+      {view === "strategies" ? (
         <StrategiesPage />
+      ) : view === "market" ? (
+        <MarketPage />
+      ) : view === "system" ? (
+        <SystemPage />
+      ) : (
+        <AccountPage />
       )}
     </div>
   );

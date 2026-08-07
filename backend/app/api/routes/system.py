@@ -15,6 +15,26 @@ async def get_system_state(request: Request) -> dict:
         raise HTTPException(502, f"system state failed: {exc}")
 
 
+@router.get("/market/clock")
+async def market_clock(request: Request) -> dict:
+    """Broker session calendar: open now, and the next open/close.
+
+    `/api/system/state` reports the enforcer's CACHED clock, which stays
+    `{known: false}` until something asks — and with no open plans nothing
+    ever does, so a page that reads only the cache shows UNKNOWN forever.
+    This forces the fetch. The snapshot is reused for a whole session regime,
+    so polling this is one broker call per regime, not one per request.
+    """
+    clock = request.app.state.enforcer.clock
+    try:
+        await clock.is_open()
+    except Exception as exc:                                  # noqa: BLE001
+        # Fail soft: a calendar we could not fetch is unknown, not closed.
+        # Saying "CLOSED" on a network blip is a guess dressed as a fact.
+        return {**clock.status(), "error": str(exc)}
+    return clock.status()
+
+
 @router.get("/settings/feed")
 async def get_feed_settings(request: Request) -> dict:
     return await request.app.state.feed_settings.get()

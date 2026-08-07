@@ -11,7 +11,14 @@
  */
 
 import { useEffect, useState } from "react";
-import { getQuote, getSignals, type Quote, type SignalRecord } from "../../lib/api";
+import {
+  getMarketClock,
+  getQuote,
+  getSignals,
+  type MarketClock,
+  type Quote,
+  type SignalRecord,
+} from "../../lib/api";
 import { useSystemState } from "../System/SystemPanels";
 
 // Each quote is a broker REST call and shows up in SYSTEM's call flow, so
@@ -54,8 +61,14 @@ function MajorTile({ symbol }: { symbol: string }) {
   }, [symbol]);
 
   const mid = quote?.mid ?? null;
-  const spread =
-    quote?.bid && quote?.ask && quote.ask > quote.bid ? quote.ask - quote.bid : null;
+  // A book is only two-sided when both legs are positive AND differ. A tape
+  // print synthesized from a bar arrives as bid == ask, and a stale side
+  // arrives as 0 — neither is a tight market, and rendering either as
+  // "768.22 / 768.22" or "538.36 / 0.00" reads as one.
+  const bid = quote?.bid && quote.bid > 0 ? quote.bid : null;
+  const ask = quote?.ask && quote.ask > 0 ? quote.ask : null;
+  const twoSided = bid != null && ask != null && ask > bid;
+  const spread = twoSided ? ask - bid : null;
   // A quote's age is the whole story after hours: the free feed goes quiet at
   // 17:00 ET and keeps serving the last print for hours.
   const ageS = quote?.ts ? (Date.now() - quote.ts) / 1000 : null;
@@ -78,12 +91,17 @@ function MajorTile({ symbol }: { symbol: string }) {
         {dead ? <span className="text-[12px] text-bb-muted">no data</span>
           : mid != null ? mid.toFixed(2) : "—"}
       </div>
-      <div className="text-[10px] text-bb-muted" data-numeric>
-        {quote?.bid != null && quote?.ask != null
-          ? `${quote.bid.toFixed(2)} / ${quote.ask.toFixed(2)}${
-              spread != null && mid ? ` · ${((spread / mid) * 1e4).toFixed(0)}bp` : ""
-            }`
-          : "—"}
+      <div
+        className="text-[10px] text-bb-muted"
+        data-numeric
+        title={twoSided ? "" : "no two-sided book — this is a tape print, not a quote"}
+      >
+        {twoSided
+          ? `${bid.toFixed(2)} / ${ask.toFixed(2)}` +
+            (mid ? ` · ${((spread! / mid) * 1e4).toFixed(0)}bp` : "")
+          : mid != null
+            ? "last print · no book"
+            : "—"}
       </div>
     </div>
   );
@@ -109,9 +127,26 @@ function useSignals(type: string, limit: number): SignalRecord[] {
 
 function ClockBar() {
   const state = useSystemState();
-  const clock = state?.broker.market_clock;
-  // `known: false` is not "closed" — it is "the broker calendar has not been
-  // fetched yet". Saying CLOSED there would be a guess presented as a fact.
+  const [clock, setClock] = useState<MarketClock | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    const load = () =>
+      getMarketClock()
+        .then((c) => alive && setClock(c))
+        .catch(() => {});
+    void load();
+    // The snapshot covers a whole session regime, so this only costs a broker
+    // call when the regime actually turns over.
+    const id = window.setInterval(load, 60_000);
+    return () => {
+      alive = false;
+      window.clearInterval(id);
+    };
+  }, []);
+
+  // `known: false` is not "closed" — it is "the broker calendar could not be
+  // read". Saying CLOSED there would be a guess presented as a fact.
   const label = !clock?.known ? "UNKNOWN" : clock.is_open ? "OPEN" : "CLOSED";
   const cls = !clock?.known
     ? "text-bb-muted"
@@ -122,7 +157,12 @@ function ClockBar() {
   return (
     <div className="panel flex shrink-0 flex-wrap items-center gap-x-6 gap-y-1 px-3 py-2 text-[11px]">
       <span className="tracking-widest text-bb-muted">US EQUITIES</span>
-      <span className={`font-semibold ${cls}`}>{label}</span>
+      <span
+        className={`font-semibold ${cls}`}
+        title={clock?.error ? `calendar unreachable: ${clock.error}` : ""}
+      >
+        {label}
+      </span>
       <span className="text-bb-muted">
         next open <span className="text-white" data-numeric>{ET(clock?.next_open)}</span>
       </span>

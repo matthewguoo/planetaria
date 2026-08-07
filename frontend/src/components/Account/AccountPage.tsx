@@ -23,6 +23,7 @@ import {
 } from "../../lib/api";
 import { fmtUsd, pnlCls } from "../../lib/format";
 import { useAccountStore } from "../../store/accountStore";
+import { AccountsPanel } from "../System/SystemPanels";
 
 function StatCard({ label, value, cls }: { label: string; value: string; cls?: string }) {
   return (
@@ -627,6 +628,15 @@ export function AccountPage({ onViewPlan }: { onViewPlan?: (plan: Plan) => void 
             </tbody>
           </table>
         </div>
+      </div>
+
+      {/* Which broker account the engine trades is account management, so it
+          belongs on this page rather than buried in a settings drawer. The
+          selection is refused while plans are open and applies at the next
+          boot — both stated by the panel itself. */}
+      <div className="panel flex shrink-0 flex-col">
+        <div className="panel-title">PAPER ACCOUNT (restart applies)</div>
+        <AccountsPanel />
       </div>
 
       {error && <div className="px-2 py-1 text-[10px] text-bb-loss">{error}</div>}

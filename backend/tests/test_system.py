@@ -139,3 +139,53 @@ class TestExitLock:
             enforcer._execute_exit("p2", "sl"),
         )
         assert concurrent["max"] == 2  # parallel across plans
+
+
+class TestMarketClockEndpoint:
+    """`/api/system/state` reports the enforcer's CACHED clock, which nothing
+    populates while no plans are open. This endpoint forces the fetch — and
+    must report a calendar it could not read as unknown, never as closed."""
+
+    def _request(self, clock):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(
+            enforcer=SimpleNamespace(clock=clock))))
+
+    @pytest.mark.asyncio
+    async def test_forces_the_fetch_and_returns_the_snapshot(self):
+        from app.api.routes.system import market_clock
+
+        asked = {"n": 0}
+
+        class Clock:
+            async def is_open(self):
+                asked["n"] += 1
+                return False
+
+            def status(self):
+                return {"known": asked["n"] > 0, "is_open": False,
+                        "next_open": "2026-08-07T13:30:00+00:00",
+                        "next_close": "2026-08-07T20:00:00+00:00"}
+
+        out = await market_clock(self._request(Clock()))
+        assert asked["n"] == 1                 # the whole point: it asked
+        assert out["known"] is True
+        assert out["is_open"] is False
+        assert out["next_open"].startswith("2026-08-07")
+
+    @pytest.mark.asyncio
+    async def test_unreachable_calendar_is_unknown_not_closed(self):
+        from app.api.routes.system import market_clock
+
+        class Clock:
+            async def is_open(self):
+                raise RuntimeError("broker unreachable")
+
+            def status(self):
+                return {"known": False}
+
+        out = await market_clock(self._request(Clock()))
+        assert out["known"] is False
+        assert out.get("is_open") is None       # not False — we do not know
+        assert "broker unreachable" in out["error"]

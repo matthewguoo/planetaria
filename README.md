@@ -4,13 +4,28 @@ A FastAPI backend against Alpaca (paper) with two React front ends over the
 same API. The core design rule: **every position has a server-enforced exit
 plan** (TP / SL / hard time stop) that survives restarts.
 
-| entry | what it is |
-|---|---|
-| `/` | **ops console** — broker connection, account, and the strategy runners. Kind-agnostic: a new strategy appears here by being registered in `app/strategies/__init__.py`, with no frontend change. |
-| `/terminal.html` | **options terminal** — the discretionary 0-3 DTE cockpit: chart, chain, payoff designer, sizing, order ticket. |
+`/` is the **ops console** — a portal for running a book of strategies. Four
+destinations, and they are peers:
 
-Neither front end holds a privileged path; both are clients of the same
-`/api/*` routes the headless engine exposes.
+| page | what it answers |
+|---|---|
+| ACCOUNT | the money — balances, exposure, equity curve, open and closed P&L, and which paper account the engine trades |
+| STRATEGIES | the book — instances, params, decision journals, performance, and the paper twin for strategies that place nothing yet |
+| MARKET | what the engine can see — session clock, the majors, the earnings calendar, the news tape |
+| SYSTEM | whether the machine works — subsystem health, background tasks, signal feeds, the event bus, and the live call flow |
+
+SYSTEM earns equal billing because an engine that trades unattended fails
+silently by default: a dead feed and a quiet market produce the same empty
+screen everywhere else.
+
+Nothing in the console knows what a particular strategy *does*. A new strategy
+appears there by being registered in `app/strategies/__init__.py`, with no
+frontend change.
+
+`/terminal.html` is the **options terminal** — the discretionary 0-3 DTE
+cockpit (chart, chain, payoff designer, sizing, order ticket), linked from
+SYSTEM. Neither front end holds a privileged path; both are clients of the
+same `/api/*` routes the headless engine exposes.
 
 `research/` holds studies — code that produces evidence, kept out of
 `backend/` so the dependency runs one way: research reads the app, the app

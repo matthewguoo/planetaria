@@ -12,11 +12,13 @@ import {
   getStrategyCatalog,
   getStrategyPerformance,
   getStrategySource,
+  getStrategyTwin,
   type SignalRecord,
   type StrategyDecision,
   type StrategyInstance,
   type StrategyKind,
   type StrategyPerformance,
+  type StrategyTwin,
 } from "../../lib/api";
 import {
   actions,
@@ -127,6 +129,7 @@ export default function StrategiesPage() {
 
       {selected && <ParamsPanel key={selected.id} inst={selected} onAction={run} />}
       {selected && <PerformancePanel key={`perf-${selected.id}`} inst={selected} />}
+      {selected && <TwinPanel key={`twin-${selected.id}`} inst={selected} />}
       {selected && <DecisionsPanel inst={selected} decisions={decisions} />}
       {selected && <SourcePanel key={`src-${selected.kind}`} kind={selected.kind} />}
 
@@ -361,9 +364,9 @@ function PerformancePanel({ inst }: { inst: StrategyInstance }) {
             </span>
           </div>
           {perf.plans.length === 0 ? (
-            <div className="flex h-10 items-center justify-center text-[11px] text-bb-muted">
-              no plans yet — note-mode strategies journal would-be trades in the
-              decision journal instead
+            <div className="flex h-10 items-center justify-center px-3 text-center text-[11px] text-bb-muted">
+              no plans yet — note-mode strategies journal would-be trades instead.
+              The PAPER TWIN below is what those would have done.
             </div>
           ) : (
             <div className="max-h-48 overflow-y-auto">
@@ -407,6 +410,100 @@ function PerformancePanel({ inst }: { inst: StrategyInstance }) {
           )}
         </>
       )}
+    </div>
+  );
+}
+
+/**
+ * The paper twin: the instance's journalled would-be trades compounded into
+ * an equity curve, under two allocators. This is the ONLY readable outcome a
+ * note-mode strategy has — PERFORMANCE above is empty for them by
+ * construction, because they place nothing.
+ *
+ * Two allocators rather than one on purpose: `vol` is what the live sizer
+ * would have done, `flat` is the same trades at constant notional. A result
+ * that only survives one of them is a result about the sizing.
+ */
+function TwinPanel({ inst }: { inst: StrategyInstance }) {
+  const [twin, setTwin] = useState<StrategyTwin | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    const load = () =>
+      getStrategyTwin(inst.id)
+        .then((t) => alive && setTwin(t))
+        .catch((err) => alive && setError(apiError(err)));
+    void load();
+    const t = window.setInterval(load, POLL_MS * 4);
+    return () => {
+      alive = false;
+      window.clearInterval(t);
+    };
+  }, [inst.id]);
+
+  const pnlColor = (v: number) => (v >= 0 ? "text-bb-profit" : "text-bb-loss");
+
+  return (
+    <div className="panel flex shrink-0 flex-col">
+      <div
+        className="panel-title"
+        title="Journalled would-be trades compounded through the session calendar. Not fills — a replay."
+      >
+        PAPER TWIN — {inst.name.toUpperCase()}
+        {twin ? ` (${twin.signals} would-be trades)` : ""}
+      </div>
+      {error ? (
+        <div className="px-2 py-2 text-[11px] text-bb-loss">{error}</div>
+      ) : !twin ? (
+        <div className="px-2 py-2 text-[11px] text-bb-muted">loading…</div>
+      ) : twin.signals === 0 ? (
+        <div className="flex h-10 items-center justify-center px-3 text-center text-[11px] text-bb-muted">
+          nothing to replay — this instance has journalled no would-be trades yet
+        </div>
+      ) : (
+        <table className="w-full border-collapse text-[11px]">
+          <thead className="text-[10px] text-bb-muted">
+            <tr className="border-b border-bb-border">
+              <th className="px-2 py-1 text-left">ALLOCATOR</th>
+              <th className="px-2 py-1 text-right">EQUITY</th>
+              <th className="px-2 py-1 text-right">RETURN</th>
+              <th className="px-2 py-1 text-right">MAX DD</th>
+              <th className="px-2 py-1 text-right">TRADES</th>
+              <th className="px-2 py-1 text-right">OPEN</th>
+              <th className="px-2 py-1 text-right">WIN RATE</th>
+            </tr>
+          </thead>
+          <tbody>
+            {twin.policies.map((p) => (
+              <tr key={p.policy} className="border-b border-bb-border/50 hover:bg-bb-hover">
+                <td className="px-2 py-1 text-bb-amber">
+                  {p.policy === "vol" ? "vol-weighted (live sizer)" : "flat notional"}
+                </td>
+                <td data-numeric className="px-2 py-1 text-right text-white">
+                  {p.equity.toFixed(0)}
+                </td>
+                <td data-numeric className={"px-2 py-1 text-right " + pnlColor(p.return_pct)}>
+                  {p.return_pct >= 0 ? "+" : ""}
+                  {p.return_pct.toFixed(2)}%
+                </td>
+                <td data-numeric className="px-2 py-1 text-right text-bb-orange">
+                  {p.max_drawdown.toFixed(2)}%
+                </td>
+                <td data-numeric className="px-2 py-1 text-right">{p.trades}</td>
+                <td data-numeric className="px-2 py-1 text-right text-bb-muted">{p.open}</td>
+                <td data-numeric className="px-2 py-1 text-right">
+                  {p.win_rate == null ? "—" : `${Math.round(p.win_rate * 100)}%`}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      <div className="border-t border-bb-border px-2 py-1 text-[9px] leading-tight text-bb-muted">
+        A replay, not a record: every entry assumes a fill at the journalled
+        price, which is the assumption a live account has to earn.
+      </div>
     </div>
   );
 }

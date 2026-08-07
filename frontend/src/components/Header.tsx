@@ -128,7 +128,10 @@ export function Header({ variant = "terminal" }: { variant?: "terminal" | "ops" 
           </button>
         ))}
         <AudioToggle />
-        <SystemButton />
+        {/* The ops console has a whole SYSTEM page; the ⚙ drawer is the
+            cockpit's version of it and would be a second door to the same
+            room here. */}
+        {variant === "terminal" && <SystemButton />}
         <StatusPill />
         <span className="border border-bb-border px-2 py-0.5 text-bb-orange">PAPER</span>
       </div>

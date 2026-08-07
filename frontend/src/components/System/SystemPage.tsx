@@ -44,17 +44,47 @@ function taskOk(state: string): { ok: boolean; warn: boolean } {
   return { ok: false, warn: false };
 }
 
-function num(v: unknown): string {
-  return typeof v === "number" ? String(v) : "—";
+/** The bus reports per EVENT TYPE, each with its own published count and one
+ * entry per subscriber queue:
+ *
+ *   { estimate: { published, subscribers: [{ size, max, dropped, lossless }] } }
+ *
+ * so both totals have to be summed across the whole shape. Reading a flat
+ * `bus.dropped` returns undefined and renders as a reassuring zero — which is
+ * the precise failure this page exists to catch, so it is worth the loop. */
+function busTotals(bus: Record<string, unknown>): { published: number; dropped: number; queued: number } {
+  let published = 0;
+  let dropped = 0;
+  let queued = 0;
+  for (const entry of Object.values(bus)) {
+    const e = entry as { published?: number; subscribers?: { size?: number; dropped?: number }[] };
+    published += e?.published ?? 0;
+    for (const sub of e?.subscribers ?? []) {
+      dropped += sub?.dropped ?? 0;
+      queued += sub?.size ?? 0;
+    }
+  }
+  return { published, dropped, queued };
+}
+
+/** Feeds do not agree on what to call their age field — the news stream has
+ * `last_event_age_s`, EDGAR has `last_poll_age_s`, the calendar has
+ * `last_fetch_age_s`. Take whichever is present rather than showing nothing
+ * for two of the three. */
+function feedAge(f: Record<string, unknown>): number | null {
+  for (const key of ["last_event_age_s", "last_poll_age_s", "last_fetch_age_s"]) {
+    const v = f[key];
+    if (typeof v === "number") return v;
+  }
+  return null;
 }
 
 export default function SystemPage() {
   const state = useSystemState();
   const feeds = state?.signals?.feeds ?? {};
-  const bus = state?.signals?.event_bus ?? {};
   // A lossless bus that has dropped anything means a consumer wedged and the
   // engine silently stopped seeing events. It is the loudest number here.
-  const dropped = Number(bus.dropped ?? 0);
+  const bus = busTotals(state?.signals?.event_bus ?? {});
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-px overflow-y-auto">
@@ -91,16 +121,18 @@ export default function SystemPage() {
             <>
               {Object.entries(feeds).map(([name, f]) => {
                 const { ok, warn } = taskOk(String(f.task));
-                const age = f.last_event_age_s;
+                const age = feedAge(f);
+                const errors = typeof f.errors === "number" ? f.errors : 0;
                 return (
                   <Row
                     key={name}
                     label={name.toUpperCase()}
-                    ok={ok}
-                    warn={warn}
+                    ok={ok && errors === 0}
+                    warn={warn || (ok && errors > 0)}
                     value={
                       String(f.task) +
-                      (typeof age === "number" ? ` · ${age.toFixed(0)}s ago` : "")
+                      (age != null ? ` · ${age.toFixed(0)}s ago` : "") +
+                      (errors ? ` · ${errors} err` : "")
                     }
                     title={JSON.stringify(f, null, 1)}
                   />
@@ -108,10 +140,13 @@ export default function SystemPage() {
               })}
               <Row
                 label="EVENT BUS"
-                ok={dropped === 0}
-                value={`${num(bus.published)} published · ${dropped} dropped`}
+                ok={bus.dropped === 0}
+                value={
+                  `${bus.published} published · ${bus.dropped} dropped` +
+                  (bus.queued ? ` · ${bus.queued} queued` : "")
+                }
                 title={
-                  dropped === 0
+                  bus.dropped === 0
                     ? "Lossless. A non-zero drop count means a consumer wedged."
                     : "A consumer wedged — events were published that nobody received."
                 }
