@@ -789,6 +789,78 @@ def holdout(p: pd.DataFrame, n: int, early_cut: str = HOLDOUT_CUT) -> dict:
     return out
 
 
+def early_late(curve: dict, years: list) -> dict:
+    """The decade split at the year the strategy stops trailing SPY.
+
+    WHY THIS EXISTS. The terminal multiple hides its own path, and this path
+    is lopsided: the strategy is behind the index at every year-end for the
+    first half of the sample. A reader who sees that on the chart deserves a
+    number for it, and one who reads only the abstract never sees it at all.
+
+    WHY IT REPORTS ALPHA AND NOT THE GAP TO SPY. Beta here is ~0.01, so SPY
+    is not this strategy's benchmark in any meaningful sense -- trailing a
+    bull market at zero beta is arithmetic, not a verdict on skill. Stating
+    "it lost to SPY" without stating "at beta zero, earning +10%/yr of alpha"
+    would trade one misleading impression for its opposite. Alpha uses the
+    SAME regression the rest of the paper uses (OLS intercept on daily
+    benchmark returns, annualised, no cash rate), so the sub-period numbers
+    and the headline cannot drift apart.
+    """
+    dates = [str(d)[:10] for d in (curve.get("dates") or [])]
+    ser = curve.get("series") or {}
+    if not dates or "full" not in ser or "spy" not in ser:
+        return {}
+    f = np.asarray(ser["full"], float)
+    s = np.asarray(ser["spy"], float)
+
+    ends: list[tuple[str, int]] = []
+    for i in range(1, len(dates)):
+        if dates[i][:4] != dates[i - 1][:4]:
+            ends.append((dates[i - 1][:4], i - 1))
+    ends.append((dates[-1][:4], len(dates) - 1))
+    ratio = [(y, float(f[i] / s[i])) for y, i in ends]
+
+    cross = next((ratio[k][0] for k in range(len(ratio))
+                  if all(r >= 1 for _, r in ratio[k:])), None)
+    behind = [y for y, r in ratio if r < 1]
+    if not cross or not behind:
+        return {}
+    split = int(behind[-1])
+    at = {y: i for y, i in ends}
+
+    def seg(lo_i: int, hi_i: int) -> dict:
+        fr = np.diff(f[lo_i:hi_i + 1]) / f[lo_i:hi_i]
+        sr = np.diff(s[lo_i:hi_i + 1]) / s[lo_i:hi_i]
+        beta, alpha_d = np.polyfit(sr, fr, 1)
+        yrs = max((hi_i - lo_i) / 252, 1e-9)
+        return {"beta": _f(float(beta)),
+                "alpha_annual_pct": _f(float(alpha_d) * 252 * 100),
+                "corr": _f(float(np.corrcoef(sr, fr)[0, 1])),
+                "cagr_pct": _f((float(f[hi_i] / f[lo_i]) ** (1 / yrs) - 1) * 100),
+                "spy_cagr_pct": _f((float(s[hi_i] / s[lo_i]) ** (1 / yrs) - 1) * 100),
+                "mult": _f(float(f[hi_i] / f[lo_i])),
+                "spy_mult": _f(float(s[hi_i] / s[lo_i]))}
+
+    def yrs_agg(lo: int, hi: int) -> dict:
+        rs = [r for r in years if lo <= int(r["year"]) <= hi]
+        n = sum(r["n"] for r in rs) or 1
+        return {"n": n, "per_year": _f(n / (hi - lo + 1)),
+                "mech": _f(sum(r["n"] * r["mech"] for r in rs) / n),
+                "spread": _f(sum(r["n"] * r["spread"] for r in rs) / n),
+                "gated": _f(sum(r["n"] * r["gated"] for r in rs) / n)}
+
+    i_split, i_end = at[str(split)], len(dates) - 1
+    last_year = int(dates[-1][:4])
+    return {
+        "split_year": split, "cross_year": int(cross),
+        "first_year": int(ratio[0][0]),
+        "worst": {"year": int(min(ratio, key=lambda t: t[1])[0]),
+                  "ratio": _f(min(r for _, r in ratio))},
+        "early": {**seg(0, i_split), **yrs_agg(int(ratio[0][0]), split)},
+        "late": {**seg(i_split, i_end), **yrs_agg(split + 1, last_year)},
+    }
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--all-events", action="store_true")
@@ -1001,6 +1073,8 @@ def main() -> None:
         path = PUBLIC / name
         if path.exists():
             data[f"curve_{tag}"] = json.loads(path.read_text(encoding="utf-8"))
+
+    data["early_late"] = early_late(data.get("curve_raw") or {}, data["years"])
 
     # The decade extension, framed as the holdout it is.
     data["holdout"] = holdout(p, n)

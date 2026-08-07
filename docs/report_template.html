@@ -742,6 +742,11 @@ prose.</p>
 
 <p id="curve-rank"></p>
 
+<div class="callout" id="early-block">
+  <span class="label">When the outperformance actually happened</span>
+  <p id="curve-early"></p>
+</div>
+
 <p id="iso-para"></p>
 
 <div class="scroll"><table id="iso-table">
@@ -1046,6 +1051,8 @@ policy of Section 5.4, both charged their own measured spreads.</p>
   reaction print. The live account is not entitled to the consolidated feed, so no
   after-hours entry has ever filled — the part of this strategy least supported by
   evidence is the part that puts the trade on.</li>
+  <li id="lim-early"><b>The outperformance is concentrated in the back half of
+  the sample.</b> <span id="lim-early-txt"></span></li>
   <li id="lim-regime"><b>Few stressed regimes.</b> Drawdowns are where the
   mechanical baseline loses most and the gate earns most of its spread, so the
   number of them in the sample bounds how much can be claimed.</li>
@@ -1870,6 +1877,60 @@ table($("curve-table"), ["configuration", "trades", "total", "CAGR", "max DD", "
     beats the other. Where they do differ is in what they cost to run: pure
     direction takes ${int(l.taken)} trades against ${int(f.taken)}, and Section 6
     shows those extra round trips are not free.`);
+})();
+
+/* WHEN THE OUTPERFORMANCE HAPPENED, and against what benchmark it should
+   be judged. Computed in build_report_data with the SAME regression the
+   rest of the paper uses, so these sub-period figures cannot drift from
+   the headline alpha. */
+(() => {
+  const EL = D.early_late || {};
+  if (!EL.early || !EL.late) { const b = $("early-block"); if (b) b.remove(); return; }
+  const E = EL.early, L = EL.late;
+  setHTML("curve-early", `<b>It is not evenly distributed.</b> Through the end
+    of ${EL.split_year} the strategy had compounded to ${n1(E.mult, 2)}× against
+    SPY's ${n1(E.spy_mult, 2)}× — behind the index at every year-end from
+    ${EL.first_year} to ${EL.split_year}, and as low as
+    ${n1(100 * EL.worst.ratio, 0)}% of its level in ${EL.worst.year}.
+    <b>That gap is not the indictment it looks like</b>, because SPY is not
+    this strategy's benchmark in any meaningful sense: beta over those years is
+    ${n1(E.beta, 3)} and correlation ${n1(E.corr, 3)}, so trailing a
+    ${n1(E.spy_cagr_pct, 1)}% index while returning ${n1(E.cagr_pct, 1)}% is
+    arithmetic rather than a verdict on skill. The risk-adjusted number is the
+    one that answers the question, and it is <b>+${n1(E.alpha_annual_pct, 1)}% a
+    year of alpha</b> — positive, sizeable, and earned with essentially no
+    market exposure. What is true is that it is smaller than the
+    +${n1(L.alpha_annual_pct, 1)}% of the years that follow.
+    <b>The tempting explanation is that the model was worse then, and the
+    by-year table says otherwise.</b> What changes between the halves is the
+    <em>anomaly</em>, not the verdicts. The mechanical baseline — the same
+    trades with no model at all — runs ${sgn(E.mech, 0)}bp across the early
+    years against ${sgn(L.mech, 0)}bp afterwards. The model's own selection
+    spread barely moves: ${sgn(E.spread, 0)}bp then, ${sgn(L.spread, 0)}bp now.
+    The verdicts were separating winners from losers the whole time; there was
+    less drift underneath them to separate, and a gate cannot manufacture
+    continuation the tape is not paying. Supply compounds it —
+    ${n1(E.per_year, 0)} qualifying events a year against ${n1(L.per_year, 0)},
+    which reflects how often stocks move ${n1(D.gate_pct, 0)}% after earnings
+    rather than anything about the strategy.
+    <b>One sentence for a reader in a hurry:</b> the strategy produced positive
+    alpha in both halves of the decade and beat buy-and-hold in only one of
+    them, and an account judging it against SPY would have quit in
+    ${EL.worst.year} over a number that was never the right one to watch.
+    <b>The pattern also points the wrong way for the memorisation story</b>,
+    since the weakest years are the oldest and the oldest sit deepest in every
+    model's training corpus.`);
+
+  setHTML("lim-early-txt", `On cumulative wealth the strategy trailed SPY at
+    every year-end from ${EL.first_year} through ${EL.split_year} and only
+    pulled ahead for good in ${EL.cross_year}. Alpha was positive throughout —
+    +${n1(E.alpha_annual_pct, 1)}% a year early against
+    +${n1(L.alpha_annual_pct, 1)}% later — so this is a statement about
+    magnitude, not about sign. Section 5.5 attributes most of the difference to
+    the anomaly rather than the verdicts, but that distinction does not help an
+    account, which earns the product of the two and not the better of them.
+    Whether the later regime or the earlier one is the better guide to the
+    future is not something this sample can settle.`);
 })();
 
 const t1 = st("t1plain"), isoS = (t1.iso || {}).SPY || {}, isoQ = (t1.iso || {}).QQQ || {};

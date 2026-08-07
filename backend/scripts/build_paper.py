@@ -50,7 +50,9 @@ KEEP = ("model", "effort", "universe_n", "scored_n", "paths_n", "gated_n",
         # Added 2026-08-06 with Appendix B. The warning above is accurate:
         # omitting this rendered "the earlier-cutoff addendum is not in this
         # build: not computed" over a fully computed result.
-        "legacy")
+        "legacy",
+        # The early/late split behind Section 5.5's callout.
+        "early_late")
 
 TRADE_COLS = ["date", "sym", "dir", "conf", "guid", "move", "run5d", "dvM",
               "gated", "why", "t1", "t3", "shipped", "exit", "summary"]
@@ -97,7 +99,16 @@ def main() -> None:
     if "/*DATA*/" not in html:
         raise SystemExit("template has no /*DATA*/ slot")
     out = OUT.with_name("report_print.html") if args.print_mode else OUT
-    out.write_text(html.replace("/*DATA*/", blob), encoding="utf-8")
+    # THE FILE MUST DECLARE ITS OWN ENCODING. The template opens at <title>
+    # with no <head>, because the artifact publisher supplies one. Served as
+    # a plain file over HTTP that head never arrives, Python's http.server
+    # sends `text/html` with no charset parameter, and the browser falls back
+    # to the locale default — windows-1252 here. Every em dash became "â€”",
+    # 365 times, and Chrome printed the PDF from that same misread document.
+    # A meta in the first bytes is what makes the file correct standalone; it
+    # is harmless inside the publisher's wrapper, which already says utf-8.
+    doc = '<meta charset="utf-8">\n' + html.replace("/*DATA*/", blob)
+    out.write_text(doc, encoding="utf-8")
     print(f"wrote {out} ({out.stat().st_size / 1024:.0f} KB) — "
           f"payload {len(blob) / 1024:.0f} KB, "
           f"{payload['trades']['n']} appendix rows"
