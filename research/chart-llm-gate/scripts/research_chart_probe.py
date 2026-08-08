@@ -200,6 +200,19 @@ def main() -> None:
             if r:
                 rows.append(r)
     print(f"{len(rows)}/{len(items)} answered in {(time.time()-t0)/60:.1f}min")
+    # A scorer that divides by zero must refuse to render a verdict rather
+    # than render one made of nan. The first Qwen3.6 run answered 0 of 150 on
+    # a max_tokens truncation and this function dutifully computed nan%,
+    # compared it to the 85% bar and printed FAIL — a pass gate that cannot
+    # tell "scored badly" from "produced no data" is not a gate.
+    if len(rows) < 0.5 * len(items):
+        raise SystemExit(
+            f"VOID: only {len(rows)}/{len(items)} requests returned, so there "
+            f"is nothing to score and no verdict is being written. This is an "
+            f"instrument failure, not a comprehension result. Check for "
+            f"truncation first — if the model thinks, `max_tokens` and the "
+            f"per-slot context must both hold prompt + reasoning + answer "
+            f"(LOCAL['{args.model}'].get('thinks') controls the default).")
 
     # Prices are graded to +-0.02%, which is one unit in the table's last
     # printed digit plus one for slack. Counts and the VWAP side are exact.
