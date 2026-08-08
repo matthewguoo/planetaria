@@ -96,6 +96,7 @@ from research_chart_render import (  # noqa: E402
     snapshot,
     synthetic_frame,
 )
+from research_chart_context import full_context, load_context  # noqa: E402
 from research_chart_setups import SETUPS, TF, prep  # noqa: E402
 
 # ------------------------------------------------------------------ serving
@@ -111,25 +112,26 @@ GGUF_DIR = os.environ.get("GGUF_DIR", r"C:\Users\matth\models")
 ENDPOINT = os.environ.get("LOCAL_LLM", "http://127.0.0.1:8080")
 
 LOCAL: dict[str, dict] = {
-    # ctx is slots x 3072 in both cases. The first cut used 2048/slot on an
-    # estimate of ~1.2k-token prompts; the smoke test measured a MEDIAN of
-    # 1,951 prompt tokens, which leaves 97 tokens of headroom for a 59-token
-    # answer. That is not a margin, it is a coin flip on the long tail of
-    # charts. 3072/slot is measured-plus-50%.
+    # ctx is slots x 3584 in both cases, and both numbers are measured rather
+    # than estimated. The first cut gave 2048/slot against an ESTIMATE of ~1.2k
+    # -token prompts; the server's own tokeniser then reported a 2,010-token
+    # median for `outcome` and 2,584 for `outcome_ctx`, because candle tables
+    # tokenise at ~2 chars/token rather than prose's ~4. 3584/slot clears the
+    # measured 2,616 max plus a 512-token generation plus margin.
     "phi4": {
         "gguf": "phi-4.Q8_0.gguf",
         # 15.6GB weights; 40 layers x 10 KV heads x 128 head_dim f16 =
-        # 200KB/token, so 24576 tokens is 4.9GB and the total is ~20.5GB
+        # 200KB/token, so 28672 tokens is 5.7GB and the total is ~21.3GB
         # inside the 22.5GB working ceiling (24GB card, ~1.7GB to the desktop).
-        "args": ["--ctx-size", "24576", "--parallel", "8"],
+        "args": ["--ctx-size", "28672", "--parallel", "8"],
         "slots": 8,
     },
     "qwen3": {
         "gguf": "qwen3-30b-a3b.UD-Q4_K_XL.gguf",
         # 17.7GB weights but a much cheaper cache — 4 KV heads is 98KB/token,
-        # so 18432 tokens is only 1.8GB and the total is ~19.5GB. MoE with 3B
+        # so 21504 tokens is only 2.1GB and the total is ~19.8GB. MoE with 3B
         # active, so decode stays fast despite the larger footprint.
-        "args": ["--ctx-size", "18432", "--parallel", "6"],
+        "args": ["--ctx-size", "21504", "--parallel", "6"],
         "slots": 6,
     },
 }
@@ -280,14 +282,28 @@ OUTCOME_SYSTEM = (
 )
 
 
-def render_outcome(row: pd.Series, df: pd.DataFrame) -> str:
-    """The gate task, re-asked as the question the bracket actually poses."""
+OUTCOME_QUESTION = (
+    "Which does price reach FIRST — the target or the stop? Answer only "
+    "that. Ignore whether you would have taken the trade."
+)
+
+
+def render_outcome(row: pd.Series, df: pd.DataFrame,
+                   ctx: str | None = None) -> str:
+    """The gate task, re-asked as the question the bracket actually poses.
+
+    `ctx` is the `outcome_ctx` arm's extra block — the session so far, ten
+    prior daily candles, the index tape and the prior session's option flow.
+    It is appended rather than interleaved so the two arms differ by exactly
+    one contiguous span of text and nothing else: same chart, same bracket,
+    same question, same decoding. That is what makes the pair an ablation
+    instead of two prompts that happen to disagree.
+    """
     base = render_gate(row, df)
     head, _, _ = base.partition("Judge the chart.")
-    return head + (
-        "Which does price reach FIRST — the target or the stop? Answer only "
-        "that. Ignore whether you would have taken the trade."
-    )
+    if ctx:
+        head += "\nAdditional context, in the same relative units:\n\n" + ctx + "\n\n"
+    return head + OUTCOME_QUESTION
 
 FORCED_SCHEMA = {
     "type": "object",
@@ -313,15 +329,49 @@ COLD_SYSTEM = (
 COLD_HORIZON = 12       # bars; 60 minutes at 5m
 
 
-def payload(task: str, system: str, schema: dict,
-            temperature: float) -> dict:
+# Per-slot context budget is ctx_size / parallel, and it must hold the prompt
+# AND the generation. The guard below refuses to send anything that could
+# overflow rather than letting llama.cpp truncate the prompt silently, which
+# would corrupt a fraction of the panel with no visible symptom.
+#
+# MEASURED AGAINST THE SERVER'S OWN TOKENISER on 2026-08-07, because the first
+# version of this guard used the usual ~4-chars-per-token rule of thumb and was
+# wrong by a factor of two IN THE UNSAFE DIRECTION. These prompts are candle
+# tables: almost every token is a digit, a sign or a run of spaces, and none of
+# it merges the way prose does.
+#
+#     arm            chars/4 estimate    actual tokens
+#     outcome              1,026             2,010
+#     outcome_ctx          1,331             2,584
+#
+# so the real figure is ~2.0 chars per token, not 4. At 3072/slot the context
+# arm needed 2,616 + 512 = 3,128 and would have overflowed on every request.
+CHARS_PER_TOKEN = 2.0
+CTX_MARGIN = 128
+
+
+def slot_ctx(tag: str) -> int:
+    cfg = LOCAL[tag]
+    return int(cfg["args"][cfg["args"].index("--ctx-size") + 1]) // cfg["slots"]
+
+
+def payload(task: str, system: str, schema: dict, temperature: float,
+            max_tokens: int = 768, slot: int = 3072) -> dict:
+    est = int((len(task) + len(system)) / CHARS_PER_TOKEN)
+    if est + max_tokens > slot - CTX_MARGIN:
+        raise SystemExit(
+            f"prompt would overflow the slot: ~{est} prompt + {max_tokens} "
+            f"output > {slot - CTX_MARGIN} available. Raise --ctx-size (keep "
+            f"ctx_size/parallel >= {est + max_tokens + CTX_MARGIN}) or lower "
+            f"max_tokens; do NOT let this truncate silently.")
     return {
         "messages": [{"role": "system", "content": system},
                      {"role": "user", "content": task}],
         # Measured on the PEAD local run: median verdict 211 tokens, longest
-        # 327. `reason` is capped at 40 words here, so 768 is ~4x the longest
-        # plausible answer and caps the cost of a degenerate generation.
-        "max_tokens": 768,
+        # 327. `reason` is capped at 40 words here and this study's measured
+        # median is 49, so 768 is ~15x typical and exists only to cap the cost
+        # of a degenerate generation.
+        "max_tokens": max_tokens,
         "temperature": temperature,
         "top_p": 1.0,
         # DRY, not repeat_penalty. Greedy decoding of a free-text field inside
@@ -347,7 +397,8 @@ def score_one(client: httpx.Client, item: dict) -> dict | None:
     after a parse failure reproduces the identical failure. Only salvaged
     rows carry sampling noise, and the row records which those were.
     """
-    base = payload(item["task"], item["system"], item["schema"], item["temp"])
+    base = payload(item["task"], item["system"], item["schema"], item["temp"],
+                   item.get("max_tokens", 768), item.get("slot", 3072))
     for attempt in range(3):
         p = dict(base)
         if attempt and not item["temp"]:
@@ -506,8 +557,12 @@ def build_items(arm: str, tag: str, limit: int | None,
     done = _done_ids(arm, tag)
     items: list[dict] = []
 
-    if arm in ("gate", "shuffled", "gateopt", "outcome"):
+    if arm in ("gate", "shuffled", "gateopt", "outcome", "outcome_ctx"):
         panel = pd.read_parquet(GATE_PANEL)
+        # Enriched frames + options flow, loaded once. Only the context arm
+        # pays for this; every other arm skips it entirely.
+        ctx = (load_context(list(panel["symbol"].unique()))
+               if arm == "outcome_ctx" else None)
         # ANY limited arm subsamples at random rather than truncating. The
         # panel is ts-sorted, so `head(limit)` would hand a limited arm the
         # earliest months only — one regime, not the year. That matters most
@@ -546,11 +601,18 @@ def build_items(arm: str, tag: str, limit: int | None,
                 shown["stop"] = anchor * (1 + (row["stop"] / row["entry"] - 1))
                 shown["target"] = anchor * (1 + (row["target"] / row["entry"] - 1))
                 shown["entry"] = anchor
-            if arm == "outcome":
+            if arm in ("outcome", "outcome_ctx"):
+                ctx_txt = full_context(row, ctx) if arm == "outcome_ctx" else None
                 items.append({
                     "id": row["setup_id"], "system": OUTCOME_SYSTEM,
                     "schema": OUTCOME_SCHEMA, "temp": 0.0,
-                    "task": render_outcome(shown, df),
+                    # 512 rather than 768 on the context arm: the prompt is
+                    # ~300 tokens longer and the pair must both fit the same
+                    # 3072-token slot. Measured median output is 49 tokens,
+                    # so this cannot bind on any non-degenerate generation and
+                    # the two arms stay comparable.
+                    "max_tokens": 512 if arm == "outcome_ctx" else 768,
+                    "task": render_outcome(shown, df, ctx_txt),
                 })
                 if limit and len(items) >= limit:
                     break
@@ -643,6 +705,30 @@ def _run(args) -> None:
         return
     print(f"arm={args.arm} model={args.model}: {len(items):,} requests")
 
+    # Budget check ONCE, on the worst item, before any compute is spent. The
+    # per-request guard in `payload` is the backstop; this is the one that
+    # fails in the first second instead of an hour in. It reads the LIVE
+    # server's props rather than LOCAL[], because the config in this file is
+    # what the server SHOULD have been started with and not necessarily what
+    # is actually listening on the port.
+    try:
+        props = httpx.get(f"{ENDPOINT}/props", timeout=10).json()
+        live = int(props.get("default_generation_settings", {})
+                   .get("n_ctx") or slot_ctx(args.model))
+    except Exception:                                        # noqa: BLE001
+        live = slot_ctx(args.model)
+    worst = max(items, key=lambda x: len(x["task"]) + len(x["system"]))
+    need = (int((len(worst["task"]) + len(worst["system"])) / CHARS_PER_TOKEN)
+            + worst.get("max_tokens", 768) + CTX_MARGIN)
+    if need > live:
+        raise SystemExit(
+            f"the running server gives {live} tokens per slot but this arm's "
+            f"largest request needs ~{need}. Restart it:\n"
+            f"  python scripts/research_chart_gate.py serve --model "
+            f"{args.model}\n(LOCAL['{args.model}'] is configured for "
+            f"{slot_ctx(args.model)}/slot.)")
+    print(f"  slot budget {live}, worst request ~{need} — ok")
+
     path = results_path(args.arm, args.model)
     VERDICTS.mkdir(parents=True, exist_ok=True)
     lock = threading.Lock()
@@ -652,6 +738,9 @@ def _run(args) -> None:
 
     with httpx.Client() as client, path.open("a", encoding="utf-8") as fh:
         with ThreadPoolExecutor(max_workers=slots) as pool:
+            slot = slot_ctx(args.model)
+            for it in items:
+                it["slot"] = slot
             futures = [pool.submit(score_one, client, it) for it in items]
             for fut in as_completed(futures):
                 row = fut.result()
@@ -690,9 +779,9 @@ def main() -> None:
 
     r = sub.add_parser("run")
     r.add_argument("--model", choices=list(LOCAL), required=True)
-    r.add_argument("--arm", choices=["gate", "outcome", "gateopt",
-                                     "shuffled", "coldread", "synthetic"],
-                   default="gate")
+    r.add_argument("--arm", choices=["gate", "outcome", "outcome_ctx",
+                                     "gateopt", "shuffled", "coldread",
+                                     "synthetic"], default="gate")
     r.add_argument("--limit", type=int, default=None)
     r.add_argument("--slots", type=int, default=None)
     r.add_argument("--seed", type=int, default=20260807)

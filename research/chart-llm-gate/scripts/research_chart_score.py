@@ -254,9 +254,17 @@ def main() -> None:
                     "direction does not telegraph this answer, so unlike "
                     "`gate` it can actually discriminate. This is the arm the "
                     "gate result rests on."),
+        "outcome_ctx": ("Identical to `outcome` plus one block of context: "
+                        "the premises that setup's own canon is stated in "
+                        "(opening range against the premarket and yesterday, "
+                        "VWAP standard-deviation bands, EMA separation and "
+                        "slope, the swept liquidity levels, impulse and "
+                        "consolidation geometry, ATR), then the session so "
+                        "far, ten prior daily candles, the index tape, and "
+                        "the prior session's option flow."),
     }
     for model in models:
-        for arm in ("gate", "outcome"):
+        for arm in ("gate", "outcome", "outcome_ctx"):
             g = gate_panel(arm, model)
             if len(g) < 50:
                 continue
@@ -313,6 +321,45 @@ def main() -> None:
                          f"Always saying `stop` would have scored "
                          f"{(1 - base) * 100:.1f}%.")
                     emit("")
+
+        # ------------------------------------------- the context ablation
+        bare, rich = gate_panel("outcome", model), gate_panel("outcome_ctx",
+                                                              model)
+        if len(bare) > 50 and len(rich) > 50:
+            common = set(bare["id"]) & set(rich["id"])
+            b = bare[bare["id"].isin(common)]
+            r = rich[rich["id"].isin(common)]
+            emit(f"### `{model}` — does context help?")
+            emit("")
+            emit(f"Paired on the {len(common):,} setups both arms scored. "
+                 f"Identical chart, bracket, question, schema and decoding; "
+                 f"the arms differ by exactly one contiguous block of text, "
+                 f"so the difference IS the value of the context.")
+            emit("")
+            emit("| arm | n | says target | keeps | spread | accuracy on "
+                 "resolved |")
+            emit("|---|---|---|---|---|---|")
+            for label, sub in (("bare chart", b), ("+ context", r)):
+                res = sub[sub["exit_reason"].isin(["target", "stop"])]
+                acc = (float(((res["resolves"] == "target") ==
+                              (res["exit_reason"] == "target")).mean()) * 100
+                       if len(res) else np.nan)
+                emit(f"| {label} | {len(sub):,} | "
+                     f"{(sub['resolves'] == 'target').mean() * 100:.0f}% | "
+                     f"{sub['keep'].mean() * 100:.0f}% | "
+                     f"{spread(sub):+.1f} | {acc:.1f}% |")
+            emit("")
+            # How often the two arms even DISAGREE bounds how much the
+            # context could possibly be worth: if adding it changes almost no
+            # verdicts, no downstream difference is attributable to it.
+            j = b[["id", "resolves"]].merge(r[["id", "resolves"]], on="id",
+                                            suffixes=("_bare", "_ctx"))
+            flip = (j["resolves_bare"] != j["resolves_ctx"]).mean() * 100
+            emit(f"The context changed the verdict on **{flip:.1f}%** of "
+                 f"paired setups. That number caps what the context can be "
+                 f"worth — a block of text that moves no verdicts cannot move "
+                 f"any result downstream of them.")
+            emit("")
 
         g = gate_panel("gate", model)
 

@@ -20,16 +20,18 @@ P=../../backend/.venv/Scripts/python.exe
 cd "$(dirname "$0")/.."
 
 if [ "$MODEL" = "qwen3" ]; then
-  GATE=2000; OUTCOME=2000; SHUF=1000; COLD=750; SYNTH=400; OPT=400
+  GATE=2000; OUTCOME=2000; CTX=2000; SHUF=1000; COLD=750; SYNTH=400; OPT=400
 else
-  GATE=0;    OUTCOME=0;    SHUF=2000; COLD=0;   SYNTH=750; OPT=1000
+  GATE=0;    OUTCOME=0;    CTX=0;    SHUF=2000; COLD=0;   SYNTH=750; OPT=1000
 fi
 lim() { [ "$1" -eq 0 ] && echo "" || echo "--limit $1"; }
 
-# outcome first: it is the arm the conclusion rests on, so if the night is cut
-# short it is the one that must exist.
-for spec in "outcome:$OUTCOME" "gate:$GATE" "shuffled:$SHUF" \
-            "coldread:$COLD" "synthetic:$SYNTH" "gateopt:$OPT"; do
+# outcome first, then its context twin: those two are the conclusion, and the
+# ablation between them only means anything if BOTH exist, so they run back to
+# back before any control gets compute. Everything after is a control.
+for spec in "outcome:$OUTCOME" "outcome_ctx:$CTX" "gate:$GATE" \
+            "shuffled:$SHUF" "coldread:$COLD" "synthetic:$SYNTH" \
+            "gateopt:$OPT"; do
   arm="${spec%%:*}"; n="${spec##*:}"
   echo "=== $MODEL / $arm ==="
   # shellcheck disable=SC2046
