@@ -102,6 +102,53 @@ Each exists to kill a specific alternative explanation.
 | `synthetic` | **confidence that isn't tracking anything.** GBM at the universe's own volatility through the identical formatter. Accuracy is 50% by construction; the point is the *conviction distribution*. |
 | `gateopt` | run at low volume purely to record the abstention rate. |
 
+### The comprehension gate — run this before spending a night on any model
+
+`research_chart_probe.py` asks the model questions about the same anonymised
+chart that have **verifiable answers stated in the table**: the highest high,
+the close of bar −10, how many of the last twelve bars closed up. No
+forecasting, no judgement. Pure reading comprehension of the exact artefact
+the reading arms hand it.
+
+It exists because every null in this study has two explanations that predict
+the same number — *chart reading carries no information*, or *this model
+cannot parse a 48-row numeric table*. The qwen3 capability control answers
+that indirectly and expensively. This answers it directly, in four minutes.
+
+**Pre-registered bar: mean ≥ 85%, and every dimension ≥ 60%.** Written down
+before any candidate was scored. A threshold picked afterwards is a threshold
+picked to admit the model you liked.
+
+**phi-4 Q8_0 FAILS, badly** (2026-08-07):
+
+| question | correct |
+|---|---|
+| highest high in the window | 68.7% |
+| lowest low | 78.7% |
+| close of bar −10 | 74.7% |
+| **how many of last 12 bars closed up** | **11.3%** |
+| final close above/below VWAP | 91.3% |
+| **mean** | **64.9%** |
+
+It gets the highest number in a column wrong one time in three, and counting
+twelve rows is at or below naive guessing. This is not quantisation damage —
+Q8_0 is near-lossless — it is a 14B model.
+
+**Consequence: every phi-4 number in this study is a capability floor, not a
+finding.** The −8.45bp gate spread, the base-rate nulls and the 97% agreement
+rate describe what a model that cannot read the table does. They say nothing
+about whether charts are readable.
+
+The error pattern also carries a real hint. The 91.3% on the VWAP question is
+the one where the answer was **stated in the prompt** rather than requiring a
+scan; the failures are all *aggregations over the table* — max, min, count.
+So the model can use facts it is handed and cannot reliably compute facts it
+is not. That reframes the context arm: its extra block states the session
+high, the low, the ATR and the VWAP bands explicitly, so part of what the
+ablation measures is not "does context add information" but **"does doing the
+aggregation for the model rescue it"** — which is worth knowing either way,
+and is why the arm reports how often context flips a verdict.
+
 ### Two instrument failures, both caught and both informative
 
 **1. The escape hatch.** The first `gate` run returned `neutral`/`low` on
