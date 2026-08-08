@@ -1,0 +1,4 @@
+# Bars are ~2.4M SIP minute bars (~200MB) and regenerate in ~2 minutes of API
+# time. Verdicts are cheap in dollars but ~4.3h of 3090 wall-clock per full
+# phi-4 pass, so they are worth keeping locally — just not in git.
+cache/

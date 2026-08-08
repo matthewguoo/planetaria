@@ -9,7 +9,16 @@ the reason the trees are separate rather than adjacent.
 | | |
 |---|---|
 | `pead-llm-gate/` | Working Note PR-2026-01 — gating post-earnings drift with an LLM. Finished 2026-08-06. |
+| `chart-llm-gate/` | Can a model read a chart? Five retail intraday setups, anonymised candles, local weights. Started 2026-08-07. |
 | `notes/` | Research that belongs to no single study (overnight alpha, the latency band). |
+
+The two LLM studies are deliberately built on the same statistic — a gate
+spread with a within-block permutation null — so they can be read against each
+other. They differ in what they can prove: `pead-llm-gate` had to *bound*
+memorisation and got stuck at ±86bp because named, dated earnings releases are
+extensively written about; `chart-llm-gate` *dissolves* the problem by
+stripping the identity off the input, because no corpus pairs a normalised
+candle table with what happened next.
 
 The paper itself is **not** here: `docs/report.html` is the published output
 and stays where a reader expects it. This tree is the machinery that
