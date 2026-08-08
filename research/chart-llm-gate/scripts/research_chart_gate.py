@@ -126,6 +126,33 @@ LOCAL: dict[str, dict] = {
         "args": ["--ctx-size", "28672", "--parallel", "8"],
         "slots": 8,
     },
+    # Added 2026-08-07 after BOTH incumbents failed the comprehension gate
+    # (phi-4 64.9% mean / 11.3% counting; qwen3-30b-a3b 66.0% / 8.7% counting
+    # and 51.3% — a coin flip — on the VWAP comparison). Dense, because the
+    # 30B MoE activates ~3B parameters and that is the wrong shape for precise
+    # extraction; Q5_K_M rather than the usual Q4 because quantisation error
+    # costs more when the task is reading exact digits. Q6_K exists at 21.0GB
+    # and does not leave room for a KV cache on a 24GB card.
+    # THIS IS A THINKING MODEL, and that drives the whole config. llama.cpp
+    # puts its reasoning in a separate `reasoning_content` field so `content`
+    # stays clean JSON — but the reasoning is billed against max_tokens and
+    # against the slot. Measured 2026-08-07: it spent 223 completion tokens on
+    # "reply with {"n": 7} and nothing else". A first probe run at
+    # max_tokens=256 therefore dropped 150 of 150 requests on truncation and
+    # reported a spurious comprehension failure.
+    #
+    # So slots are FEW and DEEP rather than many and shallow: 2 x 7168 is the
+    # same 14336 total the card was verified to hold (22.0GB of 24GB measured
+    # at load, ~279KB/token of KV on this architecture), reallocated so a
+    # single request can hold ~2.0k of prompt plus ~4k of thinking plus the
+    # answer. Throughput drops hard; that is the price of a model that can
+    # actually count, and the reading arms are what the counting is for.
+    "qwen36": {
+        "gguf": "qwen3.6-27b.Q5_K_M.gguf",
+        "args": ["--ctx-size", "14336", "--parallel", "2"],
+        "slots": 2,
+        "thinks": True,
+    },
     "qwen3": {
         "gguf": "qwen3-30b-a3b.UD-Q4_K_XL.gguf",
         # 17.7GB weights but a much cheaper cache — 4 KV heads is 98KB/token,

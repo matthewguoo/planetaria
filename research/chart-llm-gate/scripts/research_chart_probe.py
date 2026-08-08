@@ -144,6 +144,10 @@ def main() -> None:
     ap.add_argument("--model", choices=list(LOCAL), default="phi4")
     ap.add_argument("--n", type=int, default=150)
     ap.add_argument("--slots", type=int, default=4)
+    # Thinking models bill their reasoning against this. 256 was enough for a
+    # non-thinking model and dropped 150/150 on Qwen3.6-27B; the default now
+    # follows the model's own `thinks` flag.
+    ap.add_argument("--max-tokens", type=int, default=None)
     args = ap.parse_args()
 
     wait_healthy()
@@ -160,7 +164,9 @@ def main() -> None:
         q, truth = _questions(df, i, snap["anchor"])
         items.append({
             "id": row["setup_id"], "truth": truth, "system": SYSTEM,
-            "schema": PROBE_SCHEMA, "temp": 0.0, "max_tokens": 256,
+            "schema": PROBE_SCHEMA, "temp": 0.0,
+            "max_tokens": args.max_tokens or
+            (4096 if LOCAL[args.model].get("thinks") else 256),
             "task": "\n".join([
                 "Below is a price chart. Each row is one 5-minute candle. "
                 "All prices are percentages relative to the final bar's "
