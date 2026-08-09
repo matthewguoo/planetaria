@@ -117,6 +117,52 @@ MODELS: dict[str, tuple[str, str, str]] = {
     # PRE-period events on the far side of a corpus boundary that Opus 5 does
     # not share. The pre-period is the part the four-Opus design never had.
     "h45": ("claude-haiku-4-5", "2025-07", "Haiku 4.5"),
+    # THE CAPABILITY-INVERTED BOUNDARY. Fable 5's published training cutoff
+    # (docs, 2026-08-09) is 2026-01 — four months BEFORE Opus 5's 2026-05 —
+    # while the model itself is a tier ABOVE Opus 5. Every prior boundary in
+    # this study confounds corpus with capability in the same direction: the
+    # later-cutoff model is also the newer, stronger one, so "in-corpus models
+    # do better" and "better models do better" pull together. Fable splits
+    # them: on events in (2026-01, 2026-05] the WEAKER-corpus model is the
+    # STRONGER reader. If Opus 5 beats Fable specifically inside that window
+    # and nowhere else, capability cannot be the explanation. Fable also
+    # shares the 2026-01 cutoff with Opus 4.7/4.8, widening the same-cutoff
+    # placebo pair into a trio.
+    #
+    # Request-shape caveats, discovered from the current API docs rather than
+    # assumed: thinking is ALWAYS ON for this model (an explicit "disabled" is
+    # a 400 at any effort) and `temperature` is rejected. The named/notext
+    # arms are unaffected — build_request's adaptive-thinking shape is valid —
+    # but the forced memory probe cannot replicate the thinking-disabled,
+    # temperature-1.0 instrument the Opus control validated. The closest
+    # legal configuration (no thinking key, effort low, default sampling)
+    # lives in research_fable_memorization.py, with the difference disclosed
+    # wherever that arm is reported.
+    "f5": ("claude-fable-5", "2026-01", "Fable 5"),
+    # OPEN WEIGHTS, served locally on one 3090 by llama.cpp. See
+    # research_local_gate.py. Registered here for one reason only: request_key,
+    # _model_of_id and _load_results all key off this table, and a local run
+    # that skipped it would write verdicts the loader silently attributed to
+    # Opus 5. Nothing else changes — PRICE_OF never sees them because they are
+    # not bought, and COHORT in research_out_of_training.py is pinned, so the
+    # two-way-fixed-effects test does not quietly become a six-model one.
+    #
+    # These two are a PAIR and only mean anything together. phi-4's corpus is
+    # ~75% synthetic, filtered-web and web-rewrite (Phi-4 tech report, arXiv
+    # 2412.08905), so the variable it changes is memorisation DENSITY, not
+    # cutoff — every model here has seen most of this decade. Qwen3-30B-A3B is
+    # the opposite pole on that axis and roughly the same weight class: heavily
+    # web-trained, later cutoff, deliberately contaminated. It is the CAPABILITY
+    # CONTROL. Without it a weak result from phi-4 is unreadable, because "a
+    # clean model finds no edge" and "a 14B cannot read an earnings release"
+    # predict the same number.
+    #
+    # Cutoffs are the vendors' published pretraining cutoffs. They are far less
+    # load-bearing here than in the Opus cohort, and nothing below assumes
+    # either model is clean: whether they can recall these events at all is
+    # MEASURED by the notext arm, not asserted from the corpus description.
+    "phi4": ("phi-4-q8", "2024-06", "Phi-4 14B (Q8_0, local)"),
+    "qwen3": ("qwen3-30b-a3b-q4", "2025-07", "Qwen3-30B-A3B (Q4_K_XL, local)"),
 }
 
 # Models predating Claude 4.6 take a different request shape: adaptive
@@ -148,6 +194,11 @@ PRICE_IN, PRICE_OUT = 2.50, 12.50
 # stays "refuses too early".
 PRICE_OF: dict[str, tuple[float, float]] = {
     "claude-haiku-4-5": (0.50, 2.50),
+    # Fable 5 batch rates are DOUBLE the Opus rate ($10/$50 standard, halved
+    # by the Batch API). Without this entry the unknown-model fallback would
+    # price a Fable batch at Opus rates and the budget guard would fail OPEN —
+    # the one direction it must never fail.
+    "claude-fable-5": (5.00, 25.00),
 }
 # MEASURED on the 359-request calibration (2026-08-06), not guessed: input
 # runs ~5,120 tok for a 12k-char release (3.6 chars/token underestimated it,
@@ -658,11 +709,15 @@ def build_request(row, arm: str, text: str | None, company: str,
         thinking = {"type": "enabled",
                     "budget_tokens": LEGACY_THINKING[model]}
         output_config = {"format": output_config["format"]}
+    # Fable's thinking is always on and shares max_tokens with the response
+    # text. A truncated verdict is billed and then dropped at collect — the
+    # worst of both — so give that model headroom the Opus runs never needed.
+    max_tokens = 8192 if model == "claude-fable-5" else 4096
     return {
         "custom_id": key,
         "params": {
             "model": model,
-            "max_tokens": 4096,
+            "max_tokens": max_tokens,
             "system": system,
             "thinking": thinking,
             # NO tools: the model cannot look the outcome up. This absence is
@@ -688,8 +743,12 @@ def estimate_cost(requests: list[dict], effort: str) -> tuple[float, int]:
         tok_in = (len(p["system"])
                   + len(p["messages"][0]["content"])) / CHARS_PER_TOKEN
         tok_in_total += tok_in
-        usd += (tok_in / 1e6 * price_in
-                + EST_OUT_TOKENS.get(effort, 1000) / 1e6 * price_out)
+        out_tok = EST_OUT_TOKENS.get(effort, 1000)
+        # Fable thinks on every request and the thinking is billed output.
+        # Doubling the measured-on-Opus prior keeps the guard failing early.
+        if p["model"] == "claude-fable-5":
+            out_tok *= 2
+        usd += (tok_in / 1e6 * price_in + out_tok / 1e6 * price_out)
     return usd, int(tok_in_total)
 
 
