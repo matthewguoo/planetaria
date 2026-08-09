@@ -254,6 +254,15 @@ class PeadFlagship(Strategy):
 
     # ------------------------------------------------------------- watchlist
 
+    async def _quote(self, sym: str, ctx: StrategyContext) -> dict | None:
+        """THE PRICING SEAM: every price this strategy acts on comes through
+        here. The flagship reads the broker's own feeds and nothing else —
+        `requires = {"sip", ...}` is that statement made to the console — so
+        on a free-tier account every post-17:00 quote ages out at the
+        _usable_price gates downstream, correctly. The no-SIP variant
+        (pead_nosip) overrides this one method and nothing else."""
+        return await ctx.market.overnight_price(sym)
+
     async def _build_watchlist(self, ctx: StrategyContext) -> None:
         """15:30 ET: freeze tonight's names and snapshot each one's anchor.
 
@@ -286,7 +295,7 @@ class PeadFlagship(Strategy):
             if floor > 0 and dv < floor:
                 below_floor.append(sym)
                 continue
-            quote = await ctx.market.overnight_price(sym)
+            quote = await self._quote(sym, ctx)
             px = _usable_price(quote)
             if px is None or px < min_price:
                 skipped.append(sym)
@@ -331,7 +340,7 @@ class PeadFlagship(Strategy):
             if f"{sym}:{self._watch_date}" in self._decided:
                 skipped[sym] = "decided"
                 continue
-            quote = await ctx.market.overnight_price(sym)
+            quote = await self._quote(sym, ctx)
             px = _usable_price(quote, max_age_s=QUOTE_MAX_AGE_S)
             if px is None:
                 skipped[sym] = "no fresh quote"
@@ -400,7 +409,7 @@ class PeadFlagship(Strategy):
                            signal_ids=event_ids)
             return
 
-        quote = await ctx.market.overnight_price(sym)
+        quote = await self._quote(sym, ctx)
         px = _usable_price(quote, max_age_s=QUOTE_MAX_AGE_S)
         if px is None:
             self._decided.discard(key)

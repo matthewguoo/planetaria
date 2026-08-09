@@ -120,6 +120,10 @@ class MarketDataService:
         # Last REST fetch attempt per option symbol (monotonic) — throttles
         # the poll fallback so quiet markets don't hammer the API.
         self._oquote_fetch_ts: dict[str, float] = {}
+        # External AH print sources (Yahoo/Finnhub), constructed on first use.
+        # Consulted only by ah_quote() when the broker's own data is stale —
+        # the no-SIP live test's sight line, never the exits'.
+        self._ah_feed = None
 
         # No keyless fallback feed: synthetic/delayed lookalike quotes are a
         # staleness disaster waiting to be trusted (removed 2026-08-05).
@@ -289,6 +293,8 @@ class MarketDataService:
                     await stream.close()
                 except Exception:
                     pass
+        if self._ah_feed is not None:
+            await self._ah_feed.close()
 
     async def _gap_fill_all(self) -> None:
         """Post-reconnect hook: repair any bar gaps the disconnect caused."""
@@ -678,6 +684,90 @@ class MarketDataService:
         }
         async with httpx.AsyncClient(headers=headers, timeout=8.0) as client:
             await self._poll_overnight_symbol(client, symbol)
+
+    def _ah(self):
+        if self._ah_feed is None:
+            from app.services.ah_quotes import AhQuoteFeed
+
+            self._ah_feed = AhQuoteFeed(self.settings)
+        return self._ah_feed
+
+    async def ah_quote(self, symbol: str, max_age_s: float = 120.0) -> dict | None:
+        """Entry-pricing quote for the NO-SIP after-hours path: the broker's
+        own data first, external print sources only where it has gone dark.
+
+        The broker path is overnight_price — already session-aware (REST
+        latest-quote in covered sessions, Blue Ocean poll overnight). When
+        what it returns is older than `max_age_s` — which on the free tier is
+        every postmarket minute past 17:00 ET, when IEX has closed but the
+        tape has not — the external feed (Yahoo, then Finnhub; see
+        ah_quotes.py) is asked for the latest print. A fresh external print
+        is ingested into the shared quote cache under the same newer-wins
+        rule and `src` tagging the overnight poller uses, so every
+        downstream consumer — _usable_price at the strategy, the per-symbol
+        tape-age the risk gate reads, the fast-tape guard in place_trade,
+        the console — sees one coherent, provenance-tagged view.
+
+        During RTH the broker quote is always fresh and the external sources
+        are never contacted. Returns the freshest quote available from any
+        source, which may still be stale — callers age-check and refuse, as
+        everywhere else."""
+        symbol = symbol.upper()
+        quote = await self.overnight_price(symbol)
+        now_ms = time.time() * 1000
+        if quote and quote.get("ts") and now_ms - quote["ts"] <= max_age_s * 1000:
+            return quote
+        ext = await self._ah().latest(symbol)
+        if ext is not None:
+            cached = self._latest_quotes.get(symbol)
+            if cached is None or ext["ts"] >= cached["ts"]:
+                self._latest_quotes[symbol] = ext
+                self.broadcast.publish(f"quote:{symbol}", ext)
+        candidates = [q for q in (quote, ext) if q and q.get("ts")]
+        if not candidates:
+            return None
+        return max(candidates, key=lambda q: q["ts"])
+
+    async def sip_quote_asof(self, symbol: str, at_utc: datetime) -> dict | None:
+        """The consolidated NBBO as of a PAST instant, from the free tier's
+        15-minute-delayed SIP entitlement.
+
+        This is the ground truth the live AH path cannot see at decision
+        time but may read 16 minutes later — the fill-verification loop of
+        the no-SIP test: enter on an external print, then measure what the
+        real book was at that moment. `at_utc` must be at least ~16 minutes
+        old or the free tier refuses the query; that refusal returns None
+        here (with a log line), never a synthetic quote."""
+        from alpaca.data.requests import StockQuotesRequest
+
+        symbol = symbol.upper()
+        if not self.alpaca.configured:
+            return None
+        for window_s in (10, 120):
+            request = StockQuotesRequest(
+                symbol_or_symbols=symbol,
+                start=at_utc - timedelta(seconds=window_s),
+                end=at_utc,
+                feed="sip",
+            )
+            try:
+                result = await self.alpaca.call(
+                    self.alpaca.stock_data.get_stock_quotes, request,
+                    timeout=15.0)
+            except Exception as exc:
+                log.warning("delayed-SIP quote lookup %s@%s failed: %s",
+                            symbol, at_utc.isoformat(), exc)
+                return None
+            quotes = (getattr(result, "data", None) or {}).get(symbol) or []
+            if quotes:
+                last = quotes[-1]
+                return {
+                    "bid": float(last.bid_price or 0),
+                    "ask": float(last.ask_price or 0),
+                    "ts": int(last.timestamp.timestamp() * 1000),
+                    "src": "sip-delayed",
+                }
+        return None
 
     # -------------------------------------------------------------- handlers
 

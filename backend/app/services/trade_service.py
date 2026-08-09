@@ -454,14 +454,17 @@ class TradeService:
         """Market-data age fed to the risk gate (>30s blocks). inf — meaning
         no data has ever arrived — must block trading, not silently pass.
 
-        Options (and equities in stream-covered sessions) read the GLOBAL
-        stream age. Equity entries during the overnight session must not:
-        the IEX stream is rightly silent 20:00-04:00 ET while Blue Ocean
-        keeps printing, so the global age reads infinite all night — measure
-        the entry symbol's own tape instead (freshest of its cached quote vs
-        its latest 1m bar, which the overnight poller rolls from live
-        prints)."""
-        if asset_class == "equity" and equity_session() == "overnight":
+        Options read the GLOBAL stream age. Equity entries read it only
+        inside RTH, where a live stream vouches for its subscriptions; in
+        every other session — overnight, postmarket, premarket — the stream
+        being silent is a property of the feed's operating hours (IEX runs
+        08:00-17:00 ET) while other tapes keep printing, so the gate
+        measures the entry symbol's OWN evidence instead: the freshest of
+        its cached quote vs its latest 1m bar. The overnight poller and the
+        no-SIP path's external prints both land in exactly those caches. A
+        symbol with no fresh per-symbol evidence outside RTH blocks, even if
+        an unrelated global clock happens to be ticking."""
+        if asset_class == "equity" and equity_session() != "rth":
             age = self.market.equity_tape_age_s(legs[0]["symbol"])
         else:
             age = self.market.stream_age_s
