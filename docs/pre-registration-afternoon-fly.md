@@ -49,6 +49,19 @@ sizing is the only real tail control. At 5 sets the measured worst day
 blowing through it at 2x. The instance remains note-mode; no live
 decision has been made under either value.
 
+## Amendment 2 — 2026-08-10, before any live decision
+
+`min_credit_frac` 0.25 -> **0.10**. The 25% floor was stricter than
+anything the measured strategy filtered — the study's +3.2bp/day includes
+thin-credit days — so the live config was silently a different strategy.
+Exhibit A: 2026-08-10 priced 21% credit/width, the guard skipped it, and
+the structure went on to keep 86% of its credit. 0.10 remains as pure
+bad-quote protection. The instance is note-mode; no live decision has
+been made under either value. Same-day forensic note: current-day OPRA
+bars are 403-gated without the OPRA agreement (historical bars and live
+quotes both work) — the study-method cross-check of today's marks runs
+tomorrow.
+
 ## Metric and sample
 
 Per-day P&L in bp of the underlying (journal/twin for note-mode, realized

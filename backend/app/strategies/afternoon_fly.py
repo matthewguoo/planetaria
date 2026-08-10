@@ -70,7 +70,11 @@ class AfternoonFly(Strategy):
         # of width (the measured mean is ~54%; far outside that band means a
         # bad quote, not a good trade).
         "max_leg_spread_usd": 0.10,
-        "min_credit_frac": 0.25,
+        # 0.10 is QUOTE sanity, not a premium filter: the study's
+        # +3.2bp/day includes thin-credit days (2026-08-10 priced 21%
+        # and would have paid 86% of max profit), and a floor above
+        # what the study accepted makes live a different strategy.
+        "min_credit_frac": 0.10,
         "max_credit_frac": 0.90,
         "quote_max_age_s": 30.0,
         "slippage_usd": 0.02,      # credit given up to be marketable
