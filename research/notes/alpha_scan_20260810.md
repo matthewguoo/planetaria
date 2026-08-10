@@ -227,3 +227,64 @@ gap fade joins the "parked, execution-bound" shelf (worth revisiting the
 day all-in auction costs are measured under ~8bp and shorts are on).
 Candles join the anti-queue as measured — with the note that their
 inversions are just the reversal factor, already covered above.
+
+---
+
+# Part 3, same night: the fly sweep and the bleed map
+
+## 10. QQQ 0DTE iron flies (`0dte-vrp/notes/flies_0dte_20260810_0214.md`)
+
+The defined-risk form holds up, and the grid is a RIDGE, not a spike —
+1.0% wings clear t 2.8-3.5 at every entry time, which is the robustness
+a 9-cell sweep cannot fake:
+
+- **14:00 entry, 1.0% wings: +3.2bp of S/day, t 3.51, win 57%, worst day
+  -68bp (bounded), gross ann Sharpe 2.20** — positive every year
+  (+4.5 / +2.4 / +2.6 across 2024/25/26, the decay direction honest).
+- Versus the naked straddle: half the mean (+3.2 vs +6.4), a TENTH of
+  the tail (-68 vs -760bp), better Sharpe (2.20 vs 1.59). The wings are
+  cheap insurance the premium can afford.
+- Tight 0.3% wings collect 84% of width and win 29-40% of days —
+  max-loss lotteries, skip.
+- Margin per structure ~0.46% of S (~$260 at QQQ 560): a $10k allocation
+  runs ~10 structures at ~$2.6k aggregate max loss. Sizing is the
+  allocation/breaker's job, not the strategy's.
+- Not in these numbers: ~2-4c/structure friction (4 legs), assignment
+  edge cases at the strike, and no 2022-regime day in sample.
+
+Build shape when wanted: `qqq_afternoon_fly` strategy class — 13:55
+scan, ATM from the live tape, 1.0% wings, GTC-parked defined-risk MLEG,
+ExitEnforcer owns the rest; note-mode first, pre-register the config
+(entry 14:00, width 1.0%, QQQ, both year-split caveats in the doc).
+
+## 11. Gap-fade bleed map, pass one
+(`mean-reversal/notes/gapfade_bleed_20260810_0210.md`)
+
+"Start dumb, find the bleed" — the bleeders have names:
+
+- **The long leg IS the bleed**: gap-down buying grosses +2.0 (t 0.9),
+  knife-catches at >=4% gaps (-11bp), bleeds Mondays (-3.4) and calm
+  regimes (-1.4). Removing the long leg removes most of the bleeding.
+- **The edge is short-the-gap-up**: +4.7 (t 2.1) overall, +6.4/+8.6 in
+  the 1-4% band (t ~2.3), +7.3 in $100+ names (t 2.6), +7.8 even at
+  $500M+/day (t 2.3), +9.6 on earnings-morning gap-ups. Attention opens
+  rich — the fourth independent measurement of it tonight.
+- v2 spec if shorts come on: short gaps +1..4%, px >= $25, skip >= 4%
+  (squeeze tail), ~40-90 candidates/day, top-N by dollar volume. Gross
+  ~+6-9bp/d; borrow + ~5-8bp costs leave it thin standalone — its real
+  value may be as the PEAD fade leg's cousin and as the standing
+  never-buy-the-gap-up-open prohibition.
+- Pass two queued: minute-bar hold-time curve (does the fade complete by
+  late morning?), which sets the exit clock.
+
+## The experimental-fleet answer
+
+The platform is already shaped for many small live tests: per-instance
+ALLOCATION (percent or dollar ceiling) + per-strategy CIRCUIT BREAKER
+(migration 0007), journals + `/api/strategies/{id}/twin` for note-mode
+equity curves, KeepAwake while instances run. The cheap fleet is
+NOTE-MODE (costs zero capital, unlimited instances); live=$10k slices
+come after a journaled stretch, and the $100k paper account funds ~6-8
+of them beside the flagship. What the fleet does NOT fix: paper fills
+flatter (no queue, no adverse selection) — the exec-quality ledger and
+the spread each decision journals are the numbers that keep it honest.

@@ -31,11 +31,17 @@ Stages:
     probe   one known session end-to-end, prints what the API returns
     fetch   every session x {SPY, QQQ} x {C, P} minute bars -> cache
     score   the note: seller edge, implied vs realized, tails, timing
+    wings   QQQ wing legs (K +/- w) at 0.3/0.6/1.0% widths -> cache
+    flies   the defined-risk sweep: iron flies at each entry x width,
+            which is the form the account can actually hold (naked short
+            calls are broker-refused; short puts are cash-secured)
 
 Run:  python scripts/research_0dte_straddle.py under
       python scripts/research_0dte_straddle.py probe
       python scripts/research_0dte_straddle.py fetch
       python scripts/research_0dte_straddle.py score
+      python scripts/research_0dte_straddle.py wings
+      python scripts/research_0dte_straddle.py flies
 """
 
 from __future__ import annotations
@@ -295,12 +301,133 @@ def stage_score(args) -> None:
     print(f"\nwrote {out}")
 
 
+# ------------------------------------------------------------------- wings
+
+WIDTH_PCTS = (0.3, 0.6, 1.0)          # wing distance as % of the underlying
+WING_SYM = "QQQ"                      # the ticker where the premium lives
+
+
+def stage_wings(args) -> None:
+    """OTM wing legs for the fly sweep: C at K+w and P at K-w per width."""
+    api = _opt_client()
+    base = pd.read_parquet(CACHE / "straddle_marks.parquet")
+    base = base[base["sym"] == WING_SYM]
+    out_f = CACHE / "wing_marks.parquet"
+    prior, have = pd.DataFrame(), set()
+    if out_f.exists():
+        prior = pd.read_parquet(out_f)
+        have = set(prior["d"].astype(str))
+    todo = base[~base["d"].astype(str).isin(have)]
+    print(f"{WING_SYM}: {len(todo)} sessions need wings")
+    rows = []
+    for n, r in enumerate(todo.itertuples()):
+        d = datetime.strptime(r.d, "%Y-%m-%d").date()
+        legs = {}
+        for wp in WIDTH_PCTS:
+            w = max(1.0, float(round(r.px1000 * wp / 100)))
+            legs[(wp, "C")] = (occ(WING_SYM, d, "C", r.k + w), r.k + w)
+            legs[(wp, "P")] = (occ(WING_SYM, d, "P", r.k - w), r.k - w)
+        try:
+            data = _day_bars(api, [s for s, _ in legs.values()], d)
+        except Exception as exc:
+            print(f"  {r.d}: {str(exc)[:70]}")
+            _time.sleep(1.0)
+            continue
+        rec = {"d": r.d, "k": r.k, "px1000": r.px1000, "close": r.close}
+        for (wp, right), (s_, kw) in legs.items():
+            marks = _marks_from_bars(data.get(s_) or [])
+            rec[f"K_{right}_{wp}"] = kw
+            for hm, v in marks.items():
+                rec[f"{right}{wp}_{hm.replace(':', '')}"] = v
+        rows.append(rec)
+        if n % 50 == 0:
+            print(f"  {n}/{len(todo)} ({r.d})")
+        _time.sleep(0.25)
+    df = pd.DataFrame(rows)
+    allf = pd.concat([prior, df], ignore_index=True) if len(prior) else df
+    allf.to_parquet(out_f)
+    print(f"cached {len(allf)} wing-days -> {out_f}")
+
+
+def stage_flies(args) -> None:
+    """Iron flies: short the ATM straddle, long both wings. The sweep is
+    entry time x wing width; every cell reports the seller's distribution
+    AND return on the capital the broker would actually hold (max loss)."""
+    atm = pd.read_parquet(CACHE / "straddle_marks.parquet")
+    atm = atm[atm["sym"] == WING_SYM].set_index("d")
+    wings = pd.read_parquet(CACHE / "wing_marks.parquet").set_index("d")
+    j = atm.join(wings, how="inner", rsuffix="_w")
+    lines: list[str] = []
+
+    def emit(t=""):
+        print(t)
+        lines.append(t)
+
+    emit(f"# 0DTE iron flies on {WING_SYM} — {STAMP}")
+    emit()
+    emit(f"{len(j)} sessions. Short ATM straddle + long wings at K±w; "
+         "settle at expiry intrinsic; prices are OPRA minute-bar closes, "
+         "gross of ~2-4c/structure friction. ROC = P&L / (w - credit), the "
+         "margin the broker holds. bp = P&L as bp of the underlying.")
+    emit()
+    emit("| entry | width | n | credit/w % | mean bp | t | win% | worst bp | ann Sharpe | mean ROC % |")
+    emit("|---|---|---|---|---|---|---|---|---|---|")
+    best = None
+    for hm in ("1000", "1400", "1530"):
+        for wp in WIDTH_PCTS:
+            cols = [f"C_{hm}", f"P_{hm}", f"C{wp}_{hm}", f"P{wp}_{hm}"]
+            if not all(c in j.columns for c in cols):
+                continue
+            g = j.dropna(subset=cols)
+            if len(g) < 100:
+                continue
+            w = (g[f"K_C_{wp}"] - g["k"])
+            credit = g[f"C_{hm}"] + g[f"P_{hm}"] - g[f"C{wp}_{hm}"] - g[f"P{wp}_{hm}"]
+            s_t = g["close"]
+            pay_atm = (s_t - g["k"]).abs()
+            pay_cw = np.maximum(0.0, s_t - g[f"K_C_{wp}"])
+            pay_pw = np.maximum(0.0, g[f"K_P_{wp}"] - s_t)
+            pnl = credit - pay_atm + pay_cw + pay_pw
+            bp = (pnl / g["px1000"] * 1e4).to_numpy()
+            max_loss = np.maximum(w - credit, 0.01)
+            roc = (pnl / max_loss * 100).to_numpy()
+            sharpe = bp.mean() / bp.std(ddof=1) * np.sqrt(252)
+            emit(f"| {hm[:2]}:{hm[2:]} | {wp}% | {len(g)} "
+                 f"| {(credit / w * 100).mean():.0f} | {bp.mean():+.1f} "
+                 f"| {tstat(bp):+.2f} | {(bp > 0).mean() * 100:.0f} "
+                 f"| {bp.min():+.0f} | {sharpe:+.2f} | {roc.mean():+.1f} |")
+            if best is None or tstat(bp) > best[0]:
+                best = (tstat(bp), hm, wp, g, bp)
+    emit()
+    if best is not None:
+        _, hm, wp, g, bp = best
+        emit(f"## Best-t cell by year: {hm[:2]}:{hm[2:]} entry, {wp}% wings")
+        emit()
+        emit("| year | n | mean bp | t | win% | worst |")
+        emit("|---|---|---|---|---|---|")
+        yr = g.index.astype(str).str[:4]
+        for y in sorted(set(yr)):
+            x = bp[np.asarray(yr == y)]
+            emit(f"| {y} | {len(x)} | {x.mean():+.1f} | {tstat(x):+.2f} "
+                 f"| {(x > 0).mean() * 100:.0f} | {x.min():+.0f} |")
+        emit()
+        emit("Best-of-9-cells caveat applies: the year split is the honesty "
+             "check, and any traded config gets pre-registered first.")
+
+    NOTES.mkdir(parents=True, exist_ok=True)
+    out = NOTES / f"flies_0dte_{STAMP}.md"
+    out.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    print(f"\nwrote {out}")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("stage", choices=["under", "probe", "fetch", "score"])
+    ap.add_argument("stage", choices=["under", "probe", "fetch", "score",
+                                      "wings", "flies"])
     args = ap.parse_args()
     {"under": stage_under, "probe": stage_probe,
-     "fetch": stage_fetch, "score": stage_score}[args.stage](args)
+     "fetch": stage_fetch, "score": stage_score,
+     "wings": stage_wings, "flies": stage_flies}[args.stage](args)
 
 
 if __name__ == "__main__":
