@@ -60,7 +60,6 @@ import json
 import sys
 import time as _time
 from datetime import datetime
-from pathlib import Path
 
 from _paths import BACKEND, NOTES, PAYLOAD, SCRIPTS
 
@@ -70,30 +69,26 @@ sys.path.insert(0, str(SCRIPTS))
 import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 
-from research_llm_contamination import (  # noqa: E402
+# The shared primitives come from research_common (phase-14 §2); only the
+# verdict machinery — which verdicts, what gates them — still comes from
+# research_llm_contamination, and nothing there imports this module at
+# top level, so the old both-ways coupling is gone.
+from research_common import (  # noqa: E402
     CACHE,
     COSTS_BP,
     ET,
-    _gate,
-    _load_results,
+    PATHS,
     load_universe,
+    paths_file,
     timing_ok,
 )
+from research_llm_contamination import _gate, _load_results  # noqa: E402
 
-PATHS = CACHE / "event_paths_multi.parquet"
 DOC = NOTES
 
 LEVELS = np.round(np.arange(0.5, 40.01, 0.5), 2)
 MAX_SESSIONS = 5
 FETCH_DAYS = 11          # calendar days: enough for 5 sessions over a holiday
-
-
-def paths_file(panel: str = "v2") -> Path:
-    """Where the per-event minute paths live for a given panel."""
-    if panel == "v2":
-        from research_event_panel import PATHS_V2
-        return PATHS_V2
-    return PATHS
 
 
 def scored_events(effort: str, all_events: bool = False,
@@ -533,7 +528,8 @@ def account_slots(p: pd.DataFrame, ret: np.ndarray, horizon: np.ndarray,
 def stage_best(args) -> None:
     """Joint search over horizon x stop x target, chosen on 2021-23 and
     scored on 2024-26, then compounded through the calendar."""
-    from research_llm_contamination import _iso_return_leverage, _spy_daily
+    from research_common import spy_daily as _spy_daily
+    from research_llm_contamination import _iso_return_leverage
 
     pf = paths_file(args.panel)
     if not pf.exists():
@@ -945,7 +941,7 @@ def stage_mutations(args) -> None:
     horizons, with the account model. Most of these are expected to fail;
     they are reported anyway, because a table of only the winners is a
     selection effect with a bibliography."""
-    from research_llm_contamination import _spy_daily
+    from research_common import spy_daily as _spy_daily
 
     pf = paths_file(args.panel)
     if not pf.exists():
