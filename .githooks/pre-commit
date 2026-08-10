@@ -1,0 +1,7 @@
+#!/bin/sh
+# Fast gate before every commit: ruff + frontend typecheck (~15s).
+# Full suite stays manual: .\check.ps1
+# Bypass in an emergency with: git commit --no-verify
+# Enabled via: git config core.hooksPath .githooks
+root="$(git rev-parse --show-toplevel)"
+exec powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$root/check.ps1" -Fast
