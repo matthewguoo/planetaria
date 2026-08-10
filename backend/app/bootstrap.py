@@ -13,7 +13,6 @@ from app.services.bar_store import BarStore
 from app.services.broadcast import Broadcaster
 from app.services.exit_enforcer import ExitEnforcer
 from app.services.market_data import MarketDataService
-from app.services.options_chain import ChainService
 from app.services.redis_client import RedisFacade
 from app.services.risk import RiskService
 from app.services.signals.events import EventBus
@@ -68,7 +67,6 @@ async def startup(app: FastAPI, settings: Settings) -> None:
     app.state.alpaca = alpaca
     app.state.broadcaster = broadcaster
     app.state.market = market
-    app.state.chain = ChainService(alpaca, redis, market)
     app.state.risk = risk
     app.state.trade = trade
     app.state.enforcer = enforcer

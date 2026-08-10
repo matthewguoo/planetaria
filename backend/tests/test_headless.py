@@ -54,7 +54,10 @@ ENGINE_PATHS = {
     "/api/settings/risk",
     "/api/health",
 }
-UI_PATHS = {"/ws/stream", "/api/options/chain/{underlying}"}
+# The chain route and the WebSocket that used to anchor this set went with
+# the discretionary terminal (retired 2026-08-07); the quote REST is what
+# remains of the UI-serving surface.
+UI_PATHS = {"/api/quote/{symbol}"}
 
 
 def test_headless_mounts_engine_api_only(monkeypatch):

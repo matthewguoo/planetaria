@@ -10,11 +10,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from app import bootstrap
 from app.api.routes.market_data import router as market_router
 from app.api.routes.monitor import router as monitor_router
-from app.api.routes.options import router as options_router
 from app.api.routes.strategies import router as strategies_router
 from app.api.routes.system import router as system_router
 from app.api.routes.trading import router as trading_router
-from app.api.websocket import router as ws_router
 from app.config import get_settings
 
 logging.basicConfig(
@@ -49,16 +47,16 @@ app.add_middleware(
 )
 
 # The ENGINE API (trading commands + system ops) is always mounted; the
-# UI-serving surface (chain, bars REST, browser WebSocket fanout) is
-# skipped in HEADLESS mode — engine-only deployments for reliability.
+# UI-serving surface (the quote REST the MARKET page polls) is skipped in
+# HEADLESS mode — engine-only deployments for reliability. The chain, bars
+# REST and browser WebSocket fanout that also lived behind this flag went
+# with the discretionary terminal (retired 2026-08-07).
 app.include_router(trading_router)
 app.include_router(system_router)
 app.include_router(strategies_router)
 app.include_router(monitor_router)
 if not get_settings().headless:
     app.include_router(market_router)
-    app.include_router(options_router)
-    app.include_router(ws_router)
 
 
 @app.get("/api/health")
