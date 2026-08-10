@@ -58,9 +58,3 @@ export function allocationSegments(
   }
   return segments;
 }
-
-export const fmtUsd = (v: number | null | undefined): string =>
-  v == null
-    ? "—"
-    : (v < 0 ? "-$" : "$") +
-      Math.abs(v).toLocaleString("en-US", { maximumFractionDigits: 0 });

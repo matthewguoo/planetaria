@@ -10,9 +10,11 @@
  * The console has no greeks and says so instead of pretending.
  */
 
-import { useCallback, useEffect, useState } from "react";
-import { getFund, type FundInstance, type FundState } from "../../lib/api";
-import { allocationSegments, fmtUsd } from "../../lib/fund";
+import { useState } from "react";
+import { apiError, getFund, type FundInstance, type FundState } from "../../lib/api";
+import { allocationSegments } from "../../lib/fund";
+import { fmtUsd, pnlCls } from "../../lib/format";
+import { usePoll } from "../../lib/usePoll";
 
 const POLL_MS = 15_000;
 
@@ -185,8 +187,7 @@ function ExposurePanel({ fund }: { fund: FundState }) {
               {x.by_underlying.map((u) => (
                 <tr key={u.symbol} className="border-t border-bb-border">
                   <td className="px-2 py-1 text-bb-amber">{u.symbol}</td>
-                  <td className={"px-2 py-1 text-right " +
-                    (u.net_usd >= 0 ? "text-bb-profit" : "text-bb-loss")} data-numeric>
+                  <td className={"px-2 py-1 text-right " + pnlCls(u.net_usd)} data-numeric>
                     {fmtUsd(u.net_usd)}
                   </td>
                   <td className="px-2 py-1 text-right" data-numeric>{fmtUsd(u.gross_usd)}</td>
@@ -244,17 +245,17 @@ export default function FundPage() {
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
 
-  const refresh = useCallback(() => {
+  usePoll((alive) =>
     getFund()
-      .then((f) => { setFund(f); setError(null); })
-      .catch((e) => setError(String(e?.message ?? e)));
-  }, []);
-
-  useEffect(() => {
-    refresh();
-    const id = window.setInterval(refresh, POLL_MS);
-    return () => window.clearInterval(id);
-  }, [refresh]);
+      .then((f) => {
+        if (!alive()) return;
+        setFund(f);
+        setError(null);
+      })
+      .catch((e) => {
+        if (alive()) setError(apiError(e));
+      }),
+  POLL_MS);
 
   if (error) {
     return <div className="panel m-1 p-3 text-[12px] text-bb-loss">fund: {error}</div>;

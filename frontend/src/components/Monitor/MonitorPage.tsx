@@ -5,6 +5,7 @@
  * Poll-based like the rest of the app; each column refreshes ~2s.
  */
 
+import { clockHms } from "../../lib/format";
 import { useEffect, useState } from "react";
 import { getMonitorCalls, type MonitorCall, type MonitorSnapshot } from "../../lib/api";
 
@@ -112,8 +113,7 @@ function CallColumn({
 }
 
 function CallRow({ call }: { call: MonitorCall }) {
-  const t = new Date(call.ts * 1000);
-  const hh = `${String(t.getHours()).padStart(2, "0")}:${String(t.getMinutes()).padStart(2, "0")}:${String(t.getSeconds()).padStart(2, "0")}`;
+  const hh = clockHms(call.ts);
   return (
     <tr className="border-b border-bb-border/40 hover:bg-bb-hover">
       <td className="whitespace-nowrap px-2 py-0.5 align-top text-bb-muted" data-numeric>

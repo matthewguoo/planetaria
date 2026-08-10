@@ -23,20 +23,17 @@ import {
   type StrategyPerformance,
   type StrategyTwin,
 } from "../../lib/api";
+import { dateTimeShort, fmtUsd, hhmmss, pnlCls } from "../../lib/format";
 import {
   actions,
   decisionColor,
   decisionSummary,
-  formatAge,
   runtimeSummary,
   stateColor,
   useStrategyRunnerStore,
 } from "../../store/strategyRunnerStore";
 
 const POLL_MS = 5_000;
-
-const fmtUsd = (n: number) =>
-  `$${Math.round(n).toLocaleString()}`;
 
 /** A capability a strategy declares it needs, coloured by whether the
  * platform currently provides it. The point is not decoration: an earnings
@@ -447,7 +444,7 @@ function DecisionsPanel({
               {decisions.map((d) => (
                 <tr key={d.id} className="border-b border-bb-border/50 hover:bg-bb-hover">
                   <td className="whitespace-nowrap px-2 py-1 text-bb-muted" data-numeric>
-                    {d.ts?.slice(11, 19) ?? "-"}
+                    {hhmmss(d.ts)}
                   </td>
                   <td className={"whitespace-nowrap px-2 py-1 " + decisionColor(d.action)}>
                     {d.action}
@@ -486,9 +483,6 @@ function PerformancePanel({ inst }: { inst: StrategyInstance }) {
     };
   }, [inst.id]);
 
-  const pnlColor = (v: number | null | undefined) =>
-    v == null ? "text-bb-muted" : v >= 0 ? "text-bb-profit" : "text-bb-loss";
-
   return (
     <div className="panel flex shrink-0 flex-col">
       <div className="panel-title">
@@ -515,19 +509,19 @@ function PerformancePanel({ inst }: { inst: StrategyInstance }) {
             </span>
             <span className="text-bb-muted">
               realized{" "}
-              <span className={pnlColor(perf.realized_pnl)}>
+              <span className={pnlCls(perf.realized_pnl)}>
                 {perf.realized_pnl.toFixed(2)}
               </span>
             </span>
             <span className="text-bb-muted">
               avg win{" "}
-              <span className={pnlColor(perf.avg_win)}>
+              <span className={pnlCls(perf.avg_win)}>
                 {perf.avg_win == null ? "—" : perf.avg_win.toFixed(2)}
               </span>
             </span>
             <span className="text-bb-muted">
               avg loss{" "}
-              <span className={pnlColor(perf.avg_loss)}>
+              <span className={pnlCls(perf.avg_loss)}>
                 {perf.avg_loss == null ? "—" : perf.avg_loss.toFixed(2)}
               </span>
             </span>
@@ -554,7 +548,7 @@ function PerformancePanel({ inst }: { inst: StrategyInstance }) {
                   {perf.plans.map((p) => (
                     <tr key={p.id} className="border-b border-bb-border/50 hover:bg-bb-hover">
                       <td className="whitespace-nowrap px-2 py-1 text-bb-muted" data-numeric>
-                        {p.created_at?.slice(5, 16).replace("T", " ") ?? "-"}
+                        {dateTimeShort(p.created_at)}
                       </td>
                       <td className="px-2 py-1 text-bb-amber">{p.underlying}</td>
                       <td className="px-2 py-1 text-bb-muted">{p.status}</td>
@@ -567,7 +561,7 @@ function PerformancePanel({ inst }: { inst: StrategyInstance }) {
                       <td className="px-2 py-1 text-right" data-numeric>
                         {p.exit_premium == null ? "—" : p.exit_premium.toFixed(2)}
                       </td>
-                      <td className={"px-2 py-1 text-right " + pnlColor(p.realized_pnl)} data-numeric>
+                      <td className={"px-2 py-1 text-right " + pnlCls(p.realized_pnl)} data-numeric>
                         {p.realized_pnl == null ? "—" : p.realized_pnl.toFixed(2)}
                       </td>
                     </tr>
@@ -751,9 +745,8 @@ function CapitalPanel({
               <div className="flex justify-between text-[10px]" data-numeric>
                 <span className="text-bb-muted">
                   P&L{" "}
-                  <span className={bs.pnl >= 0 ? "text-bb-profit" : "text-bb-loss"}>
-                    {bs.pnl >= 0 ? "+" : ""}
-                    {fmtUsd(bs.pnl)}
+                  <span className={pnlCls(bs.pnl)}>
+                    {fmtUsd(bs.pnl, true)}
                   </span>
                 </span>
                 <span
@@ -815,8 +808,6 @@ function TwinPanel({ inst }: { inst: StrategyInstance }) {
     };
   }, [inst.id]);
 
-  const pnlColor = (v: number) => (v >= 0 ? "text-bb-profit" : "text-bb-loss");
-
   return (
     <div className="panel flex shrink-0 flex-col">
       <div
@@ -856,7 +847,7 @@ function TwinPanel({ inst }: { inst: StrategyInstance }) {
                 <td data-numeric className="px-2 py-1 text-right text-white">
                   {p.equity.toFixed(0)}
                 </td>
-                <td data-numeric className={"px-2 py-1 text-right " + pnlColor(p.return_pct)}>
+                <td data-numeric className={"px-2 py-1 text-right " + pnlCls(p.return_pct)}>
                   {p.return_pct >= 0 ? "+" : ""}
                   {p.return_pct.toFixed(2)}%
                 </td>
@@ -1001,7 +992,7 @@ function SignalsPanel({ signals }: { signals: SignalRecord[] }) {
                     {s.id}
                   </td>
                   <td className="whitespace-nowrap px-2 py-1 text-bb-muted" data-numeric>
-                    {s.ts?.slice(11, 19) ?? "-"}
+                    {hhmmss(s.ts)}
                   </td>
                   <td className="whitespace-nowrap px-2 py-1 text-bb-amber">{s.type}</td>
                   <td className="whitespace-nowrap px-2 py-1 text-bb-muted">{s.source}</td>

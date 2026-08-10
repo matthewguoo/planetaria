@@ -19,6 +19,7 @@ import {
   type Quote,
   type SignalRecord,
 } from "../../lib/api";
+import { etDateTime, hhmmss } from "../../lib/format";
 import { useSystemState } from "../System/SystemPanels";
 
 // Each quote is a broker REST call and shows up in SYSTEM's call flow, so
@@ -26,17 +27,6 @@ import { useSystemState } from "../System/SystemPanels";
 const QUOTE_POLL_MS = 20_000;
 const SIGNAL_POLL_MS = 10_000;
 const MAJORS = ["SPY", "QQQ", "IWM", "DIA"];
-
-function ET(iso: string | null | undefined): string {
-  if (!iso) return "—";
-  return new Date(iso).toLocaleString("en-US", {
-    timeZone: "America/New_York",
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
 
 function MajorTile({ symbol }: { symbol: string }) {
   const [quote, setQuote] = useState<Quote | null>(null);
@@ -70,7 +60,10 @@ function MajorTile({ symbol }: { symbol: string }) {
   const twoSided = bid != null && ask != null && ask > bid;
   const spread = twoSided ? ask - bid : null;
   // A quote's age is the whole story after hours: the free feed goes quiet at
-  // 17:00 ET and keeps serving the last print for hours.
+  // 17:00 ET and keeps serving the last print for hours. Date.now() in render
+  // is impure by the book, but this component only re-renders on its own
+  // poll, so the age is recomputed exactly when the quote is.
+  // eslint-disable-next-line react-hooks/purity
   const ageS = quote?.ts ? (Date.now() - quote.ts) / 1000 : null;
 
   return (
@@ -164,10 +157,10 @@ function ClockBar() {
         {label}
       </span>
       <span className="text-bb-muted">
-        next open <span className="text-white" data-numeric>{ET(clock?.next_open)}</span>
+        next open <span className="text-white" data-numeric>{etDateTime(clock?.next_open)}</span>
       </span>
       <span className="text-bb-muted">
-        next close <span className="text-white" data-numeric>{ET(clock?.next_close)}</span>
+        next close <span className="text-white" data-numeric>{etDateTime(clock?.next_close)}</span>
       </span>
       <span className="ml-auto text-bb-muted">
         streaming{" "}
@@ -263,7 +256,7 @@ function NewsPanel() {
               {rows.map((r) => (
                 <tr key={r.id} className="border-b border-bb-border/50 hover:bg-bb-hover">
                   <td className="whitespace-nowrap px-2 py-1 align-top text-bb-muted" data-numeric>
-                    {r.ts?.slice(11, 19) ?? "—"}
+                    {hhmmss(r.ts)}
                   </td>
                   <td className="whitespace-nowrap px-2 py-1 align-top text-bb-amber">
                     {(r.symbols ?? []).join(" ") || "—"}

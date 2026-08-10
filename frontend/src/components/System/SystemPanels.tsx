@@ -12,6 +12,7 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
+import { create } from "zustand";
 import {
   apiError,
   getAccounts,
@@ -89,24 +90,36 @@ function NumField({
   );
 }
 
-/** Poll `/api/system/state`. Shared so several panels on one screen do not
- * each run their own timer against the same endpoint. */
+/** Poll `/api/system/state` through ONE module-wide timer, whoever asks.
+ * The old version was a plain hook with local state, so Header + SYSTEM +
+ * MARKET each ran their own 5s timer against the same endpoint — the
+ * comment claimed sharing the code didn't deliver. Now the first subscriber
+ * starts the timer, the last one stops it, and every subscriber reads the
+ * same store. */
+const useSystemStore = create<{ state: SystemState | null }>(() => ({ state: null }));
+let systemTimer: number | null = null;
+let systemSubs = 0;
+const refreshSystemState = () =>
+  getSystemState()
+    .then((s) => useSystemStore.setState({ state: s }))
+    .catch(() => {});
+
 export function useSystemState(): SystemState | null {
-  const [state, setState] = useState<SystemState | null>(null);
   useEffect(() => {
-    let alive = true;
-    const load = () =>
-      getSystemState()
-        .then((s) => alive && setState(s))
-        .catch(() => {});
-    void load();
-    const id = window.setInterval(load, POLL_MS);
+    systemSubs += 1;
+    if (systemSubs === 1) {
+      void refreshSystemState();
+      systemTimer = window.setInterval(() => void refreshSystemState(), POLL_MS);
+    }
     return () => {
-      alive = false;
-      window.clearInterval(id);
+      systemSubs -= 1;
+      if (systemSubs === 0 && systemTimer !== null) {
+        window.clearInterval(systemTimer);
+        systemTimer = null;
+      }
     };
   }, []);
-  return state;
+  return useSystemStore((s) => s.state);
 }
 
 export function HealthPanel({ state }: { state: SystemState | null }) {

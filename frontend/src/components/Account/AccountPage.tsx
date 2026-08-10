@@ -21,6 +21,7 @@ import {
   type PortfolioHistory,
 } from "../../lib/api";
 import { fmtUsd, pnlCls } from "../../lib/format";
+import { usePoll } from "../../lib/usePoll";
 import { useAccountStore } from "../../store/accountStore";
 import { AccountsPanel } from "../System/SystemPanels";
 
@@ -35,8 +36,8 @@ function StatCard({ label, value, cls }: { label: string; value: string; cls?: s
   );
 }
 
-const fmtSigned = (v: number) =>
-  `${v >= 0 ? "+" : "-"}$${Math.abs(v).toLocaleString("en-US", { maximumFractionDigits: 0 })}`;
+/** fmtUsd with the explicit sign — "+$12" / "-$3" — for greek exposures. */
+const fmtSigned = (v: number) => fmtUsd(v === 0 ? 0 : v, true);
 
 /** Portfolio factor exposures + correlation structure of open underlyings. */
 function RiskPanel({ risk }: { risk: AccountRisk | null }) {
@@ -296,7 +297,7 @@ export function AccountPage() {
   const [risk, setRisk] = useState<AccountRisk | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (alive: () => boolean = () => true) => {
     setError(null);
     const results = await Promise.allSettled([
       getAccountHistory(period, period === "1D" ? "15Min" : "1D"),
@@ -305,6 +306,7 @@ export function AccountPage() {
       refreshPositions(),
       getAccountRisk(),
     ]);
+    if (!alive()) return;
     if (results[0].status === "fulfilled") setHistory(results[0].value);
     else setHistory({ timestamps: [], equity: [], profit_loss: [], base_value: null });
     if (results[1].status === "fulfilled") setOrders(results[1].value);
@@ -315,11 +317,7 @@ export function AccountPage() {
     if (failed) setError(apiError((failed as PromiseRejectedResult).reason));
   }, [period, refreshPositions]);
 
-  useEffect(() => {
-    void refresh();
-    const id = window.setInterval(() => void refresh(), 15_000);
-    return () => window.clearInterval(id);
-  }, [refresh]);
+  usePoll((alive) => refresh(alive), 15_000, [refresh]);
 
   const unrealized = positions.reduce((acc, p) => acc + (p.unrealized_pnl ?? 0), 0);
 

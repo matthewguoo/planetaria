@@ -28,6 +28,9 @@ Push-Location "$root\frontend"
 Write-Host "[check] frontend typecheck" -ForegroundColor Yellow
 npm run typecheck
 if ($LASTEXITCODE -ne 0) { $failed += "frontend typecheck" }
+Write-Host "[check] frontend lint" -ForegroundColor Yellow
+npm run lint
+if ($LASTEXITCODE -ne 0) { $failed += "frontend lint" }
 if (-not $Fast) {
     Write-Host "[check] frontend tests" -ForegroundColor Yellow
     npm test

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { allocationSegments, fmtUsd, UNALLOCATED_COLOR } from "./fund";
+import { allocationSegments, UNALLOCATED_COLOR } from "./fund";
+import { fmtUsd } from "./format";
 
 const inst = (id: string, allocated: number) => ({ id, name: id, allocated });
 

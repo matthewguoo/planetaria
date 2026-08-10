@@ -27,6 +27,8 @@ export function EnforcementBanner() {
   useEffect(() => {
     if (!heldIds.length) {
       strikesRef.current = 0;
+      // Intentional: flat book ⇒ stand the alarm down NOW, not on a poll.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setAlarm(null);
       return;
     }
