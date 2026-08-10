@@ -260,7 +260,12 @@ def _call_cli(exe: str, req: dict, timeout_s: float) -> tuple[dict | None, str]:
         return None, f"timeout after {timeout_s:.0f}s"
     err = proc.stderr.decode("utf-8", "replace")
     if proc.returncode != 0:
-        return None, f"exit {proc.returncode}: {err[:300]}"
+        # The CLI writes usage-limit refusals to STDOUT (learned 2026-08-09:
+        # 1,024 calls burned against a spent window as bare "exit 1" because
+        # this error string quoted stderr alone and the limit markers never
+        # saw the message). Quote both.
+        out_tail = proc.stdout.decode("utf-8", "replace").strip()[-300:]
+        return None, f"exit {proc.returncode}: {err[:300]} {out_tail}"
     try:
         envelope = json.loads(proc.stdout.decode("utf-8", "replace"))
     except ValueError as exc:
