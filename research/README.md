@@ -8,17 +8,18 @@ the reason the trees are separate rather than adjacent.
 
 | | |
 |---|---|
-| `pead-llm-gate/` | Working Note PR-2026-01 — gating post-earnings drift with an LLM. Finished 2026-08-06. |
+| `pead-llm-gate/` | Working Note PR-2026-01 -> **feeds `pead_flagship`/`pead_nosip`**; also hosts the mech_carry and day2 verdicts (they reuse its cache). Finished 2026-08-06. |
 | `chart-llm-gate/` | Can a model read a chart? Five retail intraday setups, anonymised candles, local weights. Started 2026-08-07. |
 | `tug-of-war/` | Night vs day returns by retailness decile. Premium confirmed, trade dominated. 2026-08-10. |
 | `astro-null/` | The planetaria null battery: 17 calendar/astro partitions on SPY, 1993-2026. All null. 2026-08-10. |
 | `intraday-mft/` | GHLZ first→last half-hour momentum, post-publication. Dead. 2026-08-10. |
 | `candle-null/` | The retail candle canon on 2M liquid symbol-days. Dead to inverted. 2026-08-10. |
 | `mean-reversal/` | 1d/5d reversal and the gap fade, costed honestly. One survivor, parked. 2026-08-10. |
-| `0dte-vrp/` | 0DTE ATM straddle, implied vs delivered, 2024-02+. QQQ afternoons still pay. 2026-08-10. |
+| `0dte-vrp/` | 0DTE premium studies -> **feeds `afternoon_fly` (fly-1)**. QQQ afternoons still pay. 2026-08-10. |
 | `factor-lab/` | Point-in-time fundamentals across the top-500, auto-rebalanced. Combo beats; singles don't. 2026-08-10. |
 | `exdiv/` | Ex-dividend seams from the raw/adjusted panel pair. Real premium, overlay-sized. 2026-08-10. |
 | `macro-drift/` | Post-FOMC/CPI continuation. Dead. 2026-08-10. |
+| `open-window/` | The first 90 minutes at minute resolution -> **feeds `gap_fail_fade` (gff-1)**. 2026-08-10. |
 | `notes/` | Research that belongs to no single study (overnight alpha, the latency band, the 2026-08-10 alpha scan). |
 
 The two LLM studies are deliberately built on the same statistic — a gate
