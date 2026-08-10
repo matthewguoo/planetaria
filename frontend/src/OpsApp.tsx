@@ -25,6 +25,7 @@
 import { useEffect, useState } from "react";
 import { AccountPage } from "./components/Account/AccountPage";
 import { EnforcementBanner } from "./components/EnforcementBanner";
+import FundPage from "./components/Fund/FundPage";
 import { Header } from "./components/Header";
 import MarketPage from "./components/Market/MarketPage";
 import StrategiesPage from "./components/Strategies/StrategiesPage";
@@ -72,14 +73,16 @@ export default function OpsApp() {
     <div className="flex h-full flex-col gap-px bg-bb-black p-px">
       <Header />
       <EnforcementBanner />
-      {view === "strategies" ? (
+      {view === "account" ? (
+        <AccountPage />
+      ) : view === "strategies" ? (
         <StrategiesPage />
       ) : view === "market" ? (
         <MarketPage />
       ) : view === "system" ? (
         <SystemPage />
       ) : (
-        <AccountPage />
+        <FundPage />
       )}
     </div>
   );

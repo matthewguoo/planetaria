@@ -567,3 +567,53 @@ export const getAccounts = () =>
   api.get<AccountList>("/api/system/accounts").then((r) => r.data);
 export const selectAccount = (name: string) =>
   api.post<AccountList>("/api/system/accounts/select", { name }).then((r) => r.data);
+
+/** ------------------------------------------------------------- FUND page
+ * One payload for the fund root: allocation envelopes, per-strategy open
+ * positions, and the account-level exposure rollup. Options carry margin
+ * at risk (the collateral math), not fake deltas — the console has no
+ * greeks and pretending otherwise would be worse than saying so. */
+export type FundPosition = {
+  plan_id: string;
+  underlying: string;
+  asset_class: "equity" | "option";
+  qty: number;
+  entry_limit: number;
+  legs: number;
+  margin_usd: number;
+  net_usd: number | null;
+  status: string;
+  created_at: string | null;
+};
+
+export type FundInstance = {
+  id: string;
+  name: string;
+  kind: string;
+  state: string;
+  live: boolean;
+  allocated: number;
+  deployed: number;
+  available: number;
+  breaker: { limit: number | null; drawdown: number | null; tripped: boolean | null };
+  positions: FundPosition[];
+};
+
+export type FundState = {
+  account: { equity: number; cash: number | null; buying_power: number | null };
+  instances: FundInstance[];
+  allocated_total: number;
+  unallocated: number;
+  exposure: {
+    gross_long_usd: number;
+    gross_short_usd: number;
+    net_usd: number;
+    beta_weighted_net_usd: number;
+    options_margin_usd: number;
+    options_premium_usd: number;
+    by_underlying: { symbol: string; net_usd: number; gross_usd: number; beta_spy: number | null }[];
+    corr: { symbols: string[]; matrix: (number | null)[][] };
+  };
+};
+
+export const getFund = () => api.get<FundState>("/api/fund").then((r) => r.data);

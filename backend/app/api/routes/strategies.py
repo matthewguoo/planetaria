@@ -291,6 +291,15 @@ async def twin(request: Request, row_id: str,
     }
 
 
+@router.get("/fund")
+async def fund(request: Request) -> dict:
+    """The fund root: every instance's allocation envelope and open
+    positions, plus the account-level exposure rollup (directional for
+    shares, margin-at-risk for options, betas and pairwise correlations for
+    the held names) that no single instance's view aggregates."""
+    return await request.app.state.strategy_runner.fund_state()
+
+
 @router.get("/signals")
 async def signals(
     request: Request, limit: int = 100, type: str | None = None,

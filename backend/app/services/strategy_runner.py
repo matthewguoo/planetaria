@@ -103,6 +103,58 @@ def options_required_capital(legs: list[dict], qty: int,
     return per_set * max(int(qty), 0), None
 
 
+def _pct_changes(series: dict[str, float]) -> dict[str, float]:
+    dates = sorted(series)
+    out: dict[str, float] = {}
+    for a, b in zip(dates, dates[1:]):
+        if series[a]:
+            out[b] = series[b] / series[a] - 1
+    return out
+
+
+def _corr_and_betas(closes: dict[str, dict[str, float]]
+                    ) -> tuple[list[str], list[list[float | None]], dict]:
+    """Pairwise daily-return correlations and SPY betas over whatever dates
+    each pair shares. Plain python on purpose — the app does not depend on
+    numpy, and n here is a handful of held symbols."""
+    pct = {s: _pct_changes(v) for s, v in closes.items() if len(v) >= 21}
+    syms = sorted(pct)
+
+    def pair(a: str, b: str) -> tuple[float | None, float | None]:
+        common = sorted(set(pct[a]) & set(pct[b]))
+        if len(common) < 20:
+            return None, None
+        xa = [pct[a][d] for d in common]
+        xb = [pct[b][d] for d in common]
+        n = len(common)
+        ma, mb = sum(xa) / n, sum(xb) / n
+        cov = sum((x - ma) * (y - mb) for x, y in zip(xa, xb)) / n
+        va = sum((x - ma) ** 2 for x in xa) / n
+        vb = sum((y - mb) ** 2 for y in xb) / n
+        corr = cov / ((va * vb) ** 0.5) if va > 0 and vb > 0 else None
+        beta = cov / va if va > 0 else None        # b's beta on a
+        return corr, beta
+
+    matrix: list[list[float | None]] = [
+        [1.0 if i == j else None for j in range(len(syms))]
+        for i in range(len(syms))]
+    for i, a in enumerate(syms):
+        for j in range(i + 1, len(syms)):
+            corr, _ = pair(a, syms[j])
+            matrix[i][j] = matrix[j][i] = (round(corr, 3)
+                                           if corr is not None else None)
+    betas: dict[str, float | None] = {}
+    for s in syms:
+        if s == "SPY":
+            betas[s] = 1.0
+        elif "SPY" in pct:
+            _, beta = pair("SPY", s)
+            betas[s] = round(beta, 2) if beta is not None else None
+        else:
+            betas[s] = None
+    return syms, matrix, betas
+
+
 @dataclass
 class _Running:
     row_id: str
@@ -827,6 +879,118 @@ class StrategyRunner:
         data["runtime"] = self._runtime_status(self._running.get(row_id))
         data["decisions"] = await self.decisions(row_id, limit=20)
         return data
+
+    async def fund_state(self) -> dict:
+        """The fund page in one payload: the account, every instance's
+        envelope and open positions, and the account-level exposure rollup —
+        directional for shares (signed entry notional), margin-at-risk for
+        options (the collateral math, not the premium), and beta/pairwise
+        correlation over the trailing ~90 sessions for whatever is held."""
+        try:
+            account = await self.trade.get_account()
+        except Exception:                                     # noqa: BLE001
+            account = {}
+        equity = float(account.get("equity") or 0.0)
+
+        instances = await self.instances()
+        out_instances: list[dict] = []
+        allocated_sum = 0.0
+        underl_net: dict[str, float] = {}
+        underl_gross: dict[str, float] = {}
+        gross_long = gross_short = 0.0
+        opt_margin = opt_premium = 0.0
+        for inst in instances:
+            row_id = inst["id"]
+            alloc = await self.allocation_state(row_id)
+            try:
+                breaker = await self.breaker_state(row_id)
+            except Exception:                                 # noqa: BLE001
+                breaker = {}
+            async with self.db.session() as session:
+                plans = list(await session.scalars(
+                    select(TradePlan).where(
+                        TradePlan.strategy == inst["name"],
+                        TradePlan.status.in_(OPEN_STATUSES))))
+            positions = []
+            for p in plans:
+                is_option = bool(p.legs and p.legs[0].get("right"))
+                if is_option:
+                    held, fatal = options_required_capital(
+                        p.legs, p.qty or 0, p.entry_limit or 0.0)
+                    premium = (p.entry_limit or 0.0) * 100 * (p.qty or 0)
+                    margin = abs(premium) if fatal else max(held, abs(premium))
+                    opt_margin += margin
+                    opt_premium += premium
+                    exposure = None       # no greeks in the console — margin
+                else:                     # is the honest number for options
+                    exposure = (p.entry_limit or 0.0) * (p.qty or 0)
+                    sym = p.underlying
+                    underl_net[sym] = underl_net.get(sym, 0.0) + exposure
+                    underl_gross[sym] = underl_gross.get(sym, 0.0) + abs(exposure)
+                    if exposure >= 0:
+                        gross_long += exposure
+                    else:
+                        gross_short += -exposure
+                    margin = abs(exposure)
+                positions.append({
+                    "plan_id": p.id, "underlying": p.underlying,
+                    "asset_class": "option" if is_option else "equity",
+                    "qty": p.qty, "entry_limit": p.entry_limit,
+                    "legs": len(p.legs or []),
+                    "margin_usd": round(margin, 2),
+                    "net_usd": None if exposure is None else round(exposure, 2),
+                    "status": p.status,
+                    "created_at": str(p.created_at) if p.created_at else None,
+                })
+            allocated_sum += alloc["allocated"]
+            out_instances.append({
+                "id": row_id, "name": inst["name"], "kind": inst["kind"],
+                "state": inst["state"],
+                "live": bool((inst.get("params") or {}).get("live", False)),
+                "allocated": alloc["allocated"], "deployed": alloc["deployed"],
+                "available": alloc["available"],
+                "breaker": {key: breaker.get(key)
+                            for key in ("limit", "drawdown", "tripped")},
+                "positions": positions,
+            })
+
+        symbols = sorted(set(underl_net) | {"SPY"})
+        closes_by_sym: dict[str, dict[str, float]] = {}
+        for sym in symbols:
+            try:
+                closes = await self.market.daily_closes(sym, days=90)
+            except Exception:                                 # noqa: BLE001
+                closes = []
+            closes_by_sym[sym] = {str(c["date"]): float(c["close"])
+                                  for c in (closes or [])}
+        corr_syms, matrix, betas = _corr_and_betas(closes_by_sym)
+        beta_net = sum(underl_net.get(s, 0.0) * (betas.get(s) or 0.0)
+                       for s in underl_net)
+        return {
+            "account": {
+                "equity": round(equity, 2),
+                "cash": (round(float(account.get("cash") or 0.0), 2)
+                         if account else None),
+                "buying_power": (round(float(account.get("buying_power") or 0.0), 2)
+                                 if account else None)},
+            "instances": out_instances,
+            "allocated_total": round(allocated_sum, 2),
+            "unallocated": round(max(equity - allocated_sum, 0.0), 2),
+            "exposure": {
+                "gross_long_usd": round(gross_long, 2),
+                "gross_short_usd": round(gross_short, 2),
+                "net_usd": round(gross_long - gross_short, 2),
+                "beta_weighted_net_usd": round(beta_net, 2),
+                "options_margin_usd": round(opt_margin, 2),
+                "options_premium_usd": round(opt_premium, 2),
+                "by_underlying": [
+                    {"symbol": s, "net_usd": round(underl_net[s], 2),
+                     "gross_usd": round(underl_gross[s], 2),
+                     "beta_spy": betas.get(s)}
+                    for s in sorted(underl_net, key=lambda x: -underl_gross[x])],
+                "corr": {"symbols": corr_syms, "matrix": matrix},
+            },
+        }
 
     async def performance(self, row_id: str) -> dict:
         """Per-strategy execution rollup from the plans that carry its name:

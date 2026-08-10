@@ -5,7 +5,7 @@ import { useUiStore, type View } from "../store/uiStore";
 
 const AUDIO_LABEL = { off: "🔇 OFF", fx: "🔊 FX", vox: "🔊 VOX" } as const;
 
-const TABS: View[] = ["account", "strategies", "market", "system"];
+const TABS: View[] = ["fund", "account", "strategies", "market", "system"];
 
 function AudioToggle() {
   const [mode, setMode] = useState(getAudioMode());

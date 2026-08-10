@@ -9,7 +9,7 @@
 
 import { create } from "zustand";
 
-export type View = "account" | "strategies" | "market" | "system";
+export type View = "fund" | "account" | "strategies" | "market" | "system";
 
 type UiState = {
   view: View;
@@ -17,7 +17,8 @@ type UiState = {
 };
 
 export const useUiStore = create<UiState>((set) => ({
-  // The money is the first question.
-  view: "account",
+  // The book is the first question: whose money is where, and what is it
+  // holding. ACCOUNT keeps the broker's raw view one tab away.
+  view: "fund",
   setView: (view) => set({ view }),
 }));
