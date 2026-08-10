@@ -39,3 +39,9 @@ research/pead-llm-gate/scripts/archive/_ict_cache/
 # the equity curves, and batch progress. Regenerable from the cache by
 # re-running the stages -- run state, not source.
 research/pead-llm-gate/payload/
+
+# 2026-08-10 alpha-scan studies: vendored ephemeris/data libs and caches are
+# regenerable (pip --target, one Alpaca/yfinance fetch each); the notes are not.
+research/astro-null/_vendor/
+research/astro-null/cache/
+research/intraday-mft/cache/

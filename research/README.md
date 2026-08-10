@@ -10,7 +10,10 @@ the reason the trees are separate rather than adjacent.
 |---|---|
 | `pead-llm-gate/` | Working Note PR-2026-01 — gating post-earnings drift with an LLM. Finished 2026-08-06. |
 | `chart-llm-gate/` | Can a model read a chart? Five retail intraday setups, anonymised candles, local weights. Started 2026-08-07. |
-| `notes/` | Research that belongs to no single study (overnight alpha, the latency band). |
+| `tug-of-war/` | Night vs day returns by retailness decile. Premium confirmed, trade dominated. 2026-08-10. |
+| `astro-null/` | The planetaria null battery: 17 calendar/astro partitions on SPY, 1993-2026. All null. 2026-08-10. |
+| `intraday-mft/` | GHLZ first→last half-hour momentum, post-publication. Dead. 2026-08-10. |
+| `notes/` | Research that belongs to no single study (overnight alpha, the latency band, the 2026-08-10 alpha scan). |
 
 The two LLM studies are deliberately built on the same statistic — a gate
 spread with a within-block permutation null — so they can be read against each
