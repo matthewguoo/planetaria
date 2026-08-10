@@ -140,6 +140,14 @@ class PeadFlagship(Strategy):
         # --- exit (§5.3) ---------------------------------------------------
         "hold_days": 1,
         "hold_days_guidance": 3,   # when the verdict reports guidance moved
+        # THE DEFENSIVE DIAL (overnight decomposition, 2026-08-10): 95% of
+        # the T+1 edge is earned by the next open. True exits EVERY trade at
+        # the next session's open instead of the conditional close — measured
+        # Sharpe 2.32 at a 7.9% max drawdown against the flagship's 2.15 at
+        # 18.0%, for a 48.2% -> 28.1% CAGR give-up. Use when this strategy
+        # shares the account with others and drawdown budget is the scarce
+        # resource; the flagship exit remains the higher-CAGR policy.
+        "exit_at_open": False,
         # --- book (§5.5) ---------------------------------------------------
         # Six concurrent, equal weight, so peak exposure is 100% of THIS
         # strategy's allocation and the book is never levered. Contested
@@ -193,6 +201,8 @@ class PeadFlagship(Strategy):
         for key in ("hold_days", "hold_days_guidance"):
             if not (1 <= int(clean[key]) <= 10):
                 raise ValueError(f"{key} must be 1-10 sessions")
+        if not isinstance(clean["exit_at_open"], bool):
+            raise ValueError("exit_at_open must be true or false")
         # The bracket is all-or-nothing: one leg alone is neither a target nor
         # a stop, and place_trade refuses it anyway — fail here with the
         # reason instead of at the broker.
@@ -563,6 +573,9 @@ class PeadFlagship(Strategy):
         else:
             sl = round(side * price * (1 - side * float(sl_pct)), 2)
             tp = round(side * price * (1 + side * float(tp_pct)), 2)
+        at_open = bool(params.get("exit_at_open"))
+        exit_when = _exit_open_time() if at_open else _exit_time(hold_days)
+        exit_label = "T+1 open" if at_open else f"T+{hold_days}"
         return TradeIntent(
             asset_class="equity",
             underlying=sym,
@@ -571,9 +584,9 @@ class PeadFlagship(Strategy):
             entry_limit=entry,
             tp=tp,
             sl=sl,
-            time_stop_utc=_exit_time(hold_days),
+            time_stop_utc=exit_when,
             extended_hours=True,
-            reason=f"pead flagship {'long' if side > 0 else 'short'} T+{hold_days}",
+            reason=f"pead flagship {'long' if side > 0 else 'short'} {exit_label}",
             signal_ids=signal_ids,
             dedupe_key=f"pead:{sym}:{self._watch_date}",
             max_event_age_s=600.0,
@@ -682,6 +695,18 @@ def _text_of(event: Event, max_text: int) -> str:
         summary = str(p.get("summary") or "").strip()
         text = f"{headline}\n{summary}".strip()
     return text[:max_text]
+
+
+def _exit_open_time(now_et: datetime | None = None) -> datetime:
+    """09:31 ET of the next session — the exit-at-open dial's time stop. One
+    minute past the bell so the stop fires into a market that is actually
+    open rather than into the opening rotation."""
+    day = (now_et or datetime.now(ET)).date()
+    while True:
+        day += timedelta(days=1)
+        if day.weekday() < 5:
+            break
+    return datetime.combine(day, dtime(9, 31), tzinfo=ET).astimezone(timezone.utc)
 
 
 def _exit_time(hold_days: int, now_et: datetime | None = None) -> datetime:
