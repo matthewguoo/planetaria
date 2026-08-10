@@ -1,4 +1,6 @@
-"""What bracket should the earnings-reaction strategy actually use?
+"""SUPERSEDED BY the joint search in research_holding_period.stage_best.
+
+What bracket should the earnings-reaction strategy actually use?
 
 The `brackets` stage in research_llm_contamination.py answers one question —
 what did the SHIPPED bracket cost — by refetching minute bars and walking a
@@ -17,8 +19,8 @@ against 2024-26. A configuration that only wins on the half it was chosen
 from is a curve fit, and the split is what makes that visible instead of
 flattering.
 
-Run: .venv/Scripts/python.exe scripts/research_bracket_sweep.py paths
-     .venv/Scripts/python.exe scripts/research_bracket_sweep.py sweep
+Run: .venv/Scripts/python.exe scripts/archive/research_bracket_sweep.py paths
+     .venv/Scripts/python.exe scripts/archive/research_bracket_sweep.py sweep
 """
 
 from __future__ import annotations

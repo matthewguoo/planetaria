@@ -34,6 +34,7 @@ BACKEND = ROOT / "backend"
 
 CACHE = STUDY / "cache"                            # bars, filings, verdicts
 NOTES = STUDY / "notes"                            # dated run logs
+DATA = STUDY / "data"                              # committed sweep exports (CSV)
 PAPER = STUDY / "paper"                            # template, payload, renders
 DOCS = ROOT / "docs"                               # cross-cutting docs only
 ENV = ROOT / ".env"

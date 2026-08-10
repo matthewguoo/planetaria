@@ -1,4 +1,6 @@
-"""Astrology check: do mechanical iFVG and PO3 (ICT) entries beat random?
+"""ARCHIVED: an unrelated strategy, never cited by the paper.
+
+Astrology check: do mechanical iFVG and PO3 (ICT) entries beat random?
 
 The honest problem with ICT concepts is that as taught they are
 discretionary enough to be unfalsifiable — every loser can be explained as
@@ -37,7 +39,7 @@ Null: N_BOOT bootstrap runs of the same trade COUNT with uniformly random
 RTH entries (random direction), identical exit engine. Report the actual
 mean $/share/trade's percentile vs that distribution + a plain t-stat.
 
-Run:  .venv/Scripts/python.exe scripts/research_ict_backtest.py
+Run:  .venv/Scripts/python.exe scripts/archive/research_ict_backtest.py
       [--refresh] [--symbols SPY,QQQ,AMD,TSLA] [--start 2025-02-01]
 Bars cache to scratch parquet; --refresh refetches.
 """
@@ -362,7 +364,7 @@ def main() -> None:
     doc.write_text(
         f"# iFVG / PO3 mechanical backtest — {datetime.now(ET):%Y-%m-%d}\n\n"
         f"Symbols {args.symbols}, {args.start}..{args.end}, SIP 1m base.\n"
-        f"Definitions + methodology: `backend/scripts/research_ict_backtest.py`"
+        f"Definitions + methodology: `backend/scripts/archive/research_ict_backtest.py`"
         f" docstring.\n\n```\n{out.to_string(index=False)}\n```\n",
         encoding="utf-8",
     )

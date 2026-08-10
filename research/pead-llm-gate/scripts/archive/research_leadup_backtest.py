@@ -1,4 +1,7 @@
-"""Earnings LEAD-UP backtest: buy the run-up, never hold the print.
+"""SUPERSEDED BY the v2 event panel + research_holding_period — the
+lead-up question was folded into the panel harness.
+
+Earnings LEAD-UP backtest: buy the run-up, never hold the print.
 
 Thesis (earnings announcement premium — Beaver 1968; Frazzini & Lamont
 2007): stocks earn abnormal returns in the days INTO their earnings
@@ -29,6 +32,12 @@ import argparse
 import sys
 import time as _time
 from datetime import date, datetime, timedelta
+
+# Archived: one level below the study scripts, so reach _paths and the
+# sibling research modules explicitly.
+import sys as _sys
+from pathlib import Path as _Path
+_sys.path.insert(0, str(_Path(__file__).resolve().parent.parent))
 
 from _paths import BACKEND, CACHE, NOTES
 from zoneinfo import ZoneInfo

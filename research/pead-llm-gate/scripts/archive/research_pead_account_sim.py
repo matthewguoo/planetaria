@@ -1,4 +1,6 @@
-"""ACCOUNT-level sim of the flagship: LLM-gated PEAD reaction trades.
+"""SUPERSEDED BY research_holding_period.account / account_slots.
+
+ACCOUNT-level sim of the flagship: LLM-gated PEAD reaction trades.
 
 Composes the two validated layers: fable's cached verdicts (llm_ab
 jsonl) select events; the engine's account mechanics execute them —
@@ -10,7 +12,7 @@ T+1 15:55 close (+COST_RTH_BP). OOS months only (>= 2026-02) unless
 --all. Books: llm (approved only), mech (every gated event), veto
 (refused only — the counterfactual).
 
-Run: .venv/Scripts/python.exe scripts/research_pead_account_sim.py
+Run: .venv/Scripts/python.exe scripts/archive/research_pead_account_sim.py
 """
 
 from __future__ import annotations

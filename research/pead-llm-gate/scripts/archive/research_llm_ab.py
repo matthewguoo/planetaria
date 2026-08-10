@@ -1,4 +1,9 @@
-"""LLM-layer A/B backtest: fable vs opus on real historical releases.
+"""SUPERSEDED BY research_llm_contamination.py — the two-arm A/B grew
+into the multi-arm harness. This copy also carries the date-keyed
+EDGAR lookup its successor's fetch_release_text docstring documents
+as silently missing late filers.
+
+LLM-layer A/B backtest: fable vs opus on real historical releases.
 
 Runs the LIVE strategy's exact analysis setup — SURPRISE_SCHEMA and the
 HARDENED_SYSTEM preamble imported from the running code, task text
@@ -33,6 +38,12 @@ import json
 import sys
 import time as _time
 from datetime import datetime
+
+# Archived: one level below the study scripts, so reach _paths and the
+# sibling research modules explicitly.
+import sys as _sys
+from pathlib import Path as _Path
+_sys.path.insert(0, str(_Path(__file__).resolve().parent.parent))
 
 from _paths import BACKEND, CACHE, NOTES
 from zoneinfo import ZoneInfo

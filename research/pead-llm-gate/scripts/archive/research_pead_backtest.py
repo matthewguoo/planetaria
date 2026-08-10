@@ -1,4 +1,8 @@
-"""PEAD-continuation backtest: does the initial AH reaction continue to T+1?
+"""SUPERSEDED BY research_holding_period (paths/sweep) — the exit this
+measured was the miscounted 2-4 session hold holding_period was
+written to correct.
+
+PEAD-continuation backtest: does the initial AH reaction continue to T+1?
 
 The AMC reaction strategy's MECHANICAL core, isolated from the LLM layer:
 for each historical after-market-close earnings event —
@@ -30,6 +34,12 @@ import argparse
 import sys
 import time as _time
 from datetime import date, datetime, timedelta
+
+# Archived: one level below the study scripts, so reach _paths and the
+# sibling research modules explicitly.
+import sys as _sys
+from pathlib import Path as _Path
+_sys.path.insert(0, str(_Path(__file__).resolve().parent.parent))
 
 from _paths import BACKEND, CACHE, NOTES
 from zoneinfo import ZoneInfo

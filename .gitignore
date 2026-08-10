@@ -28,24 +28,24 @@ Thumbs.db
 # Runtime artifacts
 backend/trader.db
 *.db
-# Study data caches (moved out of backend/scripts/ on 2026-08-06). The
-# contents are IRREPLACEABLE and must never be deleted to reclaim space:
-# cache/texts/ is 2,844 EDGAR filings (~$100 of fetches) and cache/llm_contam/
-# is $118.09 of inference from models that have since been retired.
-research/pead-llm-gate/cache/
+*.db-shm
+*.db-wal
+
+# Every study's data cache, by rule rather than by enumeration — a new
+# study's cache/ is ignored the day it exists. Regenerability varies BY
+# STUDY and deletion is not free:
+#   pead-llm-gate/cache is IRREPLACEABLE — texts/ is 2,844 EDGAR filings
+#   (~$100 of fetches) and llm_contam/ is $118.09 of inference from models
+#   that have since been retired. Never delete it to reclaim space.
+#   chart-llm-gate/cache regenerates in ~2 min of API time for bars, but
+#   the verdicts cost ~4.3h of 3090 wall-clock per full local-model pass.
+#   The 2026-08-10 alpha-scan caches (astro-null, intraday-mft, 0dte-vrp,
+#   factor-lab, macro-drift, open-window, …) are one fetch each.
+research/*/cache/
+research/astro-null/_vendor/
 research/pead-llm-gate/scripts/archive/_ict_cache/
 
 # Study stage exports: the trade table the paper's appendix is built from,
 # the equity curves, and batch progress. Regenerable from the cache by
 # re-running the stages -- run state, not source.
 research/pead-llm-gate/payload/
-
-# 2026-08-10 alpha-scan studies: vendored ephemeris/data libs and caches are
-# regenerable (pip --target, one Alpaca/yfinance fetch each); the notes are not.
-research/astro-null/_vendor/
-research/astro-null/cache/
-research/intraday-mft/cache/
-research/0dte-vrp/cache/
-research/factor-lab/cache/
-research/macro-drift/cache/
-research/open-window/cache/

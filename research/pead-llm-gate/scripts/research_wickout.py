@@ -65,7 +65,7 @@ import sys
 import time as _time
 from datetime import datetime, timedelta
 
-from _paths import BACKEND, NOTES, SCRIPTS
+from _paths import BACKEND, DATA, NOTES, SCRIPTS
 
 sys.path.insert(0, str(BACKEND))
 sys.path.insert(0, str(SCRIPTS))
@@ -365,8 +365,8 @@ def stage_rules(args) -> None:
                               lines)
     df_tape.assign(arm="tape").pipe(
         lambda a: pd.concat([a, df_full.assign(arm="full")])
-    ).to_csv(SCRIPTS / "wick_rules_grid.csv", index=False)
-    lines.append("full grid -> scripts/wick_rules_grid.csv")
+    ).to_csv(DATA / "wick_rules_grid.csv", index=False)
+    lines.append("full grid -> data/wick_rules_grid.csv")
     out = NOTES / f"wick_rules_{stamp()}.md"
     out.write_text("\n".join(lines) + "\n", encoding="utf-8")
     print(f"\nwrote {out}")
@@ -847,7 +847,7 @@ def stage_mrules(args) -> None:
              f"| {r['test_stress']:+.1f} | {r['win%']:.0f} "
              f"| {r['early%']:.0f} | {r['wick%']:.0f} | {r['dbp']:+.1f} |")
     tag = getattr(args, "sides", "tape")
-    df.to_csv(SCRIPTS / f"wick_mrules_{tag}.csv", index=False)
+    df.to_csv(DATA / f"wick_mrules_{tag}.csv", index=False)
     out = NOTES / f"wick_mrules_{tag}_{stamp()}.md"
     out.write_text("\n".join(lines) + "\n", encoding="utf-8")
     print(f"\nwrote {out}")
