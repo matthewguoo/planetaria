@@ -35,6 +35,19 @@ log = logging.getLogger("app.trade")
 TICK = 0.01
 
 
+def auction_submit_ok(now_utc: datetime | None = None) -> bool:
+    """Whether today's opening auction is still joinable. The broker's OPG
+    cutoff is 09:28 ET; between 09:28 and the close there is no auction
+    left to join today (evening submissions queue for tomorrow's, which is
+    a different trade and must be a deliberate one)."""
+    from zoneinfo import ZoneInfo
+
+    now = (now_utc or datetime.now(timezone.utc)).astimezone(
+        ZoneInfo("America/New_York"))
+    hm = now.hour * 60 + now.minute
+    return not (9 * 60 + 28 <= hm < 16 * 60)
+
+
 def round_tick(x: float) -> float:
     """Round to a cent, preserving sign (negative = net credit for MLEG
     orders per Alpaca semantics). Never returns exactly 0."""
@@ -312,6 +325,21 @@ class TradeService:
             for leg in legs:
                 if any(leg.get(k) is None for k in ("right", "strike", "expiry")):
                     raise ValueError("option legs require right/strike/expiry")
+        # AUCTION ENTRIES. A leg carrying auction="open" becomes a
+        # market-on-open order: the fill IS the opening print, which is the
+        # only fill some edges exist at. The engine's no-market-outside-RTH
+        # rule is about SILENT queuing; OPG queues to the auction by design
+        # and is refused here once today's cutoff has passed.
+        at_open = bool(legs and legs[0].get("auction") == "open")
+        if at_open:
+            if asset_class != "equity":
+                raise ValueError("auction=open entries are equity-only")
+            if extended_hours:
+                raise ValueError("auction=open and extended_hours are exclusive")
+            if not auction_submit_ok():
+                raise ValueError(
+                    "auction=open orders must reach the broker before "
+                    "09:28 ET — today's opening auction is not joinable")
         if abs(entry_limit) < TICK:
             raise ValueError("net premium must be at least one tick")
         if not bracketless and not (sl < entry_limit < tp):
@@ -524,10 +552,23 @@ class TradeService:
         legs = plan.legs
         client_order_id = f"{plan.id}-e"
         if plan.asset_class == "equity":
+            leg = legs[0]
+            if leg.get("auction") == "open":
+                # Market-on-open: the fill is the auction print itself.
+                # entry_limit on the plan is the sizing/journal estimate;
+                # the auction sets the price. place_trade refused this past
+                # the 09:28 ET cutoff, so it cannot silently queue a day.
+                request = MarketOrderRequest(
+                    symbol=leg["symbol"],
+                    qty=plan.qty * leg.get("ratio", 1),
+                    side=OrderSide.BUY if leg["side"] > 0 else OrderSide.SELL,
+                    time_in_force=TimeInForce.OPG,
+                    client_order_id=client_order_id,
+                )
+                return await self._submit_idempotent(request, client_order_id)
             # Shares: plain DAY limit; extended_hours puts it in the 24/5
             # book. NO position_intent — an options concept; equity orders
             # are accepted without it (verified 2026-08-04).
-            leg = legs[0]
             request = LimitOrderRequest(
                 symbol=leg["symbol"],
                 qty=plan.qty * leg.get("ratio", 1),

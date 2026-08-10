@@ -629,6 +629,42 @@ class MarketDataService:
             return None
         return max(0.0, (now_ms - newest) / 1000)
 
+    async def premarket_movers(self, top: int = 50) -> list[dict]:
+        """Top |%| movers vs the prior close from the broker's screener —
+        the candidate feed for open-auction strategies. Rows:
+        {symbol, pct, price, prior_close}. Empty when the screener is
+        unavailable on this tier; callers journal the gap rather than
+        guessing, and the movers screen is itself a coverage assumption the
+        pre-registration tracks."""
+        if not self.alpaca.configured:
+            return []
+        try:
+            from alpaca.data.historical.screener import ScreenerClient
+            from alpaca.data.requests import MarketMoversRequest
+
+            client = getattr(self, "_screener_client", None)
+            if client is None:
+                s = self.alpaca.settings
+                client = ScreenerClient(s.alpaca_api_key, s.alpaca_secret_key)
+                self._screener_client = client
+            res = await self.alpaca.call(
+                client.get_market_movers, MarketMoversRequest(top=int(top)),
+                timeout=10.0)
+        except Exception as exc:                              # noqa: BLE001
+            log.warning("premarket movers unavailable: %s", exc)
+            return []
+        out: list[dict] = []
+        for row in (list(getattr(res, "gainers", None) or [])
+                    + list(getattr(res, "losers", None) or [])):
+            price = float(getattr(row, "price", 0.0) or 0.0)
+            pct = float(getattr(row, "percent_change", 0.0) or 0.0) / 100.0
+            symbol = str(getattr(row, "symbol", "") or "").upper()
+            if price <= 0 or not symbol or pct <= -1:
+                continue
+            out.append({"symbol": symbol, "pct": pct, "price": price,
+                        "prior_close": price / (1 + pct)})
+        return out
+
     async def overnight_price(self, symbol: str) -> dict | None:
         """Entry-pricing quote for an equity symbol, overnight-aware.
 
