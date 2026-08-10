@@ -94,6 +94,23 @@ the exception). ~150/yr events at the 5% gate. Before instance: the
 slot-level account sim, then pre-registration. This is the first
 candidate the CURRENT account could run live with no billing change.
 
+## 3d. `pead_confirmed` — confirmed delayed entry (studied 2026-08-10)
+
+The wick-out study's actionable output (wickout_synthesis_20260810.md):
+delay the AMC entry from accept+15m to accept+75m (costs nothing — the
+first hour nets zero drift) and take only events whose first hour of SIP
+tape confirms the reaction (walk-forward GBM on retrace/VWAP/consistency
+features, or the poor-man's version: still holding >=X% of the move and
+above post-release VWAP). Tape sides, no LLM: gated +81-92bp/trade
+(t 3.3) on 48-61% taken vs +39 ungated, OOS 2019-26. Same study's exit
+verdicts apply fleet-wide: no narrow stops on event books ever (20% of
+dumb stop-outs are murdered winners); disaster insurance if wanted =
+dwell-10min-beyond--8% or RTH-only-8% (~free); take profit 10% fixed,
+never EM-multiples-from-entry. Before instance: year-by-year stability
+table, slot-level account sim, pre-registration; decide LLM stacking
+(the gate reads the tape, the flagship reads the filing — independent
+channels) only after the mechanical version has its own numbers.
+
 ## 4. NEEDS-STUDY shelf (do the study before any code)
 
 - **Single-name earnings 0DTE/weekly fly**: selling event vol on the
@@ -123,7 +140,7 @@ Mechanical, intraday to a few days, nothing slower. Running: fly-1
 (2h hold). In class: fly-2 (20min). Parked behind named gates, all
 in-horizon: gap_fade_short (intraday, shorts), mech_carry (overnight,
 regime), the flagship (T+1/T+3, the one LLM bet). Open studies in
-mandate: day-2 mechanical drift (RTH-only — no SIP gate), the 1DTE
-overnight fly, single-name earnings flies. Each $10k-allocated and
-breaker-bounded, every one pre-registered before its first live
-decision.
+mandate: day-2 mechanical drift (RTH-only — no SIP gate), confirmed
+delayed entry (§3d), the 1DTE overnight fly, single-name earnings flies.
+Each $10k-allocated and breaker-bounded, every one pre-registered before
+its first live decision.
