@@ -75,6 +75,7 @@ import pandas as pd  # noqa: E402
 # top level, so the old both-ways coupling is gone.
 from research_common import (  # noqa: E402
     CACHE,
+    write_note,
     COSTS_BP,
     ET,
     PATHS,
@@ -374,9 +375,7 @@ def stage_sweep(args) -> None:
               f"per-session exits, {COSTS_BP:.0f}bp round trip. Same-bar "
               f"bracket ties resolve to the stop; a bracket only exits if "
               f"touched before the horizon's close.", ""]
-    (DOC / f"holding_period_{stamp}.md").write_text(
-        "\n".join(header + lines) + "\n", encoding="utf-8")
-    print(f"\nwrote {DOC / f'holding_period_{stamp}.md'}")
+    write_note(DOC / f"holding_period_{stamp}.md", header + lines)
 
 
 def account(p: pd.DataFrame, ret: np.ndarray, horizon: np.ndarray,
@@ -836,9 +835,7 @@ def stage_best(args) -> None:
                      f"{a['max_dd_pct']:.1f}% | {a['sharpe']:.2f} | "
                      f"{a['alpha_pct']:+.2f}% | {a['beta']:.3f} | "
                      f"{a['avg_concurrent']:.1f} | {a['weight_pct']:.1f}% |")
-    (DOC / f"best_config_{stamp}.md").write_text("\n".join(lines) + "\n",
-                                                 encoding="utf-8")
-    print(f"\nwrote {DOC / f'best_config_{stamp}.md'}")
+    write_note(DOC / f"best_config_{stamp}.md", lines)
 
 
 # --------------------------------------------------------------- mutations
@@ -1096,9 +1093,7 @@ def stage_mutations(args) -> None:
               "stands down otherwise. Each mutation below spends the same "
               "verdicts differently. Chosen on nothing — every row is "
               "reported, including the failures.", ""]
-    doc = DOC / f"gate_mutations_{stamp}.md"
-    doc.write_text("\n".join(header + lines) + "\n", encoding="utf-8")
-    print(f"\nwrote {doc}")
+    write_note(DOC / f"gate_mutations_{stamp}.md", header + lines)
 
     out = pd.DataFrame([
         {"mutation": k, "trades": v[1][1]["n"],

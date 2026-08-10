@@ -92,6 +92,7 @@ from research_common import (  # noqa: E402
     paths_file,
 )
 from research_common import spy_daily as _spy_daily  # noqa: E402
+from research_common import write_note  # noqa: E402
 
 # Compatibility re-exports (F401 by design): callers grew up importing these
 # from this module, including scripts not yet in the tree's history.
@@ -1203,10 +1204,7 @@ def stage_score(args) -> None:
     spent = _spent_so_far()
     emit(f"measured API spend: ${spent:.2f}")
     stamp = datetime.now(ET).strftime("%Y%m%d_%H%M")
-    doc = (NOTES
-           / f"llm_contamination_{stamp}.md")
-    doc.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    print(f"\nwrote {doc}")
+    write_note(NOTES / f"llm_contamination_{stamp}.md", lines)
 
 
 def _identified(guess: str, symbol: str, company: str) -> bool:
@@ -1456,10 +1454,7 @@ def stage_arms(args) -> None:
     dict, so the note and the paper cannot disagree about a number."""
     data = compute_arms(args)
     stamp = datetime.now(ET).strftime("%Y%m%d_%H%M")
-    doc = (NOTES
-           / f"contamination_arms_{stamp}.md")
-    doc.write_text("\n".join(data["lines"]) + "\n", encoding="utf-8")
-    print(f"\nwrote {doc}")
+    write_note(NOTES / f"contamination_arms_{stamp}.md", data["lines"])
 
 
 STATUS_FILE = (PAYLOAD
