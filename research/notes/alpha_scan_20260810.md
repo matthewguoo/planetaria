@@ -149,3 +149,81 @@ is.
 Anti-queue (measured dead, do not revisit without new evidence): calendar/
 astro overlays; overnight-only retail baskets; GHLZ end-of-day momentum;
 ICT constructs; unconditional short-the-retail-open.
+
+---
+
+# Part 2, same night: candles, mean reversion, 0DTE
+
+Matthew clarified "chart astrology" meant the candle canon, and added mean
+reversion and the 0DTE study. Three more studies:
+
+| study | note |
+|---|---|
+| Candlestick patterns | `candle-null/notes/candles_20260810_0154.md` |
+| Reversal + gap fade | `mean-reversal/notes/reversal_20260810_0200.md` |
+| 0DTE ATM straddle | `0dte-vrp/notes/` (see below) |
+
+## 7. The candle canon, on 2.0M liquid symbol-days
+
+Dead to INVERTED, and the residue is one factor. With the entry a human
+could take (next open) and a same-universe baseline: hammer -4.4bp excess
+(t -1.9), bullish engulfing -6.3 (t -5.4), three white soldiers -2.8
+(t -2.1), three black crows -7.2 signed (t -4.1) — the continuation
+patterns point the WRONG way because liquid daily returns mean-revert.
+The only positive rows are both haramis (+3.4/+3.7, t ~3.5): "big move,
+then a pause -> fade the move," i.e. short-term reversal in a costume, at
+half the size of a round trip. Marshall-Young-Rose (2006) replicates on
+modern data, with the amusing upgrade that several patterns now carry
+statistically solid NEGATIVE information at sub-cost magnitudes.
+
+## 8. Mean reversion, measured as itself
+
+- Daily-turnover reversal (1d and 5d ranks, next-open entries): +0.6 to
+  +3.6bp/d gross, t <= 1.3, every net line negative at 6bp costs, weaker
+  2021-26. That spread is the market maker's paycheck, not ours.
+- Weekly form with honest stats (non-overlapping t, per-trade costs):
+  long-losers t 1.5, long-short t 0.2. The fat per-trade number was beta.
+- Cooper volume conditioning: gone entirely (+0.9bp both branches).
+- **The survivor: the opening gap fade.** Fade the cross-sectional gap
+  deciles open->close: L/S +10.5bp/d gross (t 3.7), monotone D1..D10
+  (+5.8 .. -4.7), alive in 2021-26 (+9.1, t 2.0). Net +4.5bp/d at 6bp
+  all-in, NEGATIVE at 13bp — an execution-bound edge that also needs the
+  gated short leg. Breakeven all-in cost ~10.5bp/round trip. Parked with
+  numbers; the long-gap-down side alone nets ~0. Corroborates (again)
+  that the retail open is rich and the day mean-reverts — same physics as
+  the earnings day-1 reversal and the Berkman prohibition.
+
+## 9. 0DTE ATM straddle (ingredient study)
+
+`0dte-vrp/notes/straddle_0dte_20260810_0202.md` — 634/635 sessions
+(2024-02..2026-08), OPRA minute bars on the paper keys, strikes and
+payoffs in RAW dollars (the basis rule applied forward).
+
+- **SPY is thin**: implied 0.51% vs delivered 0.48%; seller +3.2bp of
+  S/day gross (t 1.65), and the worst day (-597bp) eats ~6 months of
+  average P&L. Not a strategy on its own.
+- **QQQ still pays**: implied 0.69% vs delivered 0.62%; seller +6.4bp/day
+  (t 2.52), 66% win, gross Sharpe 1.59, and REMARKABLY stable by year
+  (+6.8 / +5.8 / +6.7 across 2024/2025/2026). Worst day -760bp.
+- **The clock matters more than the ticker**: selling the remaining
+  straddle at 14:00 (SPY t 2.79, QQQ t 3.62) or 15:30 (t 3.76 / 3.92,
+  +2.9 / +3.8bp for THIRTY MINUTES of exposure) is far more reliable per
+  unit time — the morning owns the tail, the last 90 minutes own the
+  dependable decay.
+- Reality adjustments before anyone gets excited: 2.5 years, no 2022-style
+  regime in sample; gross of ~0.5-1bp spread friction; naked short calls
+  are broker-refused and short puts are cash-secured (~$70k/set), so the
+  implementable form is DEFINED-RISK (condor/fly) whose edge is this
+  ingredient minus wing costs. The next study is the structure sweep:
+  wings at fixed deltas, entries at 14:00/15:30, QQQ first — and its base
+  rate is now measured instead of imagined.
+
+## Revised queue after part 2
+
+The part-1 queue stands, with one addition at the top of the options
+track: **the 0DTE afternoon-decay structure sweep on QQQ** (ingredient
+confirmed, t 3.6-3.9 on the afternoon entries, defined-risk only). The
+gap fade joins the "parked, execution-bound" shelf (worth revisiting the
+day all-in auction costs are measured under ~8bp and shorts are on).
+Candles join the anti-queue as measured — with the note that their
+inversions are just the reversal factor, already covered above.
