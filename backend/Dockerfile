@@ -1,9 +1,13 @@
-FROM python:3.12-slim
+# 3.13 to match the dev venv and ruff's target-version — the container ran
+# a different interpreter than every test that ever gated a commit.
+FROM python:3.13-slim
 
 WORKDIR /app
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Exact pins from the venv the tests run on; requirements.txt stays the
+# human-readable intent.
+COPY requirements.lock.txt .
+RUN pip install --no-cache-dir -r requirements.lock.txt
 
 COPY . .
 

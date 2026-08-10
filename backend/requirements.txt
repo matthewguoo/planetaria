@@ -7,8 +7,6 @@ redis>=5.0.0
 asyncpg>=0.29.0
 sqlalchemy[asyncio]>=2.0.30
 alembic>=1.13.0
-numpy>=2.0.0
-scipy>=1.14.0
 apscheduler>=3.10.0
 python-dotenv>=1.0.0
 pydantic>=2.7.0
@@ -19,3 +17,17 @@ pytest>=8.2.0
 pytest-asyncio>=0.23.0
 aiosqlite>=0.20.0
 ruff>=0.6.0
+
+# --- research/ ---------------------------------------------------------
+# The studies run on this same venv (research/README.md invokes
+# backend/.venv explicitly). app/ imports none of these — the runner even
+# says "plain python on purpose" — but a venv rebuilt without them breaks
+# every research script, which is exactly what a fresh install from this
+# file used to do: pandas and pyarrow were installed by hand and declared
+# nowhere. Exact working versions are in requirements.lock.txt; the paper's
+# byte-identical rebuild gate depends on them not drifting silently.
+numpy>=2.0.0
+scipy>=1.14.0
+pandas>=3.0.0
+pyarrow>=25.0.0          # pandas' parquet engine; never imported directly
+scikit-learn>=1.5.0      # research_wickout, research_chart_score
