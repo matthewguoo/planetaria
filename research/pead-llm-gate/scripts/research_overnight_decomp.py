@@ -615,13 +615,103 @@ def stage_day2(args) -> None:
     print(f"\nwrote {out}")
 
 
+def stage_day2sim(args) -> None:
+    """day2_pop through an account: UP >= gate events, long the T+2 session
+    open->close, N slots equal weight, capital free every night (the trade
+    is intraday). The Sharpe question is really an occupancy question —
+    ~150 events/yr means most sessions hold zero or one position, and idle
+    capital dilutes the daily series."""
+    panel = load_ohlc()
+    raw = load_raw()
+    evs = [pd.read_parquet(p) for p in sorted(CACHE.glob("events_v2_*.parquet"))]
+    ev = pd.concat(evs, ignore_index=True).drop_duplicates(subset=["symbol", "date"])
+    ev = attach_legs(ev, panel)
+    ct_raw = np.full(len(ev), np.nan)
+    sym = ev["symbol"].to_numpy()
+    dat = ev["date"].astype(str).to_numpy()
+    t2_date = np.full(len(ev), "", dtype=object)
+    for i in range(len(ev)):
+        got = raw.get(sym[i])
+        if got is None:
+            continue
+        dates, _o, c = got
+        j = np.searchsorted(dates, dat[i], side="right")
+        if j - 1 >= 0 and dates[j - 1] == dat[i]:
+            ct_raw[i] = c[j - 1]
+        if j + 1 < len(dates):
+            t2_date[i] = dates[j + 1]
+    ev["ct_raw"] = ct_raw
+    ev["t2"] = t2_date
+    ok = (np.isfinite(ev["ct_raw"]) & np.isfinite(ev["O2"])
+          & np.isfinite(ev["C2"]) & (ev["dv_prior"] >= MIN_DV)
+          & (ev["ct_raw"] >= MIN_PRICE) & (ev["t2"] != ""))
+    ev = ev[ok].reset_index(drop=True)
+    ev["move_true"] = (ev["react"] / ev["ct_raw"] - 1) * 100
+    ev["ret"] = (ev["C2"] / ev["O2"] - 1) - 6.0 / 1e4   # long, net 6bp
+    ev["dv_rank"] = ev.groupby("date")["dv_prior"].rank(ascending=False)
+
+    spy = pd.read_parquet(CACHE / "bench_SPY_2016-01-13_2026-08-06.parquet")
+    sessions = sorted(spy["date"].astype(str))
+    s_index = {d: i for i, d in enumerate(sessions)}
+
+    lines: list[str] = []
+
+    def emit(t=""):
+        print(t)
+        lines.append(t)
+
+    emit(f"# day2_pop account sim — {STAMP}")
+    emit()
+    emit("UP events, long T+2 open->close, equal-weight slots, net 6bp per "
+         "trade. Capital is deployed only on sessions with events — the "
+         "daily series includes every flat day, so the Sharpe is the "
+         "account's, not the trade's.")
+    emit()
+    emit("| gate | slots | trades | taken | avg/day | ann ret % | ann vol % | Sharpe | maxDD % | worst day % |")
+    emit("|---|---|---|---|---|---|---|---|---|---|")
+    for gate in (5.0, 10.0):
+        for slots in (2, 4):
+            up = ev[(ev["move_true"] >= gate)].copy()
+            up = up.sort_values(["t2", "dv_rank"])
+            daily = np.zeros(len(sessions))
+            taken = 0
+            for d, g in up.groupby("t2"):
+                i = s_index.get(str(d))
+                if i is None:
+                    continue
+                g = g.head(slots)
+                taken += len(g)
+                daily[i] += g["ret"].mean() * min(len(g), slots) / slots
+            eq = np.cumprod(1 + daily)
+            years = len(sessions) / 252
+            ann = eq[-1] ** (1 / years) - 1
+            vol = daily.std(ddof=1) * np.sqrt(252)
+            sharpe = daily.mean() / daily.std(ddof=1) * np.sqrt(252)
+            mdd = float((1 - eq / np.maximum.accumulate(eq)).max())
+            emit(f"| {gate:g}% | {slots} | {len(up)} | {taken} "
+                 f"| {taken / len(sessions):.2f} | {ann * 100:+.1f} "
+                 f"| {vol * 100:.1f} | {sharpe:.2f} | {mdd * 100:.1f} "
+                 f"| {daily.min() * 100:+.1f} |")
+    emit()
+    emit("Read the Sharpe against the occupancy: the per-trade t is 3.2, "
+         "but ~0.6 trades/day means the account is idle most sessions. "
+         "This sleeve's value is that its risk-hours (T+2 RTH) are free "
+         "capital-wise beside the evening strategies and the 14:00 fly.")
+
+    out = NOTES / f"day2_sim_{STAMP}.md"
+    out.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    print(f"\nwrote {out}")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("stage", choices=["mech", "flagship", "mech2", "day2"])
+    ap.add_argument("stage", choices=["mech", "flagship", "mech2", "day2",
+                                      "day2sim"])
     ap.add_argument("--effort", default="medium")
     args = ap.parse_args()
     {"mech": stage_mech, "flagship": stage_flagship,
-     "mech2": stage_mech2, "day2": stage_day2}[args.stage](args)
+     "mech2": stage_mech2, "day2": stage_day2,
+     "day2sim": stage_day2sim}[args.stage](args)
 
 
 if __name__ == "__main__":
