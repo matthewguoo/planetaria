@@ -14,7 +14,6 @@ Run: python scripts/research_mech_account.py
 from __future__ import annotations
 
 import sys
-from datetime import datetime
 
 import numpy as np
 import pandas as pd
@@ -23,7 +22,7 @@ from _paths import CACHE, NOTES, SCRIPTS
 
 sys.path.insert(0, str(SCRIPTS))
 
-from research_common import ET, stamp, write_note  # noqa: E402
+from research_common import stamp, write_note  # noqa: E402
 from research_overnight_decomp import (  # noqa: E402
     MIN_DV,
     MIN_PRICE,
