@@ -61,6 +61,20 @@ not as a headline. Gate: `equity_long_only` off + per-symbol ETB checks +
 measured auction execution under ~8bp all-in. Pass two of the bleed study
 (minute-bar hold curve) sets the exit clock first.
 
+## 3b. `factor_combo` — the slow sleeve (STUDIED 2026-08-10: PROMISING)
+
+Multi-factor long-only across the monthly top-500 (value + book +
+quality + momentum percentile ranks, top 50 equal-weight, monthly,
+point-in-time EDGAR fundamentals): **+21.4%/yr net, Sharpe 1.06, maxDD
+22.5%, stable across halves (1.07/1.05)** vs SPY +15.0%/0.96 and vs its
+own equal-weight-universe control +13.1%/0.73 — the edge is selection
+(+8.3%/yr over EW), not the EW tilt. The breadth product one person
+cannot run by hand, and the ex-div execution overlay's natural customer
+(research/exdiv/: +3-4bp per ex-date crossing, free at rebalance).
+Before build: sector-tilt x-ray, drawdown-path read on daily data, and
+a pre-registration. Single factors do NOT earn seats alone (all <= 0.85
+Sharpe vs SPY 0.96).
+
 ## 4. NEEDS-STUDY shelf (do the study before any code)
 
 - **1DTE overnight fly**: does the QQQ premium pay for holding the

@@ -16,6 +16,9 @@ the reason the trees are separate rather than adjacent.
 | `candle-null/` | The retail candle canon on 2M liquid symbol-days. Dead to inverted. 2026-08-10. |
 | `mean-reversal/` | 1d/5d reversal and the gap fade, costed honestly. One survivor, parked. 2026-08-10. |
 | `0dte-vrp/` | 0DTE ATM straddle, implied vs delivered, 2024-02+. QQQ afternoons still pay. 2026-08-10. |
+| `factor-lab/` | Point-in-time fundamentals across the top-500, auto-rebalanced. Combo beats; singles don't. 2026-08-10. |
+| `exdiv/` | Ex-dividend seams from the raw/adjusted panel pair. Real premium, overlay-sized. 2026-08-10. |
+| `macro-drift/` | Post-FOMC/CPI continuation. Dead. 2026-08-10. |
 | `notes/` | Research that belongs to no single study (overnight alpha, the latency band, the 2026-08-10 alpha scan). |
 
 The two LLM studies are deliberately built on the same statistic — a gate
