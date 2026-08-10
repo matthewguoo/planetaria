@@ -66,6 +66,7 @@ async def test_up_move_carries_to_the_open():
     strat, ctx, runner = make(px=104.0)          # +4% vs px0 100
     await strat._decide_text("NVDA", "", (), "edgar-8k", ctx)
     (note,) = runner.notes
+    assert len(runner.intents) == 1      # note-mode submits (sim routing)
     d = note["would_trade"]
     assert d["side"] == 1 and d["move_pct"] == 4.0
     exit_et = datetime.fromisoformat(

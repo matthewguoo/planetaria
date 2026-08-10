@@ -28,7 +28,7 @@ from app.models.strategies import (
     validate_allocation,
     validate_breaker,
 )
-from app.models.trade import OPEN_STATUSES, TradePlan
+from app.models.trade import OPEN_STATUSES, SIM_CLOSED, SIM_OPEN, TradePlan, utcnow
 from app.services.llm import LLMAnalyst
 from app.services.signals.events import EventBus
 from app.services.signals.store import SignalStore
@@ -200,6 +200,8 @@ class StrategyRunner:
                               row.name, row.kind)
                     continue
                 await self._spawn(row)
+        self._sim_task = asyncio.create_task(
+            supervise("sim-exits", self._sim_exit_loop), name="sim-exits")
         log.info("strategy runner up: %d enabled of %d instances",
                  len(self._running), len(rows))
 
@@ -389,7 +391,10 @@ class StrategyRunner:
         closed, failed = 0, []
         for plan in plans:
             try:
-                await self.trade.enforcer.manual_close(plan.id)
+                if plan.status == SIM_OPEN:
+                    await self._sim_close(plan.id, why="flatten")
+                else:
+                    await self.trade.enforcer.manual_close(plan.id)
                 closed += 1
             except Exception as exc:
                 failed.append({"plan_id": plan.id, "error": str(exc)})
@@ -446,14 +451,16 @@ class StrategyRunner:
                         "skip", f"stale events: newest signal is {age:.0f}s old "
                                 f"(max {intent.max_event_age_s:.0f}s)")
 
-        # Dedupe across restarts/replays: one 'placed' per key, ever.
+        # Dedupe across restarts/replays: one placement per key, ever —
+        # simulated placements count, or a live flip mid-day would re-trade
+        # everything the sim book already holds.
         if intent.dedupe_key:
             async with self.db.session() as session:
                 dup = await session.scalar(
                     select(StrategyDecisionRow.id).where(
                         StrategyDecisionRow.strategy_id == row_id,
                         StrategyDecisionRow.dedupe_key == intent.dedupe_key,
-                        StrategyDecisionRow.action == "placed",
+                        StrategyDecisionRow.action.in_(("placed", "placed_sim")),
                     )
                 )
             if dup is not None:
@@ -531,6 +538,23 @@ class StrategyRunner:
             "reason": intent.reason, "payload": payload,
         }, dedupe_key=intent.dedupe_key, signal_ids=signal_ids)
 
+        # SELF-PAPER. live=false, formalized: the same intent that just
+        # passed every guard becomes a SIMULATED plan filled conservatively
+        # against the live book (longs at the ask, shorts at the bid,
+        # options at leg mids) instead of an order. It occupies the
+        # strategy's allocation, counts against its breaker, and shows in
+        # PERFORMANCE and the FUND page under its sim status — the
+        # before-paper paper test. Only the broker is missing.
+        if not bool((params or {}).get("live", True)):
+            plan_dict = await self._place_sim(row_id, name, intent)
+            await self._journal(row_id, "placed_sim", detail={
+                "reason": intent.reason,
+                "entry_fill": plan_dict["entry_fill"],
+                "fill_src": plan_dict["fill_src"],
+            }, dedupe_key=intent.dedupe_key, plan_id=plan_dict["id"],
+                signal_ids=signal_ids)
+            return plan_dict
+
         try:
             result = await self.trade.place_trade(payload)
         except ValueError as exc:  # global risk refusal
@@ -545,6 +569,112 @@ class StrategyRunner:
                             dedupe_key=intent.dedupe_key,
                             plan_id=result.get("id"), signal_ids=signal_ids)
         return result
+
+    # ---------------------------------------------------------- self-paper
+
+    def _sim_fill(self, legs: list[dict], asset_class: str,
+                  fallback_signed: float, entering: bool) -> tuple[float, str]:
+        """Conservative signed fill against the live book. Equity: cross the
+        spread on the side that hurts (enter long at the ask, exit long at
+        the bid; mirrored for shorts). Options: the structure at leg mids —
+        the study's own basis. No usable quote falls back to the intent's
+        price with the provenance journaled, never silently."""
+        if asset_class == "equity":
+            leg = legs[0]
+            side = int(leg.get("side", 1))
+            quote = (self.market.latest_quote(leg["symbol"])
+                     if self.market else None) or {}
+            bid = float(quote.get("bid") or 0.0)
+            ask = float(quote.get("ask") or 0.0)
+            if bid > 0 and ask >= bid:
+                px = ask if (side > 0) == entering else bid
+                return side * px, "quote"
+            return fallback_signed, "intent-fallback"
+        total, live = 0.0, 0
+        for leg in legs:
+            quote = (self.market.latest_quote(leg["symbol"])
+                     if self.market else None) or {}
+            bid = float(quote.get("bid") or 0.0)
+            ask = float(quote.get("ask") or 0.0)
+            if bid > 0 and ask >= bid:
+                total += int(leg.get("side", 1)) * (bid + ask) / 2 \
+                    * int(leg.get("ratio", 1))
+                live += 1
+            else:
+                total += int(leg.get("side", 1)) \
+                    * float(leg.get("entry") or 0.0) * int(leg.get("ratio", 1))
+        return total, ("mids" if live == len(legs) else
+                       f"mids+{len(legs) - live}stale")
+
+    async def _place_sim(self, row_id: str, name: str,
+                         intent: TradeIntent) -> dict:
+        fill, src = self._sim_fill(intent.legs, intent.asset_class,
+                                   intent.entry_limit, entering=True)
+        plan = TradePlan(
+            underlying=intent.underlying.upper(),
+            strategy=name[:24],
+            strategy_id=row_id,
+            account=getattr(self.settings, "alpaca_account_name", None),
+            asset_class=intent.asset_class,
+            extended_hours=intent.extended_hours,
+            legs=intent.legs,
+            qty=intent.qty,
+            entry_limit=round(fill, 4),
+            tp_premium=intent.tp,
+            sl_premium=intent.sl,
+            time_stop_utc=intent.time_stop_utc,
+            status=SIM_OPEN,
+        )
+        async with self.db.session() as session:
+            session.add(plan)
+            await session.commit()
+            await session.refresh(plan)
+        return {"id": plan.id, "simulated": True,
+                "entry_fill": round(fill, 4), "fill_src": src,
+                "status": SIM_OPEN}
+
+    async def _sim_close(self, plan_id: str, why: str = "time stop") -> None:
+        async with self.db.session() as session:
+            plan = await session.get(TradePlan, plan_id)
+            if plan is None or plan.status != SIM_OPEN:
+                return
+            exit_signed, src = self._sim_fill(
+                plan.legs or [], plan.asset_class,
+                float(plan.entry_limit or 0.0), entering=False)
+            mult = 100 if plan.asset_class == "option" else 1
+            realized = (exit_signed - float(plan.entry_limit or 0.0)) \
+                * (plan.qty or 0) * mult
+            plan.realized_pnl = round(realized, 2)
+            plan.status = SIM_CLOSED
+            strategy_id = plan.strategy_id
+            await session.commit()
+        if strategy_id:
+            await self._journal(strategy_id, "sim_exit", detail={
+                "plan_id": plan_id, "why": why,
+                "exit_fill": round(exit_signed, 4), "fill_src": src,
+                "realized_pnl": round(realized, 2),
+            }, plan_id=plan_id)
+
+    async def _sim_exit_loop(self, interval_s: float = 20.0) -> None:
+        """The sim book's exit enforcer: time stops fire against the live
+        quote, conservatively, on the same clock discipline the real
+        enforcer keeps. tp/sl thresholds are not simulated in v1 — every
+        fund strategy is time-stop-only, and pretending to know intrabar
+        touch order without the tape would be the bad kind of simulation."""
+        while True:
+            await asyncio.sleep(interval_s)
+            try:
+                now = utcnow()
+                async with self.db.session() as session:
+                    due = list(await session.scalars(
+                        select(TradePlan.id).where(
+                            TradePlan.status == SIM_OPEN,
+                            TradePlan.time_stop_utc <= now,
+                        )))
+                for plan_id in due:
+                    await self._sim_close(plan_id)
+            except Exception:                                 # noqa: BLE001
+                log.exception("sim exit sweep failed")
 
     async def execute_analysis(self, row_id: str, *, parent_signal_ids=(), **kwargs):
         """ctx.analyze() lands here: resolve the instance name for the
@@ -668,7 +798,8 @@ class StrategyRunner:
 
         unrealized = 0.0
         for plan in plans:
-            if plan.status not in OPEN_STATUSES or plan.realized_pnl is not None:
+            if (plan.status not in OPEN_STATUSES and plan.status != SIM_OPEN) \
+                    or plan.realized_pnl is not None:
                 continue
             mark = None
             if self.market is not None:
@@ -776,12 +907,19 @@ class StrategyRunner:
 
     # ------------------------------------------------------------ queries
 
-    async def _open_plans(self, strategy_id: str) -> list[TradePlan]:
+    async def _open_plans(self, strategy_id: str,
+                          include_sim: bool = True) -> list[TradePlan]:
+        """Open plans, sim book included by default — occupancy and the
+        breaker treat simulated positions as real, which is what makes
+        note-mode a test instead of a diary. Pass include_sim=False for
+        broker-facing paths (there are none in this class; flatten splits
+        the two itself)."""
+        statuses = OPEN_STATUSES | ({SIM_OPEN} if include_sim else set())
         async with self.db.session() as session:
             return list(await session.scalars(
                 select(TradePlan).where(
                     TradePlan.strategy_id == strategy_id,
-                    TradePlan.status.in_(OPEN_STATUSES),
+                    TradePlan.status.in_(statuses),
                 )
             ))
 
@@ -910,27 +1048,30 @@ class StrategyRunner:
                 plans = list(await session.scalars(
                     select(TradePlan).where(
                         TradePlan.strategy_id == inst["id"],
-                        TradePlan.status.in_(OPEN_STATUSES))))
+                        TradePlan.status.in_(OPEN_STATUSES | {SIM_OPEN}))))
             positions = []
             for p in plans:
                 is_option = bool(p.legs and p.legs[0].get("right"))
+                is_sim = p.status == SIM_OPEN
                 if is_option:
                     held, fatal = options_required_capital(
                         p.legs, p.qty or 0, p.entry_limit or 0.0)
                     premium = (p.entry_limit or 0.0) * 100 * (p.qty or 0)
                     margin = abs(premium) if fatal else max(held, abs(premium))
-                    opt_margin += margin
-                    opt_premium += premium
+                    if not is_sim:        # account exposure is REAL money
+                        opt_margin += margin
+                        opt_premium += premium
                     exposure = None       # no greeks in the console — margin
                 else:                     # is the honest number for options
                     exposure = (p.entry_limit or 0.0) * (p.qty or 0)
-                    sym = p.underlying
-                    underl_net[sym] = underl_net.get(sym, 0.0) + exposure
-                    underl_gross[sym] = underl_gross.get(sym, 0.0) + abs(exposure)
-                    if exposure >= 0:
-                        gross_long += exposure
-                    else:
-                        gross_short += -exposure
+                    if not is_sim:
+                        sym = p.underlying
+                        underl_net[sym] = underl_net.get(sym, 0.0) + exposure
+                        underl_gross[sym] = underl_gross.get(sym, 0.0) + abs(exposure)
+                        if exposure >= 0:
+                            gross_long += exposure
+                        else:
+                            gross_short += -exposure
                     margin = abs(exposure)
                 positions.append({
                     "plan_id": p.id, "underlying": p.underlying,
@@ -1012,7 +1153,8 @@ class StrategyRunner:
         losses = [p.realized_pnl for p in closed if p.realized_pnl <= 0]
         return {
             "name": row.name,
-            "open": sum(1 for p in plans if p.status in OPEN_STATUSES),
+            "open": sum(1 for p in plans
+                        if p.status in OPEN_STATUSES or p.status == SIM_OPEN),
             "closed": len(closed),
             "win_rate": round(len(wins) / len(closed), 3) if closed else None,
             "realized_pnl": round(sum(p.realized_pnl for p in closed), 2),

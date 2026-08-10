@@ -83,7 +83,8 @@ async def test_failed_gap_down_goes_long_at_the_auction():
     q = note["would_trade"]
     assert q["side"] == 1 and q["qty"] == int(2500 // 97.3)
     assert q["turn_bp"] >= 20 and q["gap_pct"] <= -1.5
-    assert not runner.intents                     # note-mode places nothing
+    (intent,) = runner.intents           # note-mode submits (sim routing)
+    assert intent.legs[0]["auction"] == "open"
 
 
 @pytest.mark.asyncio

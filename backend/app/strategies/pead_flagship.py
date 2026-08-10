@@ -547,10 +547,13 @@ class PeadFlagship(Strategy):
                               provenance)
         detail["intent"] = _intent_dict(intent)
         record = {**detail, "side": side}
-        if not bool(ctx.params["live"]):
-            await ctx.note({"would_trade": record}, signal_ids=provenance)
-            return
-        await ctx.note({"decision": record}, signal_ids=provenance)
+        # live and note-mode take the SAME path from here: ctx.submit routes
+        # by the live param — real order or a simulated fill against the
+        # live book (the runner's self-paper tier). The note keeps its
+        # historical key so journals read the mode at a glance.
+        await ctx.note(
+            {("decision" if bool(ctx.params["live"]) else "would_trade"): record},
+            signal_ids=provenance)
         await ctx.submit(intent)
         ctx.log.info("pead_flagship %s %s @ %.2f (%+.2f%% tape, %s, T+%d, %s)",
                      "long" if side > 0 else "short", sym, px, move_pct,

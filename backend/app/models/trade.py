@@ -38,6 +38,17 @@ def as_utc(dt: datetime | None) -> datetime | None:
 TERMINAL_STATUSES = {"closed", "cancelled", "rejected"}
 OPEN_STATUSES = {"planned", "submitted", "partially_filled", "filled", "exiting"}
 
+# SELF-PAPER. Simulated plans — note-mode intents filled against the live
+# book, no broker anywhere. They carry their OWN statuses so that every
+# broker-facing consumer (the exit enforcer, order reconciliation, external
+# capture, global risk's open_plans) ignores them BY CONSTRUCTION: those all
+# filter on OPEN_STATUSES and never learn these strings. Opting the sim book
+# IN — allocation occupancy, the strategy breaker, performance, the fund
+# page — is each reader's explicit choice.
+SIM_OPEN = "sim_open"
+SIM_CLOSED = "sim_closed"
+SIM_STATUSES = {SIM_OPEN, SIM_CLOSED}
+
 
 class TradePlan(Base):
     __tablename__ = "trade_plans"

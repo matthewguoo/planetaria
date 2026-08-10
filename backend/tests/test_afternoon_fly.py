@@ -89,7 +89,10 @@ def tick(now_et, session="rth"):
 async def test_note_mode_builds_the_measured_structure():
     ctx, runner, market = make_ctx(default_quotes(MONDAY_2PM.date()))
     await AfternoonFly().on_event(tick(MONDAY_2PM), ctx)
-    assert not runner.intents                      # live: false places nothing
+    # note-mode submits too: the runner routes live=false to a simulated
+    # fill (the self-paper tier); the note keeps the would_trade key.
+    (intent,) = runner.intents
+    assert intent.qty == 10 and intent.tp is None
     (note,) = runner.notes
     d = note["would_trade"]
     assert d["strike"] == 560 and d["width"] == 6

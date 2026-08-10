@@ -254,10 +254,13 @@ class GapFailFade(Strategy):
                 max_event_age_s=1200.0,
             )
             record = {**q, "qty": qty}
-            if dry or not bool(p["live"]):
-                await ctx.note({"would_trade": record, **detail})
+            if dry:
+                # Manual scans are diagnostics, not decisions — they never
+                # reach submit, live or simulated.
+                await ctx.note({"dry_run": record, **detail})
                 continue
-            await ctx.note({"decision": record})
+            await ctx.note(
+                {("decision" if bool(p["live"]) else "would_trade"): record})
             await ctx.submit(intent)
             ctx.log.info("gap_fail_fade %s %s x%d (gap %+0.2f%%, turn %+0.0fbp)",
                          "long" if q["side"] > 0 else "short", q["symbol"],

@@ -231,10 +231,8 @@ class AfternoonFly(Strategy):
                    f"x{sets}",
             dedupe_key=f"fly:{underlying}:{key}",
         )
-        if not bool(p["live"]):
-            await ctx.note({"would_trade": detail})
-            return
-        await ctx.note({"decision": detail})
+        await ctx.note(
+            {("decision" if bool(p["live"]) else "would_trade"): detail})
         await ctx.submit(intent)
         ctx.log.info("afternoon_fly %s K=%g w=%g x%d credit %.2f",
                      underlying, strike, width, sets, -credit)

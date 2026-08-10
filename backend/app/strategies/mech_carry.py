@@ -123,11 +123,9 @@ class MechCarry(PeadFlagship):
         intent.reason = f"mech carry long {sym}, exit next open"
         intent.dedupe_key = f"mcarry:{sym}:{self._watch_date}"
         detail["intent"] = _intent_dict(intent)
-        if not bool(ctx.params["live"]):
-            await ctx.note({"would_trade": {**detail, "side": 1}},
-                           signal_ids=event_ids)
-            return
-        await ctx.note({"decision": {**detail, "side": 1}},
-                       signal_ids=event_ids)
+        await ctx.note(
+            {("decision" if bool(ctx.params["live"]) else "would_trade"):
+             {**detail, "side": 1}},
+            signal_ids=event_ids)
         await ctx.submit(intent)
         ctx.log.info("mech_carry long %s @ %.2f (%+.2f%%)", sym, px, move_pct)
