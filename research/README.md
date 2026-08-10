@@ -13,6 +13,9 @@ the reason the trees are separate rather than adjacent.
 | `tug-of-war/` | Night vs day returns by retailness decile. Premium confirmed, trade dominated. 2026-08-10. |
 | `astro-null/` | The planetaria null battery: 17 calendar/astro partitions on SPY, 1993-2026. All null. 2026-08-10. |
 | `intraday-mft/` | GHLZ first→last half-hour momentum, post-publication. Dead. 2026-08-10. |
+| `candle-null/` | The retail candle canon on 2M liquid symbol-days. Dead to inverted. 2026-08-10. |
+| `mean-reversal/` | 1d/5d reversal and the gap fade, costed honestly. One survivor, parked. 2026-08-10. |
+| `0dte-vrp/` | 0DTE ATM straddle, implied vs delivered, 2024-02+. QQQ afternoons still pay. 2026-08-10. |
 | `notes/` | Research that belongs to no single study (overnight alpha, the latency band, the 2026-08-10 alpha scan). |
 
 The two LLM studies are deliberately built on the same statistic — a gate
