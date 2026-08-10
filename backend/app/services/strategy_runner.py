@@ -44,6 +44,65 @@ log = logging.getLogger("app.strategy")
 INSTANCE_QUEUE_SIZE = 256
 
 
+def options_required_capital(legs: list[dict], qty: int,
+                             entry_limit: float) -> tuple[float, str | None]:
+    """Capital the broker actually HOLDS for an options structure, plus a
+    hard refusal when the structure is unfundable inside a fleet allocation.
+
+    The engine's cost checks are premium-based, which is right for debit
+    structures and catastrophically wrong for short collateral: an uncovered
+    short put is CASH-SECURED at this account level — ~strike x 100 per set
+    (verified 2026-07-29: ~$70,087 held for one 700P against a ~$500
+    premium). A $10k-allocated strategy that prices that trade at its
+    premium commits the whole account's cash without ever exceeding its
+    allocation on paper. This function prices what is held.
+
+    Rules, per contract set, deliberately conservative (a covered pair is
+    counted at its strike width even when the pair is a net-debit vertical
+    whose true max loss is smaller — the guard may overcount, it must never
+    undercount):
+
+      uncovered short call  -> refusal (the broker rejects it anyway;
+                               refuse here with the fix in the message)
+      uncovered short put   -> strike x 100 collateral
+      covered short         -> |short strike - long strike| x 100, longs
+                               paired nearest-first within the same right
+      net-debit structure   -> plus the debit itself
+
+    Returns (required_dollars_total, fatal_reason_or_None).
+    """
+    shorts: dict[str, list[float]] = {"C": [], "P": []}
+    longs: dict[str, list[float]] = {"C": [], "P": []}
+    for leg in legs or []:
+        right = leg.get("right")
+        if right not in ("C", "P"):
+            return 0.0, f"option leg without a right: {leg.get('symbol', leg)!r}"
+        strike = float(leg.get("strike") or 0.0)
+        if strike <= 0:
+            return 0.0, f"option leg without a strike: {leg.get('symbol', leg)!r}"
+        bucket = shorts if int(leg.get("side", 0)) < 0 else longs
+        for _ in range(int(leg.get("ratio", 1))):
+            bucket[right].append(strike)
+    per_set = 0.0
+    for right in ("C", "P"):
+        available = sorted(longs[right])
+        for k_short in sorted(shorts[right]):
+            if not available:
+                if right == "C":
+                    return 0.0, (
+                        "uncovered short call: unplaceable at this account "
+                        "level — add a long call wing (defined-risk only "
+                        "inside a strategy allocation)")
+                per_set += k_short * 100.0        # cash-secured put
+                continue
+            j = min(range(len(available)),
+                    key=lambda i: abs(available[i] - k_short))
+            per_set += abs(available.pop(j) - k_short) * 100.0
+    if entry_limit > 0:                            # signed: positive = debit
+        per_set += entry_limit * 100.0
+    return per_set * max(int(qty), 0), None
+
+
 @dataclass
 class _Running:
     row_id: str
@@ -351,6 +410,17 @@ class StrategyRunner:
         multiplier = 1 if intent.asset_class == "equity" else 100
         notional = abs(intent.entry_limit) * multiplier * intent.qty
 
+        # OPTIONS COLLATERAL. Premium notional understates what the broker
+        # holds for short legs (an uncovered put is cash-secured at ~strike
+        # x 100). Price the held capital, refuse unplaceable shapes early.
+        required = notional
+        if intent.asset_class == "option":
+            held, fatal = options_required_capital(
+                intent.legs, intent.qty, intent.entry_limit)
+            if fatal:
+                raise await refuse("rejected", f"options structure: {fatal}")
+            required = max(required, held)
+
         # CIRCUIT BREAKER, checked before the trade rather than only on the
         # loop: a strategy that has just blown through its drawdown limit must
         # not get one more position in before the next sweep notices.
@@ -370,10 +440,12 @@ class StrategyRunner:
         # trade if it sized past it anyway. Layered under the global guards —
         # all of them must pass.
         alloc = await self.allocation_state(row_id)
-        if notional > alloc["available"] + 0.01:
+        if required > alloc["available"] + 0.01:
+            what = (f"${required:,.0f} of collateral"
+                    if required > notional else f"${required:,.0f}")
             raise await refuse(
                 "rejected",
-                f"allocation: ${notional:,.0f} exceeds ${alloc['available']:,.0f} "
+                f"allocation: {what} exceeds ${alloc['available']:,.0f} "
                 f"left of this strategy's ${alloc['allocated']:,.0f} "
                 f"({alloc['allocation']['value']:g}"
                 f"{'%' if alloc['allocation']['mode'] == 'pct' else ' USD'}"
@@ -464,8 +536,17 @@ class StrategyRunner:
         deployed = 0.0
         if row is not None:
             for plan in await self._open_plans(row.name):
-                multiplier = 100 if (plan.legs and plan.legs[0].get("right")) else 1
-                deployed += abs(plan.entry_limit or 0.0) * multiplier * (plan.qty or 0)
+                if plan.legs and plan.legs[0].get("right"):
+                    # Options claim the capital the broker HOLDS (collateral
+                    # / defined-risk width), not the premium that changed
+                    # hands — same math the intent gate charges, so a book
+                    # of flies shrinks `available` by what it really costs.
+                    held, fatal = options_required_capital(
+                        plan.legs, plan.qty or 0, plan.entry_limit or 0.0)
+                    premium = abs(plan.entry_limit or 0.0) * 100 * (plan.qty or 0)
+                    deployed += premium if fatal else max(held, premium)
+                else:
+                    deployed += abs(plan.entry_limit or 0.0) * (plan.qty or 0)
         return {
             "allocation": alloc,
             "allocated": round(allocated, 2),
