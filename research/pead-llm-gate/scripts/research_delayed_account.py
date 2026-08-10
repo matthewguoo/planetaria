@@ -153,6 +153,9 @@ def main() -> None:
         if name == "ungated +60m":
             pd.DataFrame({"d": dser.index, "ret": dser.to_numpy()}).to_parquet(
                 CACHE / "account_daily_delayed_ungated.parquet")
+        elif name == "P>=0.45 gate":
+            pd.DataFrame({"d": dser.index, "ret": dser.to_numpy()}).to_parquet(
+                CACHE / "account_daily_delayed_gated.parquet")
 
     emit()
     emit("## By year, net bp/trade (ungated | gated)")
