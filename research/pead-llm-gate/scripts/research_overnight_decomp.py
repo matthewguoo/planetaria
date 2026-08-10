@@ -356,7 +356,7 @@ def stage_flagship(args) -> None:
 
     spy = pd.read_parquet(CACHE / "bench_SPY_2016-01-13_2026-08-06.parquet").sort_values("date")
     spy["d"] = pd.to_datetime(spy["date"]).dt.date
-    lo, hi = p["edate"].min(), p["edate"].max()
+    lo = p["edate"].min()
     spy = spy[(spy["d"] >= lo)]
     sessions = spy["d"].to_list()
     spy_close = spy["close"].to_numpy()
@@ -427,12 +427,120 @@ def stage_flagship(args) -> None:
     print(f"\nwrote {out}")
 
 
+def load_raw() -> dict[str, tuple[np.ndarray, np.ndarray, np.ndarray]]:
+    """The RAW mirror panels (research_raw_closes.py): symbol ->
+    (dates, open_raw, close_raw). Raw shares the print basis of anchor and
+    react, so react/close_raw is a TRUE same-day reaction — the measurement
+    `anchor` could not provide for early acceptances."""
+    frames = [pd.read_parquet(p) for p in sorted(CACHE.glob("bars_rawoc_*.parquet"))]
+    bars = pd.concat(frames, ignore_index=True)
+    bars["date"] = bars["date"].astype(str)
+    bars = (bars.drop_duplicates(subset=["symbol", "date"])
+            .sort_values(["symbol", "date"]))
+    return {s: (g["date"].to_numpy(), g["o"].to_numpy(float),
+                g["c"].to_numpy(float))
+            for s, g in bars.groupby("symbol")}
+
+
+def stage_mech2(args) -> None:
+    """The mech carry on the FULL panel with clean anchors. The true move is
+    react_raw / close_raw (same day, same basis — no adjustment inside a
+    day); the carry applies the ADJUSTED close->open gap to that move, so a
+    split between the event and its open cannot fabricate a return. This is
+    the study `mech_carry` is gated on."""
+    panel = load_ohlc()
+    raw = load_raw()
+    evs = [pd.read_parquet(p) for p in sorted(CACHE.glob("events_v2_*.parquet"))]
+    ev = pd.concat(evs, ignore_index=True).drop_duplicates(subset=["symbol", "date"])
+    ev = attach_legs(ev, panel)
+
+    ct_raw = np.full(len(ev), np.nan)
+    sym = ev["symbol"].to_numpy()
+    dat = ev["date"].astype(str).to_numpy()
+    for i in range(len(ev)):
+        got = raw.get(sym[i])
+        if got is None:
+            continue
+        dates, _o, c = got
+        j = np.searchsorted(dates, dat[i], side="right")
+        if j - 1 >= 0 and dates[j - 1] == dat[i]:
+            ct_raw[i] = c[j - 1]
+    ev["ct_raw"] = ct_raw
+
+    ok = (np.isfinite(ev["ct_raw"]) & np.isfinite(ev["CT"])
+          & np.isfinite(ev["O1"]) & np.isfinite(ev["C1"])
+          & (ev["dv_prior"] >= MIN_DV) & (ev["ct_raw"] >= MIN_PRICE))
+    ev = ev[ok].reset_index(drop=True)
+    ev["move_true"] = (ev["react"] / ev["ct_raw"] - 1) * 100
+    onemove = 1 + ev["move_true"].to_numpy() / 100
+    gap_adj = (ev["O1"] / ev["CT"]).to_numpy()
+    ev["carry_bp"] = (gap_adj / onemove - 1) * 1e4       # react -> next open
+    ev["year"] = ev["date"].str[:4]
+    ev["late_acc"] = ev["acc_min"] >= 16 * 60 + 30
+    ev["dv_rank"] = ev.groupby("date")["dv_prior"].rank(ascending=False)
+
+    lines: list[str] = []
+
+    def emit(t=""):
+        print(t)
+        lines.append(t)
+
+    emit(f"# Mech carry, clean anchors, full panel — {STAMP}")
+    emit()
+    emit(f"{len(ev)} AMC events with raw event-day closes, "
+         f"${MIN_DV / 1e6:.0f}M floor. move = react / RAW close (true "
+         "reaction); carry = adjusted gap / (1+move) - 1, LONG side "
+         "(move >= gate), GROSS — the measured round trip is 23.2bp.")
+    emit()
+    emit("| slice | n | med bp | mean bp | t | net@23.2 | cont% |")
+    emit("|---|---|---|---|---|---|---|")
+
+    def row(label, m):
+        x = m["carry_bp"].to_numpy()
+        if len(x) < 30:
+            return
+        emit(f"| {label} | {len(x)} | {np.median(x):+.0f} | {x.mean():+.0f} "
+             f"| {tstat(x):+.2f} | {x.mean() - 23.2:+.0f} "
+             f"| {(x > 0).mean() * 100:.0f} |")
+
+    for gate in (2.0, 3.0, 5.0):
+        up = ev[ev["move_true"] >= gate]
+        row(f"UP >= {gate:g}%, all", up)
+        row(f"UP >= {gate:g}%, top-5/night", up[up["dv_rank"] <= 5])
+        row(f"UP >= {gate:g}%, late acc only (old subset)",
+            up[up["late_acc"]])
+        row(f"UP >= {gate:g}%, EARLY acc (newly measurable)",
+            up[~up["late_acc"]])
+        emit("| | | | | | | |")
+    emit()
+    emit("## UP >= 2%, top-5/night, by year")
+    emit()
+    emit("| year | n | mean bp | t | net@23.2 |")
+    emit("|---|---|---|---|---|")
+    up2 = ev[(ev["move_true"] >= 2.0) & (ev["dv_rank"] <= 5)]
+    for y, g in up2.groupby("year"):
+        x = g["carry_bp"].to_numpy()
+        emit(f"| {y} | {len(x)} | {x.mean():+.0f} | {tstat(x):+.2f} "
+             f"| {x.mean() - 23.2:+.0f} |")
+    emit()
+    dn = ev[ev["move_true"] <= -2.0]
+    x = -dn["carry_bp"].to_numpy()   # what a short would earn, for the record
+    emit(f"For the record, the gated-off DOWN side at 2% (short's view): "
+         f"{x.mean():+.0f}bp mean (t {tstat(x):+.2f}, n={len(x)}) — the "
+         "overnight-short gate is what keeps this out of the fund.")
+
+    out = NOTES / f"mech_carry_clean_{STAMP}.md"
+    out.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    print(f"\nwrote {out}")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("stage", choices=["mech", "flagship"])
+    ap.add_argument("stage", choices=["mech", "flagship", "mech2"])
     ap.add_argument("--effort", default="medium")
     args = ap.parse_args()
-    {"mech": stage_mech, "flagship": stage_flagship}[args.stage](args)
+    {"mech": stage_mech, "flagship": stage_flagship,
+     "mech2": stage_mech2}[args.stage](args)
 
 
 if __name__ == "__main__":

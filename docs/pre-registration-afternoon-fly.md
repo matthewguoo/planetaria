@@ -37,6 +37,18 @@ Net expectation registered: +1.5 to +2.5bp of underlying/day, Sharpe
 1.3–1.8, win% 53–58. Paper fills flatter reality; the decision journal's
 spread field and the exec-quality ledger are the honesty instruments.
 
+## Amendment 1 — 2026-08-10, before any live decision
+
+`max_sets` 10 → **5** on fly-1. Reason, from the shield study
+(`research/0dte-vrp/notes/fly_shield_20260810_0324.md`): the two tested
+overlays both REDUCE the edge (skipping FOMC days discards the best days
+— +13.0bp/day, Sharpe 5.6 on the 21 in-sample statement days; a 15:30
+checkpoint stop sells whipsaw lows for a 2bp worst-day improvement), so
+sizing is the only real tail control. At 5 sets the measured worst day
+(−68bp x 5 ≈ −$1,900) sits just inside the $2,000 breaker instead of
+blowing through it at 2x. The instance remains note-mode; no live
+decision has been made under either value.
+
 ## Metric and sample
 
 Per-day P&L in bp of the underlying (journal/twin for note-mode, realized

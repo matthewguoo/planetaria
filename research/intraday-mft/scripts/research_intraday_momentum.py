@@ -28,7 +28,7 @@ Run:  python scripts/research_intraday_momentum.py
 from __future__ import annotations
 
 import sys
-from datetime import date, datetime
+from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 

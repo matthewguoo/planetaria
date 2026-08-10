@@ -17,7 +17,21 @@ its own $10k allocation and breaker, its own pre-registration addendum.
 Gate: fly-1 completes its 20-session note-mode stretch inside the band
 first — two tranches of an unproven sleeve is sizing, not diversification.
 
-## 2. `mech_carry` — the no-LLM earnings overnight carry (NEEDS ONE STUDY)
+## 2. `mech_carry` — the no-LLM earnings overnight carry (STUDIED 2026-08-10: PARKED)
+
+> **VERDICT (`pead-llm-gate/notes/mech_carry_clean_20260810_0328.md`):
+> the clean-anchor full-panel study vetoes running it.** Pooled it clears
+> every bar (UP>=2%, top-5/night: +35bp gross, t 3.57, +12bp net at
+> 23.2bp; +47/+24 at the 3% gate) — but the year table is a regime
+> confession: 2020/2021/2024 earned +53..+75bp net and 2022-23 and
+> 2025-26 are NEGATIVE net (2026: −64bp). The earlier +68bp/t 3.4 was
+> the late-acceptance subset flattered by regime mix. The class is built,
+> tested, and registered (`app/strategies/mech_carry.py`) so a future
+> regime-filter study has something to gate — but no instance runs until
+> a PRE-REGISTERED regime condition survives its own out-of-sample test.
+> The gated-off short side is +2bp (t 0.2): there is nothing there either.
+
+The original design note, kept for the record:
 
 The decomposition measured the UNGATED signed carry (enter the after-hours
 reaction print, exit next open): on acceptances >= 16:30, AH-UP events at

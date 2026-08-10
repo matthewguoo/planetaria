@@ -26,5 +26,6 @@ def register(cls: type[Strategy]) -> type[Strategy]:
 # live; the values it documented are frozen in the research tree, with the
 # reasoning at research/pead-llm-gate/scripts/_shipped_config.py.
 from app.strategies import afternoon_fly  # noqa: E402,F401
+from app.strategies import mech_carry  # noqa: E402,F401
 from app.strategies import pead_flagship  # noqa: E402,F401
 from app.strategies import pead_nosip  # noqa: E402,F401

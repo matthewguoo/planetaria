@@ -425,14 +425,97 @@ def stage_flies(args) -> None:
     print(f"\nwrote {out}")
 
 
+# FOMC statement days in the options sample (federalreserve.gov, fetched
+# 2026-08-09; the 14:00 ET entry stands ~0-30min ahead of the 2pm print).
+FOMC_DAYS = {
+    "2024-01-31", "2024-03-20", "2024-05-01", "2024-06-12", "2024-07-31",
+    "2024-09-18", "2024-11-07", "2024-12-18",
+    "2025-01-29", "2025-03-19", "2025-05-07", "2025-06-18", "2025-07-30",
+    "2025-09-17", "2025-10-29", "2025-12-10",
+    "2026-01-28", "2026-03-18", "2026-04-29", "2026-06-17", "2026-07-29",
+}
+
+
+def stage_shield(args) -> None:
+    """Can the 14:00 / 1.0% cell shed its worst days? Two mechanisms the
+    cache can actually price: skipping FOMC statement days (the one
+    scheduled 2pm vol event the entry stands directly in front of), and a
+    checkpoint stop — at 15:30, if closing the structure costs >= k x the
+    credit taken, close it there instead of riding to expiry."""
+    atm = pd.read_parquet(CACHE / "straddle_marks.parquet")
+    atm = atm[atm["sym"] == WING_SYM].set_index("d")
+    wings = pd.read_parquet(CACHE / "wing_marks.parquet").set_index("d")
+    j = atm.join(wings, how="inner", rsuffix="_w")
+    wp = 1.0
+    cols = ["C_1400", "P_1400", f"C{wp}_1400", f"P{wp}_1400"]
+    j = j.dropna(subset=cols)
+    credit = (j["C_1400"] + j["P_1400"]
+              - j[f"C{wp}_1400"] - j[f"P{wp}_1400"])
+    pay = ((j["close"] - j["k"]).abs()
+           - np.maximum(0.0, j["close"] - j[f"K_C_{wp}"])
+           - np.maximum(0.0, j[f"K_P_{wp}"] - j["close"]))
+    hold = (credit - pay) / j["px1000"] * 1e4            # bp of S, to expiry
+    close_1530 = (j["C_1530"] + j["P_1530"]
+                  - j[f"C{wp}_1530"] - j[f"P{wp}_1530"])
+    have_ckpt = close_1530.notna()
+    is_fomc = j.index.astype(str).isin(FOMC_DAYS)
+
+    lines: list[str] = []
+
+    def emit(t=""):
+        print(t)
+        lines.append(t)
+
+    def row(label, pnl_bp, mask):
+        x = pnl_bp[mask].to_numpy()
+        x = x[np.isfinite(x)]
+        sharpe = x.mean() / x.std(ddof=1) * np.sqrt(252)
+        emit(f"| {label} | {len(x)} | {x.mean():+.2f} | {tstat(x):+.2f} "
+             f"| {(x > 0).mean() * 100:.0f} | {x.min():+.0f} "
+             f"| {sharpe:+.2f} |")
+
+    emit(f"# Fly shield: what removes the worst days — {STAMP}")
+    emit()
+    emit(f"{len(j)} sessions, 14:00 entry, {wp}% wings, QQQ. `hold` is the "
+         "table's own row (regression check). The checkpoint stop closes at "
+         "the 15:30 marks when the structure's close-cost has reached k x "
+         "the credit taken; FOMC rows use the statement days in-sample "
+         f"({int(is_fomc.sum())} of them).")
+    emit()
+    emit("| policy | n | mean bp | t | win% | worst bp | ann Sharpe |")
+    emit("|---|---|---|---|---|---|---|")
+    row("hold to expiry (baseline)", hold, np.ones(len(j), bool))
+    row("skip FOMC days", hold, ~is_fomc)
+    row("FOMC days only (what is being skipped)", hold, is_fomc)
+    for k in (1.5, 2.0):
+        stopped = have_ckpt & (close_1530 >= credit * k)
+        pnl = hold.copy()
+        pnl[stopped] = ((credit - close_1530)[stopped]
+                        / j["px1000"][stopped] * 1e4)
+        row(f"checkpoint stop @15:30, k={k:g}", pnl, np.ones(len(j), bool))
+        row(f"stop k={k:g} AND skip FOMC", pnl, ~is_fomc)
+        emit(f"|   (k={k:g} fires on {int(stopped.sum())} days) | | | | | | |")
+    emit()
+    worst10 = hold.nsmallest(10)
+    emit("worst 10 baseline days: " + ", ".join(
+        f"{d} ({v:+.0f}{'*' if str(d) in FOMC_DAYS else ''})"
+        for d, v in worst10.items()) + "  (* = FOMC)")
+
+    NOTES.mkdir(parents=True, exist_ok=True)
+    out = NOTES / f"fly_shield_{STAMP}.md"
+    out.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    print(f"\nwrote {out}")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("stage", choices=["under", "probe", "fetch", "score",
-                                      "wings", "flies"])
+                                      "wings", "flies", "shield"])
     args = ap.parse_args()
     {"under": stage_under, "probe": stage_probe,
      "fetch": stage_fetch, "score": stage_score,
-     "wings": stage_wings, "flies": stage_flies}[args.stage](args)
+     "wings": stage_wings, "flies": stage_flies,
+     "shield": stage_shield}[args.stage](args)
 
 
 if __name__ == "__main__":

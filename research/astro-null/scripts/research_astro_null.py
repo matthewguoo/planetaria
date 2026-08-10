@@ -236,7 +236,6 @@ def main() -> None:
 
     m, dwk, mon = dts.dt.month.to_numpy(), dts.dt.dayofweek.to_numpy(), dts.dt.day.to_numpy()
     # turn of month: last session through first three
-    eom = np.zeros(len(dts), bool)
     month_key = dts.dt.to_period("M").astype(str).to_numpy()
     last_of_month = np.r_[month_key[1:] != month_key[:-1], True]
     pos_in_month = np.zeros(len(dts), int)
