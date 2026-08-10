@@ -55,7 +55,8 @@ def tstat(x: np.ndarray) -> float:
     x = x[np.isfinite(x)]
     if len(x) < 3:
         return 0.0
-    return float(x.mean() / (x.std(ddof=1) / np.sqrt(len(x))))
+    sd = x.std(ddof=1)
+    return float(x.mean() / (sd / np.sqrt(len(x)))) if sd > 0 else 0.0
 
 
 def load_panel() -> pd.DataFrame:

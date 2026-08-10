@@ -1207,7 +1207,7 @@ def stage_entry(args) -> None:
         m = oos & (prob >= thr)
         line(f"enter at +60m only if P>={thr:.2f} "
              f"({m.sum()/oos.sum()*100:.0f}% taken)", r_60[m])
-        line(f"  ...same events entered at react", r_react[m])
+        line("  ...same events entered at react", r_react[m])
 
 
 def main() -> None:
