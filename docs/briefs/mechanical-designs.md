@@ -54,7 +54,10 @@ mechanical: 100%.
 From the bleed map: short-only, gaps +1% to +4% (skip the squeeze tail),
 px >= $25, top-N by dollar volume, enter at/after the open, exit MOC.
 Measured +6.4/+8.6bp/day gross in the band (t ~2.3), works in $100+/
-$500M+ names, +9.6 on earnings mornings. Net after borrow and ~5-8bp
+$500M+ names, +9.6 on earnings mornings; the minute-level pass
+(open-window note) refines the clock: enter 09:31, SHORT side only,
+hold to noon or the close (+19.5 to +23.7bp/event, t ~3) — the 15-30min
+scalp version is NOT supported. Net after borrow and ~5-8bp
 execution: thin (+0-4bp/day) — this earns its seat as a DIVERSIFIER (short
 book, intraday horizon, negative correlation to the overnight sleeves),
 not as a headline. Gate: `equity_long_only` off + per-symbol ETB checks +
@@ -81,11 +84,18 @@ Before build: sector-tilt x-ray, drawdown-path read on daily data, and
 a pre-registration. Single factors do NOT earn seats alone (all <= 0.85
 Sharpe vs SPY 0.96).
 
+## 3c. `day2_pop` — THE MANDATE'S TOP CANDIDATE (studied 2026-08-10)
+
+Long-only, RTH-only, no SIP, no LLM, no shorts: after an UP earnings
+reaction (clean anchors), buy the SECOND session's open, sell its close.
+>=5% gate: +31.8bp gross, t 3.23, +25.8bp net@6; >=10%: +57.0/t 2.79/+51
+net. Down side ~zero (nothing gated away). 9 of 11 years positive (2022
+the exception). ~150/yr events at the 5% gate. Before instance: the
+slot-level account sim, then pre-registration. This is the first
+candidate the CURRENT account could run live with no billing change.
+
 ## 4. NEEDS-STUDY shelf (do the study before any code)
 
-- **1DTE overnight fly**: does the QQQ premium pay for holding the
-  structure overnight into expiry day? Unmeasured; same fetch harness as
-  0dte-vrp with expiry = T+1. One script, one note.
 - **Single-name earnings 0DTE/weekly fly**: selling event vol on the
   flagship's own watchlist names. The implied-move data exists (Alpaca
   options bars 2024-02+); the tail is nastier and the spreads wider than
@@ -96,6 +106,11 @@ Sharpe vs SPY 0.96).
 
 ## 5. Rejected for cause (measured; do not rebuild)
 
+1DTE overnight fly (+1.6bp/d, t 1.2, Sharpe 0.76, 2026 negative — the
+gap eats the credit; flies_1dte note); opening-window scalps (the gap
+fade does NOT complete by 10:30 — it bleeds to noon/close, and the
+scalp cell is year-unstable; open-window note); buying AM dumpers (-15
+to -21bp, t -2 — morning weakness continues); shorting AM rippers (~0);
 SPY afternoon fly (implied 0.51% vs delivered 0.48% — no premium to
 sell); overnight-only retail baskets (dominated by holding); GHLZ
 last-half-hour momentum (gross-negative post-publication); candle-pattern
