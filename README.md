@@ -1,14 +1,15 @@
 # planetaria
 
-A FastAPI backend against Alpaca (paper) with two React front ends over the
-same API. The core design rule: **every position has a server-enforced exit
-plan** (TP / SL / hard time stop) that survives restarts.
+A FastAPI backend against Alpaca (paper) with a React ops console over its
+API. The core design rule: **every position has a server-enforced exit
+plan** that survives restarts.
 
-`/` is the **ops console** — a portal for running a book of strategies. Four
+`/` is the **ops console** — a portal for running a book of strategies. Five
 destinations, and they are peers:
 
 | page | what it answers |
 |---|---|
+| FUND | the allocator's view — allocation envelopes per strategy, what each one holds, and the account-level exposure and correlation rollup |
 | ACCOUNT | the money — balances, exposure, equity curve, open and closed P&L, and which paper account the engine trades |
 | STRATEGIES | the book — instances, their capital, decision journals, performance, and the paper twin for strategies that place nothing yet |
 | MARKET | what the engine can see — session clock, the majors, the earnings calendar, the news tape |
@@ -43,32 +44,25 @@ is unchanged — every position still has a server-enforced exit plan, and a
 hard time stop is one. A stop bounds one trade and costs edge on every trade;
 a breaker bounds the strategy and costs nothing until it fires.
 
-The discretionary options terminal was retired on 2026-08-07. **Everything
-from "Architecture" onward still describes it** — the chart, the payoff
-designer, the chain, the mobile shell — and is stale pending a rewrite. The
-backend half of those sections (the FSM, the enforcer, the options math) is
-still accurate; the UI half is not.
+The discretionary options terminal — the chart, the payoff designer, the
+chain, the mobile shell — was retired on 2026-08-07 and lives in git history.
+Its backend survives where the engine still needs it: the FSM, the exit
+enforcer, and the options math that prices collateral and model-value stops.
+`docs/screenshots/` is that UI's historical walkthrough.
 
 `research/` holds studies — code that produces evidence, kept out of
 `backend/` so the dependency runs one way: research reads the app, the app
 never reads research. See [research/README.md](research/README.md).
 
-## Screenshots
-
-`docs/screenshots/` holds a phone + desktop walkthrough. Regenerate against
-a running app with `node scripts/screenshots.mjs` from `frontend/` (needs
-`npm i -D playwright && npx playwright install chromium`, or set
-`PW_CHROMIUM` to an existing Chromium binary).
-
 ## Architecture
 
 ```
-frontend (Vite/React — ops console at /, options terminal at /terminal.html)
-   │  REST /api/*        WebSocket /ws/stream (snapshot-then-stream)
+frontend (Vite/React — the ops console; polls REST, no WebSocket)
+   │  REST /api/*
 backend (FastAPI, single process)
    ├─ MarketDataService   one stock + one option stream, ref-counted subs,
-   │                      background REST backfill, reconnect gap-fill
-   ├─ ChainService        0-3 DTE chains, IV solve/interpolation, 5s cache
+   │                      background REST backfill, reconnect gap-fill,
+   │                      overnight (Blue Ocean) poller, no-SIP AH prints
    ├─ TradeService        validated placement -> DB plan -> Alpaca order
    ├─ PlanStateMachine    FIX-style FSM governing every plan's lifecycle
    ├─ ExitEnforcer        bracket engine: TP rests AT THE BROKER as a live
@@ -83,6 +77,8 @@ backend (FastAPI, single process)
    │                      their allocation + circuit breaker instead
    ├─ StrategyRunner      one supervised task per enabled instance, with
    │                      per-strategy allocation and drawdown breakers
+   ├─ EventBus + feeds    timer / Alpaca news / EDGAR 8-K / earnings
+   │                      calendar, journaled to the signals store
    └─ Postgres/Redis      SQLite/in-memory graceful fallbacks for dev
 ```
 
@@ -118,74 +114,19 @@ Entries and exits use Alpaca MLEG orders (max 4 legs), so multi-leg
 structures fill and close atomically.
 
 Broker positions with no plan (placed elsewhere, or predating the DB) are
-surfaced as **UNTRACKED** in the positions drawer and can be **adopted**:
-grouped per underlying into a managed plan with TP/SL/time-stop enforcement.
+surfaced as **UNTRACKED** on the ACCOUNT page and can be **adopted**:
+grouped per underlying into a managed plan with exit enforcement.
 
-### Account dashboard & position views
+Plans link to the strategy that placed them by `strategy_id` (the FK); the
+24-char `strategy` column is the display label only.
 
-The ACCOUNT view is the broker dashboard for the connected (paper) account:
-equity/cash/buying-power/day-P&L cards, the Alpaca equity curve
-(1D/1W/1M/3M/1A), all positions (managed + untracked, with adopt/close),
-live open orders (with cancel), and closed-trade history. Clicking any
-position opens it ON THE CHART as a read-only position view: the P/L
-surface anchors at the ENTRY bar (spanning entry -> expiry over the actual
-price path and into the future), P/L is measured against the actual fill
-premium, and the plan's TP/SL contours and time stop render as its real
-boundaries. A toggle switches the basis between **ENTRY PROJ** (leg IVs
-frozen from the fill — the projection you signed up for) and **LIVE
-GREEKS** (legs re-marked from the latest chain smile, scenario shocks
-apply — what it's worth now).
+### Options math (what survived the terminal)
 
-### Strategy presets
-
-All common single-expiry structures are built in: long call/put, debit and
-credit verticals, straddles/strangles (long and short), iron condor, iron
-butterfly, call/put butterflies, cash-secured put. Presets are declarative
-leg templates (strike offsets from ATM). Everything is edited ON the chart:
-strikes are horizontal lines dragged directly or via handles on the vertical
-rail, per-leg contract ratios via the −/+ zones on each strike chip, the
-TP and SL exits by dragging their premium contour lines (synced with the %
-inputs in the ORDER panel), and the force-exit time by dragging the TIME
-STOP vertical. The region past the time stop is dimmed — a dead zone the
-exit enforcer never lets the position reach. Every edit re-prices the P/L
-heatmap and its contours live. The chart scales both ways: wheel/drag on
-the price axis for vertical scale, vertical chart drag to pan price, and
-double-click to restore auto-fit.
-
-### Model accuracy beyond BSM
-
-Plain BSM freezes each leg's IV, which misprices scenarios where the
-underlying moves (the smile moves with spot in reality). Scenario pricing
-here is **smile-aware**: leg IVs are re-read from the live chain smile
-under a sticky-moneyness assumption (IV as a function of K/S) as the
-scenario price moves, degrading gracefully to frozen-IV BSM when the smile
-is unavailable. On top of that:
-
-- **IV shock** control: a parallel relative vol shock (±50%) applied to
-  every scenario vol — stress vega ("what if IV crushes after the event?")
-  across the surface, contours, and simulation together.
-- **Skew beta**: a directional vol response derived from the chain's OWN
-  skew slope (dIV/dlnK near ATM), so selloffs raise scenario vols and
-  rallies crush them — the empirical index behavior pure smile-riding
-  misses. Toggleable.
-- **Monte Carlo exit simulator** (worker, 2000 seeded GBM paths in trading
-  time): applies the EXACT enforcer exit rules along each path — TP as a
-  limit fill at the threshold, SL at the first observed breach including
-  gap-through (realizing the worse price), hard time stop, expiry payoff —
-  net of round-trip bid/ask friction. Reports realized-P/L EV, win rate,
-  exit mix (TP/SL/time), percentiles, and average time in trade. This is
-  the path-dependent truth the path-independent surface cannot show.
-- **Friction accounting**: per-leg half-spreads (from live quotes) charged
-  in and out; shown in sizing and baked into the MC distribution.
-- **Discrete-risk warnings**: early-assignment risk on short ITM legs with
-  no extrinsic value, pin risk at short strikes into expiry, and overnight
-  gap-risk disclosure on multi-day positions.
-
-The heatmap, TP/SL contours, hover P/L, exit-drag mapping, and MC engine
-all share one scenario pricing function, and the expiry payoff itself is
-intrinsic value — model-free — so the surface converges to exact P/L at
-expiry. Remaining assumptions (risk-neutral drift, diffusion-only paths)
-stay disclosed in the probability panel's assumptions note.
+`app/services/options_math.py` keeps the BSM core — pricing, implied-vol
+solve, probability-of-touch, structural max loss — because the engine still
+prices with it: the enforcer's underlying-tick model-value stop checks,
+portfolio greeks for `/api/account/risk`, and the collateral estimates the
+allocation gate charges option structures.
 
 ## Run (dev)
 
@@ -205,104 +146,35 @@ Copy `.env.example` to `.env` (repo root or `backend/` — discovery is
 anchored to the source tree, so the launch directory doesn't matter) and add
 Alpaca **paper** keys. With keys, prices are Alpaca's live feed (IEX
 real-time on the free tier; history blends SIP for anything older than
-16 minutes). Without keys the app still shows **real prices**: a keyless
-public feed (Yahoo chart API) supplies 1m history and a ~5s-polled live
-quote, badged `PUBLIC DATA` in the header — the options chain is then
-modeled from that real spot and trading stays disabled. Only if that
-endpoint is unreachable does it drop to the synthetic random walk, badged
-`DEMO DATA`.
+16 minutes). Without keys the engine boots but cannot price or trade.
 
-## Tests
+Preview on a phone (the console talks same-origin through the vite proxy):
 
 ```bash
-cd backend  && python -m pytest        # math core, FSM matrix, exits, adoption
-cd frontend && npm test                # TS/Python parity + presets + sizing
-cd frontend && npm run build           # typecheck + production build
+cd frontend && npm run phone     # builds + serves on your LAN, port 4173
 ```
 
-### On-chart HUD, chain, and sim
+## Checks
 
-The upper-left HUD lives on the chart itself: chips switch overlays
-(HEAT · SIM · VWAP · EMA · BB), an IV% shock input and skew-β checkbox
-drive the scenario model, and a stats line shows ATR / RV / IV / IV−RV.
-With SIM on, the Monte Carlo exit simulator renders directly in the HUD —
-EV after friction, win rate, exit-reason split (TP/SL/time/expiry),
-P5·P50·P95 outcomes, average time-in-trade — alongside the analytic
-P(profit), touch probabilities, and R:R. There is no separate probability
-panel; everything reads in context over the candles.
-
-The CHAIN toggle opens a live options chain for the active expiry
-(calls | strike | puts, mid + IV per side, ATM row highlighted). Clicking
-B or S on a contract adds it to the currently formulated position as a
-long/short leg; clicking the same contract again stacks its ratio. Legs
-compose freely across the preset templates (max 4, MLEG limit) — once
-edited the strategy is tagged CUSTOM, and each leg can be removed from
-the strategy panel. All strikes everywhere are the chain API's actual
-tradeable contracts — rail drags and chain clicks snap to listed strikes
-only, never interpolated prices.
-
-### Phone layout
-
-Below 640px a dedicated mobile shell (`frontend/src/components/Mobile/`)
-replaces the desktop grid — the desktop files stay untouched. The candle
-chart (with the full HUD, heatmap, contours, and drag interactions — the
-canvas speaks pointer events, so touch drags strikes and TP/SL directly)
-fills the screen under a slim symbol/price/status header and a
-timeframe + zoom strip (+/−/FIT buttons reuse the desktop wheel/dblclick
-paths via synthetic events). The dense data follows the
-exchange-app pattern (Binance/TradingView mobile): the chart carries only
-a chips legend, and a tab strip under it hosts SIM (Monte Carlo +
-probabilities), THETA (templates + seller metrics), CHAIN (tap B/S to add
-legs), and POS in a collapsible pane. A prominent pinned TRADE button
-opens the full ticket sheet; ACCOUNT opens the dashboard. `?unlock` still
-forces the desktop layout in a small window.
-
-**Preview on your phone:** the app talks same-origin (`/api`, `/ws` are
-proxied by the vite dev/preview server), so any host works:
-
-```bash
-cd frontend && npm run phone     # builds + serves on your LAN
-# open http://<your-computer-ip>:4173 on the phone (same Wi-Fi)
+```powershell
+./check.ps1        # ruff (backend+research), backend pytest, frontend
+                   # typecheck + lint + vitest — all failures listed at the end
+./check.ps1 -Fast  # lint + typecheck only (~15s; what the pre-commit hook runs)
+./check.ps1 -Paper # also rebuild the pead paper and fail if report.html moves
 ```
 
-or share it anywhere with a quick tunnel from your machine:
-
-```bash
-cloudflared tunnel --url http://localhost:4173
-# open the https://…trycloudflare.com URL it prints
-```
-
-### Theta-sell system
-
-The THETA chip in the HUD turns on the premium-seller's workspace:
-
-- **Delta-targeted templates** — PUT/CALL credit spread 16Δ, iron condor
-  16Δ and 25Δ, short strangle 16Δ. Short strikes are picked by |delta|
-  from the LIVE chain (the way sellers actually choose strikes — by
-  probability, not distance); wings go ~0.8% of spot further out on
-  listed strikes. If the active expiry can't resolve (0DTE after the
-  close has step-function deltas), the template rolls forward to the next
-  expiry that can. One click builds the whole structure with standard
-  mechanics pre-set: TP at 50% of the credit, stop at 100% of the credit
-  (SL % field now accepts up to 300% for credit-style stops), time stop
-  15:45 ET so nothing rides into the close.
-- **Expected-move cone** — dashed ±1σ band from now to expiry drawn on
-  the chart; short strikes inside the cone are the ones the market
-  expects to touch. The HUD warns explicitly when a short strike sits
-  inside the expected move.
-- **Seller metrics** — credit per set, credit/width (the % of the wing
-  you're paid — the seller's odds line), theta $/day per set, and the
-  expected move in dollars. The MC simulator and P(profit) then price the
-  exact TP-50%/SL-100%/time-stop mechanics path-dependently, net of
-  spread friction — the honest number for whether the structure is worth
-  selling after costs.
+The pre-commit hook is enabled with `git config core.hooksPath .githooks`
+(bypass in an emergency with `git commit --no-verify`). Backend pytest runs
+under `asyncio_mode = auto`, so an async test without a marker cannot skip
+silently. `backend/requirements.lock.txt` pins the exact venv the tests and
+the paper's byte-identical rebuild gate run on.
 
 ### Engine API & headless mode
 
 The execution engine (streams → FSM → exit enforcer → reconcile → risk)
 is architecturally separate from the UI-serving surface, and can run
 alone: `HEADLESS=true` boots the full engine plus only its **command/ops
-API** — no chain/bars endpoints, no browser WebSocket:
+API** — no quote endpoint:
 
 - Commands: `POST /api/orders`, `POST /api/positions/{id}/close`,
   `/flatten`, `PATCH /api/positions/{id}/exits` (tighten-only),
@@ -311,11 +183,13 @@ API** — no chain/bars endpoints, no browser WebSocket:
   (lifecycle journal), `GET/PUT /api/settings/risk` and `/feed`,
   `GET /api/health`
 
-This is the future split seam: run the engine supervised on an always-on
-host (systemd/docker restart-always — restarts are safe, the reconcile
-machinery rebuilds all monitors from the DB) and keep the UI wherever
-you like. Until real capital or multi-user needs force a true two-process
-split, one supervised process is the more reliable shape.
+The command endpoints are operational escape hatches — no UI calls them
+today; strategies reach the market through `ctx.submit()` and the same
+TradeService. This is the future split seam: run the engine supervised on
+an always-on host (systemd/docker restart-always — restarts are safe, the
+reconcile machinery rebuilds all monitors from the DB) and keep the UI
+wherever you like. Until real capital or multi-user needs force a true
+two-process split, one supervised process is the more reliable shape.
 
 ### Exit trigger hierarchy (how fast is the bracket?)
 
@@ -352,7 +226,7 @@ software with a layered trigger chain, fastest first:
 
 If a mid is ever uncomputable (a leg with no quote even via REST), the
 monitor says so: throttled log naming the legs, per-plan health in
-`/api/system/state`, and a NO-QUOTE warning in the SYSTEM menu.
+`/api/system/state`, and the enforcer block on the SYSTEM page.
 
 ### Fair-value stop trigger (no shakeouts, no blowups)
 
@@ -390,25 +264,20 @@ On top of the estimator, the trigger-decision layer:
   recovers 2% of the span back above the stop, so a value oscillating
   exactly on the line can't reset the clock forever.
 
-The live conditionals are visible in the chart HUD: viewing a position
-shows an ENFORCER block with monitor health, mark vs bracket, distance to
-stop, whether TP is resting at the broker, and the last journal events.
-The ACCOUNT tab's EXIT QUALITY panel tracks realized stop slippage
+The ACCOUNT page's EXIT QUALITY panel tracks realized stop slippage
 (specified SL vs actual exit) so you can verify the cap holds in practice.
 
-### System menu & lifecycle journal
-
-The ⚙ button (desktop and phone headers) opens the SYSTEM menu:
+### SYSTEM page & lifecycle journal
 
 - **State** — live health of every subsystem: market data (source + stream
   age), subscriptions, broker/account, trading stream, DB (engine +
   latency), redis, the exit enforcer (active monitors, unresolved ghost
-  orders), and the reconcile loop with its last-run age. Refreshes every
-  5s while open.
-- **Feed / API settings** — runtime knobs persisted in the DB: chain
-  refresh, positions/account poll cadences, the keyless public feed's
-  poll interval (all applied live), and the Alpaca stock/option feed
-  tiers (IEX/SIP, INDICATIVE/OPRA — applied at next restart, flagged ↻).
+  orders), the reconcile loop with its last-run age, the signal feeds with
+  per-feed ages, and the event bus with its drop count.
+- **Feed / API settings** — runtime knobs persisted in the DB:
+  positions/account poll cadences (applied live) and the Alpaca
+  stock/option feed tiers (IEX/SIP, INDICATIVE/OPRA — applied at next
+  restart, flagged ↻).
 
 Every event that reaches the plan FSM — including DROPPED ones (illegal
 in state, lost compare-and-set, stale order guard) — is journaled to an
@@ -425,47 +294,24 @@ backoff instead of silently ending truth-sync.
 `GET /api/account/risk` + a PORTFOLIO RISK panel on the account page:
 
 - **AT RISK @ SL** — account $ and % lost if every open position exits at
-  its stop, shown as a stat card, per-position (RISK% column in both
-  positions tables and the ACCT RISK row in sizing before you place), and
-  per-underlying.
+  its stop, shown as a stat card, per-position, and per-underlying.
 - **Correlation-adjusted risk** — `sqrt(r'ρr)` over pairwise daily-return
-  correlations of the open underlyings (60d, keyless public data): three
-  correlated index ETF positions are priced as ~one bet, not three.
-  Unknown correlations default to ρ=1 (no diversification credit), and
-  the panel says when history was unreachable. Plus a concentration
-  readout and the full correlation matrix (|ρ|>0.7 highlighted).
+  correlations of the open underlyings (60d): three correlated index ETF
+  positions are priced as ~one bet, not three. Unknown correlations
+  default to ρ=1 (no diversification credit), and the panel says when
+  history was unreachable. Plus a concentration readout and the full
+  correlation matrix (|ρ|>0.7 highlighted).
 - **Factor exposures** — aggregate net Δ$, SPY-beta-weighted Δ$ (each
   underlying's empirical 60d beta), vega per vol point, theta per trading
   day, and rho: P/L per +1% interest rates, alongside each underlying's
   empirical correlation to daily 10y-yield changes (^TNX).
 
-### Audio cues
-
-MetaTrader/tastytrade-style trade audio, driven by real FSM transitions
-pushed over the plans WebSocket channel: distinct WebAudio chimes plus
-spoken announcements — "Order filled", "Partial fill", "Take profit",
-"Stop loss", "Time stop", "Position closed" (profit and loss get different
-chimes), "Order rejected/canceled", and "Connection lost/restored". Voice
-clips are local synthesized WAVs (`frontend/public/audio/`, Piper neural TTS, deep male announcer) —
-fully offline, nothing licensed. The header toggle cycles OFF → FX
-(chimes only) → VOX (chimes + voice), persisted per browser. Snapshots on
-reconnect prime state silently, so history is never replayed as audio;
-manual closes don't announce (you just clicked them).
-
-### Chart context (MFT layer)
-
-Toggleable indicators (session-anchored VWAP, EMA 9/21, Bollinger 20×2σ)
-plus an always-on readout of ATR(14), realized vol (30-bar, annualized per
-timeframe), ATM implied vol, and the IV−RV spread — the "is premium rich
-or cheap?" number, color-ticked. Model-free expiry breakevens render as
-white dashed guides with BE price badges on the axis (basis-aware: a live
-position's breakevens use its actual fill). The layout auto-sizes fluidly
-down to small laptop widths (panels re-flow 2×2).
-
 ## Safety
 
 - v1 is hard-locked to paper trading (`ALPACA_PAPER=false` refuses to boot).
-- Orders without TP, SL, and a time stop are rejected server-side.
+- Every plan carries a server-enforced exit plan. Bracketless plans (no
+  TP/SL) are legal only under a strategy bounded by its allocation and
+  circuit breaker; a hard time stop still applies.
 - Exits may only be tightened after entry, never widened.
 - Daily loss circuit breaker blocks new entries.
 - MFT leak-pluggers, all server-enforced: stale/absent market data blocks

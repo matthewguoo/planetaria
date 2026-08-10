@@ -2,14 +2,25 @@
 # Everything between "the verdicts landed" and "the paper is on disk".
 #
 # Ordered by dependency, and it stops on the first failure rather than
-# publishing a paper built on half a pipeline. Run from backend/.
+# publishing a paper built on half a pipeline. Anchors itself to the study,
+# so it runs from anywhere:
 #
-#   bash scripts/finalize_paper.sh
+#   bash scripts/finalize_paper.sh [outdir-for-the-pdf]
+#
+# The PDF lands in paper/ next to the HTML builds unless an outdir is given.
+# (The old header said "run from backend/" and defaulted the PDF into a
+# long-dead Claude session scratchpad — both stale since the study moved out
+# of backend/scripts on 2026-08-06.)
 set -euo pipefail
 
-PY=./.venv/Scripts/python.exe
+STUDY="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$STUDY"
+# Chrome and pypdf want Windows-style paths; Git Bash pwd gives /c/... form.
+STUDY_WIN="$(cygpath -m "$STUDY")"
+PY=../../backend/.venv/Scripts/python.exe
 CHROME="/c/Program Files/Google/Chrome/Application/chrome.exe"
-OUTDIR="${1:-C:/Users/matth/AppData/Local/Temp/claude/C--Users-matth-Desktop-planetaria/f6d8f1e3-1441-43b4-941e-3dfe31246942/scratchpad}"
+OUTDIR="${1:-$STUDY_WIN/paper}"
+export OUTDIR
 
 echo "=== 1/9 collect verdicts (banks real cost, settles the budget guard) ==="
 $PY scripts/research_llm_contamination.py collect | tail -6
@@ -47,14 +58,13 @@ echo; echo "=== 9/9 PDF ==="
   --run-all-compositor-stages-before-draw --virtual-time-budget=60000 \
   --print-to-pdf-no-header \
   --print-to-pdf="$OUTDIR/planetaria-llm-pead-working-paper.pdf" \
-  "file:///C:/Users/matth/Desktop/planetaria/research/pead-llm-gate/paper/report_print.html" 2>&1 | tail -1
+  "file:///$STUDY_WIN/paper/report_print.html" 2>&1 | tail -1
 
 $PY - <<'PYEOF'
 from pathlib import Path
 import re, os
 from pypdf import PdfReader
-p = Path(os.environ.get("OUTDIR", "")) if os.environ.get("OUTDIR") else None
-p = (p or Path(r"C:/Users/matth/AppData/Local/Temp/claude/C--Users-matth-Desktop-planetaria/f6d8f1e3-1441-43b4-941e-3dfe31246942/scratchpad")) / "planetaria-llm-pead-working-paper.pdf"
+p = Path(os.environ["OUTDIR"]) / "planetaria-llm-pead-working-paper.pdf"
 r = PdfReader(str(p))
 txt = "\n".join(x.extract_text() for x in r.pages)
 rows = len(re.findall(r"\btaken\b|\bdeclined\b", txt, re.I))

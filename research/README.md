@@ -30,20 +30,25 @@ extensively written about; `chart-llm-gate` *dissolves* the problem by
 stripping the identity off the input, because no corpus pairs a normalised
 candle table with what happened next.
 
-The paper itself is **not** here: `docs/report.html` is the published output
-and stays where a reader expects it. This tree is the machinery that
-generates it.
+The paper's published builds live in `pead-llm-gate/paper/` (they moved out
+of `docs/` with the study on 2026-08-07 — `_paths.py` records the move).
+This tree is the machinery that generates them.
 
 ---
 
 ## pead-llm-gate
 
 ```
-scripts/    the harness — one module per question, plus the two builders
+scripts/    the harness — one module per question, plus the two builders;
+            shared primitives in research_common.py, path anchors in _paths.py
   archive/  reachable from no builder; kept because notes still cite them
 notes/      dated run logs, newest of each family
   archive/  superseded reruns
 cache/      bars, filings, verdicts (gitignored, 173 MB)
+payload/    stage exports the builders READ (gitignored — see below)
+paper/      the published builds: report.html, report_print.html,
+            report_data.json, the template (committed — the regression gate
+            diffs against them)
 ```
 
 ### Rebuild the paper
@@ -58,18 +63,18 @@ then
 cd research/pead-llm-gate && ../../backend/.venv/Scripts/python.exe scripts/build_paper.py
 ```
 
-The first writes every number the paper cites to `docs/report_data.json`; the
-second renders `docs/report.html` from `docs/report_template.html` plus that
+The first writes every number the paper cites to `paper/report_data.json`; the
+second renders `paper/report.html` from `paper/report_template.html` plus that
 payload. Nothing in the paper is transcribed by hand, so the paper cannot
 drift from the harness — and `report.html` is generated, never hand-edited.
 
 **The regression gate has two tiers, and the second is the real one.**
 
-1. `docs/report_data.json` should rebuild byte-identical. It does — but only
+1. `paper/report_data.json` should rebuild byte-identical. It does — but only
    between stage runs. `curve_raw.updated` is a timestamp read out of
    `payload/study-curve.json`, so re-running a stage legitimately moves it,
    and `curve_bracketed` carries stage output the paper never renders.
-2. **`docs/report.html` must rebuild byte-identical.** This is the invariant.
+2. **`paper/report.html` must rebuild byte-identical.** This is the invariant.
    It is built from an allowlist (`build_paper.KEEP`) plus the trade
    appendix, so it is immune to churn in fields nothing reads and it fails
    loudly on any change to a number the paper actually cites.
