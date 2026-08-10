@@ -111,7 +111,9 @@ def main() -> None:
     emit("|---|---|---|---|---|---|---|---|---|---|---|")
 
     daily_out = {}
-    for name, m in (("ungated +60m", oos),
+    full = np.isfinite(r60)   # every kept event, 2016-26 — no model, no OOS cut
+    for name, m in (("ungated FULL 2016-26 (no model)", full),
+                    ("ungated +60m", oos),
                     ("P>=0.45 gate", oos & (prob >= 0.45))):
         sel = pd.DataFrame({"date": d_k[m], "ret": r60[m], "dv": dv_k[m]})
         sel = sel[np.isfinite(sel["ret"])]
@@ -128,8 +130,10 @@ def main() -> None:
             taken_rows.append(g)
             daily[i] += g["ret"].sum() / SLOTS
         taken = pd.concat(taken_rows)
-        # OOS window only: trim the series to 2019+.
-        start = next(i for i, d in enumerate(sessions) if d >= "2019-01-01")
+        # OOS arms trim to 2019+ (their first possible OOS year); the full
+        # arm keeps the whole decade.
+        first = "2016-01-01" if name.startswith("ungated FULL") else "2019-01-01"
+        start = next(i for i, d in enumerate(sessions) if d >= first)
         dser = pd.Series(daily[start:], index=sessions[start:], name=name)
         eq = np.cumprod(1 + dser.to_numpy())
         years = len(dser) / 252
