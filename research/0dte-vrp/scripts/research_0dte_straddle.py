@@ -389,13 +389,18 @@ def stage_flies(args) -> None:
             pay_pw = np.maximum(0.0, g[f"K_P_{wp}"] - s_t)
             pnl = credit - pay_atm + pay_cw + pay_pw
             bp = (pnl / g["px1000"] * 1e4).to_numpy()
-            max_loss = np.maximum(w - credit, 0.01)
-            roc = (pnl / max_loss * 100).to_numpy()
+            # ROC only where the quotes imply a real margin: a bad wing
+            # print with credit >= width would divide by the floor and one
+            # such row poisons the mean (it did — the first run of this
+            # table printed +170% ROC off exactly that).
+            sane = (w - credit) > 0.05
+            roc = (pnl[sane] / (w - credit)[sane] * 100).to_numpy()
             sharpe = bp.mean() / bp.std(ddof=1) * np.sqrt(252)
             emit(f"| {hm[:2]}:{hm[2:]} | {wp}% | {len(g)} "
                  f"| {(credit / w * 100).mean():.0f} | {bp.mean():+.1f} "
                  f"| {tstat(bp):+.2f} | {(bp > 0).mean() * 100:.0f} "
-                 f"| {bp.min():+.0f} | {sharpe:+.2f} | {roc.mean():+.1f} |")
+                 f"| {bp.min():+.0f} | {sharpe:+.2f} "
+                 f"| {roc.mean():+.1f} ({int((~sane).sum())} excl) |")
             if best is None or tstat(bp) > best[0]:
                 best = (tstat(bp), hm, wp, g, bp)
     emit()
