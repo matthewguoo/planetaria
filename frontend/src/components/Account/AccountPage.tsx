@@ -1,8 +1,7 @@
 /**
  * Full account dashboard for the connected (paper) account — the Alpaca
  * dashboard equivalent: summary stats, equity curve, live positions
- * (managed + untracked), open orders, and closed-trade history. Any
- * position row opens on the chart as a position view.
+ * (managed + untracked), open orders, and closed-trade history.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -284,10 +283,7 @@ function EquityCurve({ history }: { history: PortfolioHistory | null }) {
   return <canvas ref={ref} className="h-full w-full" />;
 }
 
-/** `onViewPlan` hands a position off to the chart. The terminal shell passes
- * it; the ops console has no chart, so it passes nothing and the row simply
- * stops being clickable — the page itself stays shell-agnostic. */
-export function AccountPage({ onViewPlan }: { onViewPlan?: (plan: Plan) => void } = {}) {
+export function AccountPage() {
   const account = useAccountStore((s) => s.account);
   const positions = useAccountStore((s) => s.positions);
   const untracked = useAccountStore((s) => s.untracked);
@@ -417,15 +413,7 @@ export function AccountPage({ onViewPlan }: { onViewPlan?: (plan: Plan) => void 
           </thead>
           <tbody>
             {positions.map((p) => (
-              <tr
-                key={p.id}
-                className={
-                  "border-b border-bb-border/50 hover:bg-bb-hover " +
-                  (onViewPlan ? "cursor-pointer" : "")
-                }
-                onClick={onViewPlan ? () => onViewPlan(p) : undefined}
-                title={onViewPlan ? "View this position on the chart (entry-anchored P/L surface)" : ""}
-              >
+              <tr key={p.id} className="border-b border-bb-border/50 hover:bg-bb-hover">
                 <td className="px-2 py-1 text-white">
                   {p.underlying}
                   <span className="ml-1 text-[10px] text-bb-muted">
@@ -451,17 +439,6 @@ export function AccountPage({ onViewPlan }: { onViewPlan?: (plan: Plan) => void 
                   {account?.equity ? `${((planStopRisk(p) / account.equity) * 100).toFixed(1)}%` : "—"}
                 </td>
                 <td className="px-2 py-1 text-right">
-                  {onViewPlan && (
-                    <button
-                      className="border border-bb-amber px-1.5 text-[10px] text-bb-amber hover:bg-bb-amber hover:text-black"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onViewPlan(p);
-                      }}
-                    >
-                      VIEW
-                    </button>
-                  )}
                   <button
                     className="ml-1 border border-bb-loss px-1.5 text-[10px] text-bb-loss hover:bg-bb-loss hover:text-black"
                     onClick={async (e) => {

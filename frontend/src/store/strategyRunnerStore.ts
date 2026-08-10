@@ -1,7 +1,6 @@
 /**
  * Strategy RUNTIME control plane: backend StrategyRunner instances, their
- * decision journals, and the signals feed. Distinct from strategyStore.ts,
- * which is the options DESIGNER's leg-template catalog.
+ * decision journals, and the signals feed.
  *
  * House pattern: poll REST on an interval (the page owns the timer), keep
  * last-known state on transient errors, surface action errors to the caller.

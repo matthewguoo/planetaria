@@ -8,15 +8,6 @@ export const api = axios.create({
   timeout: 10_000,
 });
 
-export type SymbolHit = { symbol: string; name: string };
-
-export async function searchSymbols(q: string): Promise<SymbolHit[]> {
-  const { data } = await api.get<{ results: SymbolHit[] }>("/api/symbols/search", {
-    params: { q },
-  });
-  return data.results;
-}
-
 export type RiskSettings = {
   max_loss_pct: number;
   daily_loss_pct: number;
@@ -117,23 +108,14 @@ export type PositionsPayload = {
 };
 
 export const getAccount = () => api.get<Account>("/api/account").then((r) => r.data);
-export const putRisk = (patch: Partial<RiskSettings>) =>
-  api.put<RiskSettings>("/api/settings/risk", patch).then((r) => r.data);
 export const getPositions = () =>
   api.get<PositionsPayload>("/api/positions").then((r) => r.data);
 export const adoptPositions = (symbols: string[]) =>
   api.post<{ adopted: Plan[] }>("/api/positions/adopt", { symbols }).then((r) => r.data.adopted);
 export const getHistory = () =>
   api.get<{ trades: Plan[] }>("/api/history").then((r) => r.data.trades);
-export const postOrder = (payload: object) =>
-  api.post<Plan>("/api/orders", payload).then((r) => r.data);
 export const closePosition = (planId: string) =>
   api.post(`/api/positions/${planId}/close`).then((r) => r.data);
-export const flattenAll = () => api.post("/api/positions/flatten").then((r) => r.data);
-export const tightenExits = (
-  planId: string,
-  patch: { tp_premium?: number; sl_premium?: number; time_stop_utc?: string },
-) => api.patch<Plan>(`/api/positions/${planId}/exits`, patch).then((r) => r.data);
 
 export type PortfolioHistory = {
   timestamps: number[];
@@ -276,23 +258,12 @@ export type FeedSettings = {
   restart_required_keys: string[];
 };
 
-export type PlanEvent = {
-  ts: string | null;
-  event: string;
-  source: string;
-  target: string | null;
-  applied: boolean;
-  detail: string | null;
-};
-
 export const getSystemState = () =>
   api.get<SystemState>("/api/system/state").then((r) => r.data);
 export const getFeedSettings = () =>
   api.get<FeedSettings>("/api/settings/feed").then((r) => r.data);
 export const putFeedSettings = (patch: Partial<FeedSettings>) =>
   api.put<FeedSettings>("/api/settings/feed", patch).then((r) => r.data);
-export const getPlanEvents = (planId: string) =>
-  api.get<{ events: PlanEvent[] }>(`/api/positions/${planId}/events`).then((r) => r.data.events);
 
 /** Client-side mirror of the server's plan_stop_risk: dollars lost if this
  * plan exits exactly at its stop. */
@@ -324,8 +295,8 @@ export function apiError(err: unknown): string {
 }
 
 // ---------------------------------------------------------- strategy runtime
-// Control plane for the backend StrategyRunner (NOT the options designer's
-// strategyStore, which is leg templates). See backend/app/api/routes/strategies.py.
+// Control plane for the backend StrategyRunner.
+// See backend/app/api/routes/strategies.py.
 
 export type StrategyRuntime = {
   task: string;
@@ -400,8 +371,6 @@ export const setStrategyAllocation = (id: string, allocation: Allocation) =>
     .then((r) => r.data);
 export const setStrategyBreaker = (id: string, breaker: CircuitBreaker) =>
   api.put<StrategyInstance>(`/api/strategies/${id}/breaker`, breaker).then((r) => r.data);
-export const getStrategyCapital = (id: string) =>
-  api.get<StrategyCapital>(`/api/strategies/${id}/capital`).then((r) => r.data);
 export const deleteStrategy = (id: string) =>
   api.delete<{ name: string; decisions_deleted: number }>(`/api/strategies/${id}`)
     .then((r) => r.data);

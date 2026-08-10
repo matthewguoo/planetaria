@@ -299,12 +299,6 @@ export function FeedSettingsPanel() {
   return (
     <div className="flex flex-col">
       <NumField
-        label="CHAIN REFRESH"
-        value={merged.chain_refresh_s}
-        min={2} max={120}
-        onChange={(v) => setDraft((d) => ({ ...d, chain_refresh_s: v }))}
-      />
-      <NumField
         label="POSITIONS POLL"
         value={merged.positions_poll_s}
         min={2} max={60}

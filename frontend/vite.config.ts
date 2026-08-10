@@ -1,11 +1,11 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
-// Backend proxy: the app talks same-origin (/api, /ws) so it works from any
-// host — localhost, a phone on the LAN (`--host`), or a tunnel.
+// Backend proxy: the app talks same-origin (/api) so it works from any
+// host — localhost, a phone on the LAN (`--host`), or a tunnel. The console
+// polls REST; there is no WebSocket.
 const proxy = {
   "/api": { target: "http://localhost:8000", changeOrigin: true },
-  "/ws": { target: "ws://localhost:8000", ws: true },
 };
 
 // One app: the ops console. The discretionary options terminal was retired

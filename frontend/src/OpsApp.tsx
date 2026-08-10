@@ -1,8 +1,9 @@
 /**
- * The ops console — the default app. A portal for running a book of
+ * The ops console — the only app. A portal for running a book of
  * strategies, not a trading terminal.
  *
- * Four destinations, and they are peers:
+ * Five destinations, and they are peers:
+ *   FUND        the allocator's view — envelopes, exposure, the book rollup
  *   ACCOUNT     the money — balances, exposure, open and closed P&L
  *   STRATEGIES  the book — instances, params, journals, performance
  *   MARKET      what the engine can see — clock, majors, calendar, tape
@@ -18,8 +19,8 @@
  * entry point hardcoded to one kind. A new strategy appears here by being
  * registered in app/strategies/__init__.py and needs no frontend change.
  *
- * The discretionary options cockpit is filed away at /terminal.html, linked
- * from SYSTEM.
+ * The discretionary options cockpit was retired on 2026-08-07; it lives in
+ * git history, not in the tree.
  */
 
 import { useEffect, useState } from "react";

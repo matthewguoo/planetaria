@@ -42,10 +42,6 @@ export function CallFlow() {
   );
 }
 
-export default function MonitorPage() {
-  return <CallFlow />;
-}
-
 function CallColumn({
   category,
   title,

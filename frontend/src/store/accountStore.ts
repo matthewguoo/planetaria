@@ -13,7 +13,6 @@ type AccountState = {
   untracked: UntrackedPosition[];
   refreshAccount: () => Promise<void>;
   refreshPositions: () => Promise<void>;
-  applyPlanUpdate: (plan: Plan) => void;
 };
 
 export const useAccountStore = create<AccountState>((set) => ({
@@ -37,13 +36,4 @@ export const useAccountStore = create<AccountState>((set) => ({
       // transient; keep last known
     }
   },
-
-  applyPlanUpdate: (plan) =>
-    set((state) => {
-      const open = ["planned", "submitted", "partially_filled", "filled", "exiting"].includes(
-        plan.status,
-      );
-      const rest = state.positions.filter((p) => p.id !== plan.id);
-      return { positions: open ? [...rest, plan] : rest };
-    }),
 }));

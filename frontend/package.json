@@ -12,11 +12,6 @@
     "phone": "vite build && vite preview --host"
   },
   "dependencies": {
-    "@perspective-dev/client": "5.0.0",
-    "@perspective-dev/server": "5.0.0",
-    "@perspective-dev/viewer": "5.0.0",
-    "@perspective-dev/viewer-charts": "5.0.0",
-    "@perspective-dev/viewer-datagrid": "5.0.0",
     "axios": "^1.7.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
@@ -27,7 +22,6 @@
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^4.5.0",
     "autoprefixer": "^10.4.20",
-    "playwright": "^1.62.0",
     "postcss": "^8.4.49",
     "tailwindcss": "^3.4.17",
     "typescript": "^5.7.0",
