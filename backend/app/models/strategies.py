@@ -85,8 +85,8 @@ class StrategyInstanceRow(Base):
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_uuid)
     kind: Mapped[str] = mapped_column(String(48))  # registry key
-    # ALSO the TradePlan.strategy label (String(24) fit) linking plans back
-    # to the instance until the strategy_id FK lands on trade_plans.
+    # ALSO stamped onto TradePlan.strategy (String(24) fit) as the display
+    # label; the linkage itself is trade_plans.strategy_id, not this name.
     name: Mapped[str] = mapped_column(String(24), unique=True)
     params: Mapped[dict] = mapped_column(JSON)
     # {"mode": "pct"|"usd", "value": N}. Nullable so pre-0006 rows read as the

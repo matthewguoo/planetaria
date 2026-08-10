@@ -35,20 +35,16 @@ class DataFeed(Protocol):
 
 
 def et_session(now: datetime | None = None) -> str:
-    """Coarse ET session label carried on timer events. Local computation on
-    purpose — the broker clock only knows RTH, and the verified equity
-    reality is 24/5: premarket 4-9:30, rth, postmarket 16-20, overnight."""
-    now = (now or datetime.now(ET)).astimezone(ET)
-    if now.weekday() >= 5:
-        return "weekend"
-    hhmm = now.hour * 60 + now.minute
-    if 4 * 60 <= hhmm < 9 * 60 + 30:
-        return "premarket"
-    if 9 * 60 + 30 <= hhmm < 16 * 60:
-        return "rth"
-    if 16 * 60 <= hhmm < 20 * 60:
-        return "postmarket"
-    return "overnight"
+    """Coarse ET session label carried on timer events — market_clock's
+    verified 24/5 table, with the closed weekend gap labelled "weekend".
+
+    This used to be a third hand-rolled clock, and it disagreed with the
+    verified one at both week boundaries: Friday 20:00+ came back
+    "overnight" while the market was closed, and Sunday 20:00+ came back
+    "weekend" while the Blue Ocean session was open."""
+    from app.services.market_clock import equity_session
+
+    return equity_session(now) or "weekend"
 
 
 class AlpacaNewsFeed:

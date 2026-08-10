@@ -259,12 +259,18 @@ class TestCircuitBreaker:
     it fires."""
 
     async def _closed(self, runner, name: str, pnls: list[float]) -> None:
+        from sqlalchemy import select
+
+        from app.models.strategies import StrategyInstanceRow
         from app.models.trade import TradePlan
 
         async with runner.db.session() as session:
+            sid = await session.scalar(
+                select(StrategyInstanceRow.id)
+                .where(StrategyInstanceRow.name == name))
             for i, pnl in enumerate(pnls):
                 session.add(TradePlan(
-                    underlying="AMD", strategy=name,
+                    underlying="AMD", strategy=name, strategy_id=sid,
                     legs=[{"symbol": "AMD", "side": 1, "ratio": 1, "entry": 100.0}],
                     qty=1, entry_limit=100.0, tp_premium=None, sl_premium=None,
                     time_stop_utc=datetime.now(timezone.utc) + timedelta(days=1),
@@ -363,15 +369,14 @@ class TestDelete:
 
     @pytest.mark.asyncio
     async def test_refuses_while_plans_are_open(self, runner):
-        """The plans carry the instance NAME as their only link back to it, so
-        deleting the row would strand positions whose provenance no longer
-        resolves."""
+        """Deleting the row would strand positions whose strategy_id no
+        longer resolves to anything."""
         from app.models.trade import TradePlan
 
         row = await runner.create("pead_flagship", "held", {})
         async with runner.db.session() as session:
             session.add(TradePlan(
-                underlying="AMD", strategy="held",
+                underlying="AMD", strategy="held", strategy_id=row["id"],
                 legs=[{"symbol": "AMD", "side": 1, "ratio": 1, "entry": 100.0}],
                 qty=1, entry_limit=100.0, tp_premium=None, sl_premium=None,
                 time_stop_utc=datetime.now(timezone.utc) + timedelta(days=1),

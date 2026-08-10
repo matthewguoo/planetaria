@@ -267,10 +267,10 @@ class TestIntentGate:
             await rig.runner.execute_intent(row["id"], option_intent(
                 entry_limit=20.0))  # 20*100*1 = $2000 > $1000
 
-        # Occupy the single open-plan slot with a DB plan under this label.
+        # Occupy the single open-plan slot with a DB plan of this instance.
         async with rig.db.session() as session:
             session.add(TradePlan(
-                underlying="SPY", strategy="capped",
+                underlying="SPY", strategy="capped", strategy_id=row["id"],
                 legs=[{"symbol": "SPY261218C00800000", "side": 1, "ratio": 1}],
                 qty=1, entry_limit=2.0, tp_premium=4.0, sl_premium=1.0,
                 time_stop_utc=datetime.now(timezone.utc) + timedelta(hours=2),
@@ -282,12 +282,13 @@ class TestIntentGate:
         assert rig.trade.placed == []
 
     @pytest.mark.asyncio
-    async def test_flatten_pauses_and_closes_by_label(self, rig):
+    async def test_flatten_pauses_and_closes_its_plans(self, rig):
         row = await rig.runner.create("dummy", "flat", {})
         await rig.runner.set_state(row["id"], "enabled")
         async with rig.db.session() as session:
             session.add(TradePlan(
                 id="p-flat-1", underlying="SPY", strategy="flat",
+                strategy_id=row["id"],
                 legs=[{"symbol": "SPY261218C00800000", "side": 1, "ratio": 1}],
                 qty=1, entry_limit=2.0, tp_premium=4.0, sl_premium=1.0,
                 time_stop_utc=datetime.now(timezone.utc) + timedelta(hours=2),

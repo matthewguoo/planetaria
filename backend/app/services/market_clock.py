@@ -28,7 +28,13 @@ from zoneinfo import ZoneInfo
 
 log = logging.getLogger("app.clock")
 
-_ET = ZoneInfo("America/New_York")
+# The one ET constant and the one session table. et_session (signals/feeds)
+# and is_overnight_et (market_data) both delegate to equity_session below —
+# they used to be three hand-rolled clocks that disagreed at the week
+# boundaries (Friday evening read as "overnight" on one of them while the
+# market was verifiably closed).
+ET = ZoneInfo("America/New_York")
+_ET = ET
 
 
 def equity_session(now: datetime | None = None) -> str | None:

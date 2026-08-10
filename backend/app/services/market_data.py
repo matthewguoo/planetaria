@@ -44,21 +44,13 @@ OVERNIGHT_URL = "https://data.alpaca.markets/v2/stocks/{symbol}/trades/latest?fe
 
 
 def is_overnight_et(now_utc: datetime) -> bool:
-    """True inside the Blue Ocean overnight session (ET):
-    Sun-Thu 20:00 -> next-day 04:00 (so Mon-Fri 00:00-04:00 and Sun-Thu
-    20:00-24:00). Sat is fully closed; Fri closes at 04:00."""
-    from zoneinfo import ZoneInfo
+    """True inside the Blue Ocean overnight session (ET): Sun-Thu 20:00 ->
+    next-day 04:00. Delegates to market_clock's verified session table —
+    the hand-rolled boundary arithmetic that lived here agreed with it
+    minute-for-minute, so now there is only one copy to be wrong in."""
+    from app.services.market_clock import equity_session
 
-    et = now_utc.astimezone(ZoneInfo("America/New_York"))
-    minute = et.hour * 60 + et.minute
-    dow = et.weekday()  # Mon=0 .. Sun=6
-    if dow == 5:  # Sat
-        return False
-    if dow == 6:  # Sun: session opens 20:00
-        return minute >= 1200
-    if dow == 4:  # Fri: only the tail of Thu's session
-        return minute < 240
-    return minute < 240 or minute >= 1200  # Mon-Thu
+    return equity_session(now_utc) == "overnight"
 
 
 def freshest_spot(quote: dict | None, last_bar: dict | None) -> float:

@@ -165,7 +165,7 @@ class RiskService:
     async def validate_strategy_budget(
         self,
         *,
-        strategy_name: str,
+        strategy_id: str,
         budget: dict | None,
         intent_notional: float,
         symbol: str,
@@ -174,8 +174,9 @@ class RiskService:
         pass). Budget lives in strategy_instances.params["budget"]:
         {max_open_plans, max_daily_loss_usd, max_trade_notional_usd,
         max_gross_notional_usd, allowed_symbols}. No budget = only the
-        global guards apply. Scoped by the TradePlan.strategy label until
-        the strategy_id FK lands."""
+        global guards apply. Scoped by the trade_plans.strategy_id FK
+        (the display label proved unreliable: the retired terminal used
+        the same column for leg-structure names)."""
         if not budget:
             return []
         violations: list[str] = []
@@ -194,7 +195,7 @@ class RiskService:
         async with self.db.session() as session:
             open_plans = list((await session.execute(
                 select(TradePlan).where(
-                    TradePlan.strategy == strategy_name,
+                    TradePlan.strategy_id == strategy_id,
                     TradePlan.status.in_(OPEN_STATUSES),
                 )
             )).scalars())
@@ -219,14 +220,14 @@ class RiskService:
 
         max_daily_loss = budget.get("max_daily_loss_usd")
         if max_daily_loss is not None:
-            realized = await self._todays_realized_for(strategy_name)
+            realized = await self._todays_realized_for(strategy_id)
             if realized <= -abs(float(max_daily_loss)):
                 violations.append(
                     f"strategy daily loss breaker tripped (realized {realized:+.0f})"
                 )
         return violations
 
-    async def _todays_realized_for(self, strategy_name: str) -> float:
+    async def _todays_realized_for(self, strategy_id: str) -> float:
         now_et = datetime.now(ET)
         start_utc = now_et.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(
             timezone.utc
@@ -234,7 +235,7 @@ class RiskService:
         async with self.db.session() as session:
             result = await session.execute(
                 select(TradePlan).where(
-                    TradePlan.strategy == strategy_name,
+                    TradePlan.strategy_id == strategy_id,
                     TradePlan.status == "closed",
                     TradePlan.updated_at >= start_utc,
                 )

@@ -31,9 +31,10 @@ async def runner(tmp_path):
     await db.close()
 
 
-def plan(strategy: str, status: str, realized: float | None) -> TradePlan:
+def plan(strategy: str, status: str, realized: float | None,
+         strategy_id: str | None = None) -> TradePlan:
     return TradePlan(
-        underlying="AMD", strategy=strategy,
+        underlying="AMD", strategy=strategy, strategy_id=strategy_id,
         legs=[{"symbol": "AMD", "side": 1, "ratio": 1, "entry": 500.0}],
         qty=2, entry_limit=500.0, tp_premium=550.0, sl_premium=475.0,
         time_stop_utc=datetime.now(timezone.utc) + timedelta(days=1),
@@ -45,9 +46,9 @@ def plan(strategy: str, status: str, realized: float | None) -> TradePlan:
 async def test_performance_rollup(runner):
     row = await runner.create("pead_flagship", "earn", {})
     async with runner.db.session() as session:
-        session.add(plan("earn", "closed", 100.0))
-        session.add(plan("earn", "closed", -40.0))
-        session.add(plan("earn", "filled", None))     # still open
+        session.add(plan("earn", "closed", 100.0, row["id"]))
+        session.add(plan("earn", "closed", -40.0, row["id"]))
+        session.add(plan("earn", "filled", None, row["id"]))  # still open
         session.add(plan("other", "closed", 999.0))   # different strategy
         await session.commit()
 

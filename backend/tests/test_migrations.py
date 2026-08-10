@@ -19,15 +19,17 @@ def _head_revision() -> str:
     return script.get_current_head()
 
 
-async def _survey(url: str) -> tuple[set[tuple[str, str]], str | None]:
-    """(table, column) pairs (minus alembic_version) + stamped revision."""
+async def _survey(url: str) -> tuple[set[tuple[str, str, str, bool]], str | None]:
+    """(table, column, type, nullable) tuples (minus alembic_version) +
+    stamped revision. Type and nullability matter: 0007 was exactly a
+    nullability migration, the case a name-only comparison cannot see."""
     engine = create_async_engine(url)
     try:
         async with engine.connect() as conn:
             def _collect(sync_conn):
                 inspector = inspect(sync_conn)
                 pairs = {
-                    (t, col["name"])
+                    (t, col["name"], str(col["type"]), bool(col["nullable"]))
                     for t in inspector.get_table_names()
                     if t != "alembic_version"
                     for col in inspector.get_columns(t)
@@ -79,7 +81,7 @@ async def test_fresh_db_created_and_stamped_at_head(tmp_path):
     await db.close()
 
     pairs, rev = await _survey(url)
-    tables = {t for t, _ in pairs}
+    tables = {t for t, *_ in pairs}
     assert {"trade_plans", "app_settings", "plan_events"} <= tables
     assert rev == _head_revision()
 
@@ -98,8 +100,9 @@ async def test_pre_alembic_db_backfilled_stamped_upgraded(tmp_path):
 
     pairs, rev = await _survey(url)
     # The five legacy-additive columns arrived via the one-time backfill.
+    present = {(t, c) for t, c, *_ in pairs}
     for col in ("filled_qty", "tp_order_id", "exited_at", "exit_fills", "exec_quality"):
-        assert ("trade_plans", col) in pairs, col
+        assert ("trade_plans", col) in present, col
     assert rev == _head_revision()
 
 

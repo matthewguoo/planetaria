@@ -342,7 +342,7 @@ class StrategyRunner:
                 if row is None:
                     raise ValueError("no such strategy instance")
                 name, kind = row.name, row.kind
-            open_plans = await self._open_plans(name)
+            open_plans = await self._open_plans(row_id)
             if open_plans:
                 raise ValueError(
                     f"{name!r} has {len(open_plans)} open plan(s) — flatten it "
@@ -385,7 +385,7 @@ class StrategyRunner:
         """Pause the instance, then close its open plans via the enforcer's
         manual-close path (which owns escalation and market-hours parking)."""
         row = await self.set_state(row_id, "paused")
-        plans = await self._open_plans(row["name"])
+        plans = await self._open_plans(row["id"])
         closed, failed = 0, []
         for plan in plans:
             try:
@@ -506,7 +506,7 @@ class StrategyRunner:
         # Per-strategy budget (layered UNDER the global guards, both must pass).
         params = running.ctx.params if running else {}
         violations = await self.risk.validate_strategy_budget(
-            strategy_name=name,
+            strategy_id=row_id,
             budget=(params or {}).get("budget"),
             intent_notional=notional,
             symbol=intent.underlying,
@@ -587,7 +587,7 @@ class StrategyRunner:
         allocated = min(allocated, equity) if equity > 0 else 0.0
         deployed = 0.0
         if row is not None:
-            for plan in await self._open_plans(row.name):
+            for plan in await self._open_plans(row.id):
                 if plan.legs and plan.legs[0].get("right"):
                     # Options claim the capital the broker HOLDS (collateral
                     # / defined-risk width), not the premium that changed
@@ -650,7 +650,7 @@ class StrategyRunner:
             if row is None:
                 raise ValueError("no such strategy instance")
             plans = list(await session.scalars(
-                select(TradePlan).where(TradePlan.strategy == row.name)
+                select(TradePlan).where(TradePlan.strategy_id == row_id)
             ))
         breaker = validate_breaker(row.circuit_breaker)
         alloc = await self.allocation_state(row_id)
@@ -776,11 +776,11 @@ class StrategyRunner:
 
     # ------------------------------------------------------------ queries
 
-    async def _open_plans(self, name: str) -> list[TradePlan]:
+    async def _open_plans(self, strategy_id: str) -> list[TradePlan]:
         async with self.db.session() as session:
             return list(await session.scalars(
                 select(TradePlan).where(
-                    TradePlan.strategy == name,
+                    TradePlan.strategy_id == strategy_id,
                     TradePlan.status.in_(OPEN_STATUSES),
                 )
             ))
@@ -855,7 +855,7 @@ class StrategyRunner:
         out = []
         for row in rows:
             data = row.to_dict()
-            data["open_plans"] = len(await self._open_plans(row.name))
+            data["open_plans"] = len(await self._open_plans(row.id))
             running = self._running.get(row.id)
             data["runtime"] = self._runtime_status(running)
             cls = REGISTRY.get(row.kind)
@@ -875,7 +875,7 @@ class StrategyRunner:
             if row is None:
                 raise ValueError("no such strategy instance")
         data = row.to_dict()
-        data["open_plans"] = len(await self._open_plans(row.name))
+        data["open_plans"] = len(await self._open_plans(row.id))
         data["runtime"] = self._runtime_status(self._running.get(row_id))
         data["decisions"] = await self.decisions(row_id, limit=20)
         return data
@@ -909,7 +909,7 @@ class StrategyRunner:
             async with self.db.session() as session:
                 plans = list(await session.scalars(
                     select(TradePlan).where(
-                        TradePlan.strategy == inst["name"],
+                        TradePlan.strategy_id == inst["id"],
                         TradePlan.status.in_(OPEN_STATUSES))))
             positions = []
             for p in plans:
@@ -1003,7 +1003,7 @@ class StrategyRunner:
                 raise ValueError("no such strategy instance")
             plans = (await session.scalars(
                 select(TradePlan)
-                .where(TradePlan.strategy == row.name)
+                .where(TradePlan.strategy_id == row_id)
                 .order_by(TradePlan.created_at.desc())
                 .limit(200)
             )).all()

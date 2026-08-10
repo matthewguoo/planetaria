@@ -74,6 +74,7 @@ class DBFakeTrade:
         self.placed += 1
         plan = TradePlan(
             underlying=payload["underlying"], strategy=payload["strategy"],
+            strategy_id=payload.get("strategy_id"),
             legs=payload["legs"], qty=payload["qty"],
             entry_limit=payload["entry_limit"], tp_premium=payload["tp_premium"],
             sl_premium=payload["sl_premium"],
