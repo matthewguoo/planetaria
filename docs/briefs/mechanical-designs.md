@@ -61,7 +61,13 @@ not as a headline. Gate: `equity_long_only` off + per-symbol ETB checks +
 measured auction execution under ~8bp all-in. Pass two of the bleed study
 (minute-bar hold curve) sets the exit clock first.
 
-## 3b. `factor_combo` — the slow sleeve (STUDIED 2026-08-10: PROMISING)
+## 3b. `factor_combo` — SHELVED BY MANDATE 2026-08-10
+
+> Matthew's call, same day the study landed: a 1.06 Sharpe at
+> monthly horizon does not clear the fund's bar, and the mandate
+> is MECHANICAL, INTRADAY TO A FEW DAYS. The evidence below
+> stands unchanged for whenever a slow sleeve is wanted; nothing
+> further is spent on it now.
 
 Multi-factor long-only across the monthly top-500 (value + book +
 quality + momentum percentile ranks, top 50 equal-weight, monthly,
@@ -96,10 +102,13 @@ last-half-hour momentum (gross-negative post-publication); candle-pattern
 anything (dead to inverted); daily-churn reversal (the market maker's
 paycheck, not ours).
 
-## The fund's shape when the pipeline lands
+## The fund's shape under the 2026-08-10 mandate
 
-Three uncorrelated mechanical sleeves (short-vol afternoon, overnight
-earnings carry, intraday short gap-fade) around one LLM sleeve under
-forward test — different horizons, different sides, different failure
-modes, each $10k-allocated and breaker-bounded, every one pre-registered
-before its first live decision.
+Mechanical, intraday to a few days, nothing slower. Running: fly-1
+(2h hold). In class: fly-2 (20min). Parked behind named gates, all
+in-horizon: gap_fade_short (intraday, shorts), mech_carry (overnight,
+regime), the flagship (T+1/T+3, the one LLM bet). Open studies in
+mandate: day-2 mechanical drift (RTH-only — no SIP gate), the 1DTE
+overnight fly, single-name earnings flies. Each $10k-allocated and
+breaker-bounded, every one pre-registered before its first live
+decision.

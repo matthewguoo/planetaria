@@ -507,15 +507,128 @@ def stage_shield(args) -> None:
     print(f"\nwrote {out}")
 
 
+def stage_marks1d(args) -> None:
+    """The 1-day fly: entry marks at T-1 15:30 for the structure expiring T.
+    Strike = the underlying at T-1 15:30; wings at 1.0% (the proven width).
+    One request per session pair, six legs each."""
+    api = _opt_client()
+    under = pd.read_parquet(CACHE / f"under30_raw_{WING_SYM}.parquet")
+    under["d"] = under["ts"].dt.date
+    under["hm"] = under["ts"].dt.strftime("%H:%M")
+    grid = under[under["hm"] == "15:30"].set_index("d")[["o", "c"]]
+    days = sorted(grid.index)
+    out_f = CACHE / "marks1d.parquet"
+    prior, have = pd.DataFrame(), set()
+    if out_f.exists():
+        prior = pd.read_parquet(out_f)
+        have = set(prior["d"].astype(str))
+    rows = []
+    todo = [(days[i], days[i + 1]) for i in range(len(days) - 1)
+            if str(days[i + 1]) not in have and str(days[i]) >= "2024-02-01"]
+    print(f"{len(todo)} session pairs to fetch")
+    for n, (d_prev, d) in enumerate(todo):
+        px = float(grid.at[d_prev, "o"])           # the 15:30 print on T-1
+        k = float(round(px))
+        w = max(1.0, float(round(px / 100)))       # 1.0% wings
+        legs = {"C0": occ(WING_SYM, d, "C", k), "P0": occ(WING_SYM, d, "P", k),
+                "CW": occ(WING_SYM, d, "C", k + w),
+                "PW": occ(WING_SYM, d, "P", k - w)}
+        try:
+            from alpaca.data.requests import OptionBarsRequest
+            from alpaca.data.timeframe import TimeFrame
+            req = OptionBarsRequest(
+                symbol_or_symbols=list(legs.values()),
+                timeframe=TimeFrame.Minute,
+                start=datetime(d_prev.year, d_prev.month, d_prev.day, 15, 25,
+                               tzinfo=ET),
+                end=datetime(d_prev.year, d_prev.month, d_prev.day, 16, 5,
+                             tzinfo=ET))
+            data = api.get_option_bars(req).data
+        except Exception as exc:                   # noqa: BLE001
+            print(f"  {d}: {str(exc)[:70]}")
+            _time.sleep(1.0)
+            continue
+        rec = {"d": str(d), "d_prev": str(d_prev), "k": k, "w": w,
+               "px1530": px, "close_T": float(grid.at[d, "c"])}
+        for name, s_ in legs.items():
+            bars = data.get(s_) or []
+            pxs = [float(b.close) for b in bars
+                   if b.timestamp.astimezone(ET).strftime("%H:%M") >= "15:30"]
+            rec[name] = pxs[0] if pxs else None
+        rows.append(rec)
+        if n % 50 == 0:
+            print(f"  {n}/{len(todo)} ({d})")
+        _time.sleep(0.25)
+    df = pd.DataFrame(rows)
+    allf = pd.concat([prior, df], ignore_index=True) if len(prior) else df
+    allf.to_parquet(out_f)
+    print(f"cached {len(allf)} 1DTE mark-days -> {out_f}")
+
+
+def stage_flies1d(args) -> None:
+    """Score the overnight fly: sell the T-expiry structure at T-1 15:30,
+    settle at T's close. One day of exposure, overnight gap included —
+    the question is whether the extra ~18 hours of premium pays for the
+    gap risk the wings have to absorb."""
+    j = pd.read_parquet(CACHE / "marks1d.parquet").dropna(
+        subset=["C0", "P0", "CW", "PW"])
+    credit = j["C0"] + j["P0"] - j["CW"] - j["PW"]
+    frac = credit / j["w"]
+    sane = (frac > 0.10) & (frac < 0.95)
+    j, credit = j[sane], credit[sane]
+    pay = ((j["close_T"] - j["k"]).abs()
+           - np.maximum(0.0, j["close_T"] - (j["k"] + j["w"]))
+           - np.maximum(0.0, (j["k"] - j["w"]) - j["close_T"]))
+    bp = ((credit - pay) / j["px1530"] * 1e4).to_numpy()
+    lines: list[str] = []
+
+    def emit(t=""):
+        print(t)
+        lines.append(t)
+
+    emit(f"# 1DTE overnight fly on {WING_SYM} — {STAMP}")
+    emit()
+    emit(f"{len(j)} session pairs ({int((~sane).sum())} dropped for "
+         "insane quotes). Sell ATM straddle + buy 1.0% wings at T-1 15:30, "
+         "expiry T, settle at T's close. Gross of ~2-4c/structure.")
+    emit()
+    sharpe = bp.mean() / bp.std(ddof=1) * np.sqrt(252)
+    emit(f"- mean {bp.mean():+.2f}bp of S/day, t {tstat(bp):+.2f}, win "
+         f"{(bp > 0).mean() * 100:.0f}%, worst {bp.min():+.0f}bp, ann "
+         f"Sharpe (gross) {sharpe:+.2f}")
+    emit(f"- credit/width: mean {frac[sane].mean() * 100:.0f}% (vs ~54% for "
+         "the 0DTE 14:00 entry — the overnight structure sells for more "
+         "because it must survive the gap)")
+    emit()
+    emit("| year | n | mean bp | t | win% | worst |")
+    emit("|---|---|---|---|---|---|")
+    yr = j["d"].astype(str).str[:4].to_numpy()
+    for y in sorted(set(yr)):
+        x = bp[yr == y]
+        emit(f"| {y} | {len(x)} | {x.mean():+.2f} | {tstat(x):+.2f} "
+             f"| {(x > 0).mean() * 100:.0f} | {x.min():+.0f} |")
+    emit()
+    emit("Compare directly against the 0DTE 14:00/1.0% cell (+3.2bp/day, "
+         "t 3.51, worst -68bp, Sharpe 2.20) before concluding anything — "
+         "same underlying, same width, same wings, ~9x the exposure hours.")
+
+    NOTES.mkdir(parents=True, exist_ok=True)
+    out = NOTES / f"flies_1dte_{STAMP}.md"
+    out.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    print(f"\nwrote {out}")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("stage", choices=["under", "probe", "fetch", "score",
-                                      "wings", "flies", "shield"])
+                                      "wings", "flies", "shield",
+                                      "marks1d", "flies1d"])
     args = ap.parse_args()
     {"under": stage_under, "probe": stage_probe,
      "fetch": stage_fetch, "score": stage_score,
      "wings": stage_wings, "flies": stage_flies,
-     "shield": stage_shield}[args.stage](args)
+     "shield": stage_shield, "marks1d": stage_marks1d,
+     "flies1d": stage_flies1d}[args.stage](args)
 
 
 if __name__ == "__main__":

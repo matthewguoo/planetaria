@@ -534,13 +534,94 @@ def stage_mech2(args) -> None:
     print(f"\nwrote {out}")
 
 
+def stage_day2(args) -> None:
+    """Is the day-2 RTH drift mechanical? The flagship decomposition found
+    +41bp (t 3.3) of O2->C2 drift on its guidance-extended book — but those
+    sides came from verdicts. This asks what the TAPE alone earns: side =
+    sign of the clean reaction, enter the SECOND session's open, exit its
+    close. Everything is RTH — the one earnings window with NO SIP GATE."""
+    panel = load_ohlc()
+    raw = load_raw()
+    evs = [pd.read_parquet(p) for p in sorted(CACHE.glob("events_v2_*.parquet"))]
+    ev = pd.concat(evs, ignore_index=True).drop_duplicates(subset=["symbol", "date"])
+    ev = attach_legs(ev, panel)
+
+    ct_raw = np.full(len(ev), np.nan)
+    sym = ev["symbol"].to_numpy()
+    dat = ev["date"].astype(str).to_numpy()
+    for i in range(len(ev)):
+        got = raw.get(sym[i])
+        if got is None:
+            continue
+        dates, _o, c = got
+        j = np.searchsorted(dates, dat[i], side="right")
+        if j - 1 >= 0 and dates[j - 1] == dat[i]:
+            ct_raw[i] = c[j - 1]
+    ev["ct_raw"] = ct_raw
+    ok = (np.isfinite(ev["ct_raw"]) & np.isfinite(ev["O2"])
+          & np.isfinite(ev["C2"]) & (ev["dv_prior"] >= MIN_DV)
+          & (ev["ct_raw"] >= MIN_PRICE))
+    ev = ev[ok].reset_index(drop=True)
+    ev["move_true"] = (ev["react"] / ev["ct_raw"] - 1) * 100
+    s = np.sign(ev["move_true"].to_numpy())
+    ev["day2_bp"] = s * (ev["C2"] / ev["O2"] - 1) * 1e4   # adjusted, basis-free
+    ev["year"] = ev["date"].str[:4]
+    ev["dv_rank"] = ev.groupby("date")["dv_prior"].rank(ascending=False)
+
+    lines: list[str] = []
+
+    def emit(t=""):
+        print(t)
+        lines.append(t)
+
+    emit(f"# Mechanical day-2 drift (O2->C2, tape sides) — {STAMP}")
+    emit()
+    emit(f"{len(ev)} events with clean anchors and a second session. Side = "
+         "sign of the true reaction; the trade is entirely RTH on T+2 (open "
+         "in, close out) — an ~6bp round trip and NO after-hours data "
+         "requirement. GROSS below.")
+    emit()
+    emit("| slice | n | mean bp | t | net@6 | win% |")
+    emit("|---|---|---|---|---|---|")
+
+    def row(label, m):
+        x = m["day2_bp"].to_numpy()
+        if len(x) < 30:
+            return
+        emit(f"| {label} | {len(x)} | {x.mean():+.1f} | {tstat(x):+.2f} "
+             f"| {x.mean() - 6:+.1f} | {(x > 0).mean() * 100:.0f} |")
+
+    for gate in (2.0, 5.0, 10.0):
+        g = ev[np.abs(ev["move_true"]) >= gate]
+        row(f"|move| >= {gate:g}%, all", g)
+        row(f"|move| >= {gate:g}%, top-5/night", g[g["dv_rank"] <= 5])
+        row(f"|move| >= {gate:g}%, UP side", g[g["move_true"] > 0])
+        row(f"|move| >= {gate:g}%, DOWN side (needs shorts)",
+            g[g["move_true"] < 0])
+        emit("| | | | | | |")
+    emit()
+    emit("## |move| >= 5%, all, by year")
+    emit()
+    emit("| year | n | mean bp | t | net@6 |")
+    emit("|---|---|---|---|---|")
+    g5 = ev[np.abs(ev["move_true"]) >= 5.0]
+    for y, g in g5.groupby("year"):
+        x = g["day2_bp"].to_numpy()
+        emit(f"| {y} | {len(x)} | {x.mean():+.1f} | {tstat(x):+.2f} "
+             f"| {x.mean() - 6:+.1f} |")
+
+    out = NOTES / f"day2_mech_{STAMP}.md"
+    out.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    print(f"\nwrote {out}")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("stage", choices=["mech", "flagship", "mech2"])
+    ap.add_argument("stage", choices=["mech", "flagship", "mech2", "day2"])
     ap.add_argument("--effort", default="medium")
     args = ap.parse_args()
     {"mech": stage_mech, "flagship": stage_flagship,
-     "mech2": stage_mech2}[args.stage](args)
+     "mech2": stage_mech2, "day2": stage_day2}[args.stage](args)
 
 
 if __name__ == "__main__":
