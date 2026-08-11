@@ -160,6 +160,17 @@ mechanics never change.
 - **Month-end Etula overlay**: the battery showed first-3-days +8.3bp
   (t 2.29) on 33 years but +3.1 (t 0.5) since 2016 — decayed; only worth
   revisiting as a timing overlay on flows the fund already trades.
+- **Options flow (the retail "unusual activity" canon)**: testable, but
+  it needs its own fetch design — Alpaca has no historical chain
+  snapshots, so chains must be RECONSTRUCTED: strikes near spot x 0-2
+  nearest expiries -> OCC symbols -> OPRA minute bars with volume.
+  Scoped v1: SPY+QQQ+10 liquid single names, 2024-02+, ~7.4k batched
+  requests (~1.5h overnight fetch). Features: call/put volume and
+  notional by moneyness bucket, day-over-day z-scores, OTM-call spike
+  flags; label next-day underlying return; GBM walk-forward + battery
+  cells (P/C extremes, sweep proxies), the 2b bar throughout. Prior
+  stated: most published "flow" signals are marketing; the measured
+  yes/no is the deliverable. (2026-08-11, Matthew's canon list.)
 
 ## 5. Rejected for cause (measured; do not rebuild)
 
