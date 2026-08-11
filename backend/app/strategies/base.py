@@ -91,6 +91,15 @@ class StrategyContext:
         event, conditions not met') — silence is the enemy of replay."""
         await self._runner.journal_note(self._instance_id, action_detail, signal_ids)
 
+    async def reporters(self, date: str) -> list[dict]:
+        """Earnings-calendar reporters journaled for a CALENDAR date
+        (payload dicts: symbol/date/when/consensus...). Reads the signal
+        journal, not in-memory feed state, so a strategy that needs "who
+        reported two sessions ago" (day2_pop) survives restarts. Coverage
+        is the calendar feed's own (Finnhub, ~2/3 of reporters) — a
+        strategy consuming this inherits that stated limitation."""
+        return await self._runner.reporters_for(date)
+
     async def account(self) -> dict:
         """THE STRATEGY'S OWN BOOK, not the broker account.
 

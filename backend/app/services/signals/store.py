@@ -94,6 +94,20 @@ class SignalStore:
             out = [r for r in out if symbol in (r["symbols"] or [])]
         return out
 
+    async def reporters_for(self, date: str) -> list[dict]:
+        """Journaled earnings-calendar reporters for one calendar date (key
+        `cal:{symbol}:{date}`) — the restart-proof read of the estimate
+        journal. Day-after strategies (day2_pop) need reporters from two
+        sessions back, which in-memory event state cannot survive a reboot;
+        the journal can. Returns the event payloads, oldest first."""
+        query = (select(SignalRow)
+                 .where(SignalRow.type == "estimate")
+                 .where(SignalRow.key.like(f"cal:%:{date}"))
+                 .order_by(SignalRow.id))
+        async with self.db.session() as session:
+            rows = (await session.scalars(query)).all()
+        return [r.payload or {} for r in rows]
+
     async def by_ids(self, ids: list[int]) -> list[dict]:
         if not ids:
             return []

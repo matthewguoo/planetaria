@@ -692,6 +692,11 @@ class StrategyRunner:
                            signal_ids: tuple[int, ...] = ()) -> None:
         await self._journal(row_id, "note", detail=detail, signal_ids=list(signal_ids))
 
+    async def reporters_for(self, date: str) -> list[dict]:
+        """Earnings-calendar reporters journaled for a calendar date — the
+        signal store's restart-proof estimate history (ctx.reporters)."""
+        return await self.store.reporters_for(date)
+
     async def allocation_state(self, row_id: str) -> dict:
         """This instance's capital envelope: what it was given, what its open
         plans already commit, and what is left.
