@@ -9,11 +9,12 @@ file is the map.
 
 ## 1. URGENT before the next market session
 
-- **fly-1 param bug.** First-ever live decision (Mon 14:00 ET) SKIPPED at
-  21% credit/width citing the OLD [25%, 90%] band, while instance params
-  read `min_credit_frac: 0.1` (pre-reg Amendment 2). The amendment is not
-  reaching the running strategy — stale spawn or param not plumbed. Second
-  occurrence of the exact Exhibit-A failure. Fix/respawn before 14:00.
+- **fly-1 credit-band skip — RESOLVED by Matthew in 19bf16b** (class
+  default 0.25 -> 0.10, pre-reg amendment documented). Residual question
+  worth one look: the running instance enforced the class default while
+  its DB params read 0.10 — if instance params don't override class
+  defaults in the guard path, that plumbing bites the next amended param
+  too. Verify at Tue 14:00 that the decision cites [10%, 90%].
 - **gff-1 journaled NOTHING through Monday's open** (enabled, note-mode).
   Created-after-open vs silent-no-signal vs broken morning path —
   distinguish; a quiet-day journal line would remove the ambiguity class.
