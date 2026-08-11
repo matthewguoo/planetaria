@@ -67,9 +67,14 @@ ET = ZoneInfo("America/New_York")
 STAMP = datetime.now(ET).strftime("%Y%m%d_%H%M")
 TOUCH_F = CACHE / "zone_touches.parquet"
 
+# POWER AMENDMENT before any scoring (documented, pre-outcome): the first
+# build's definitions produced ~125 touches/month across 100 names —
+# ~7.5k total, too thin for year tables or the GRU. Loosened base range
+# 0.5 -> 0.75 and impulse 60 -> 40bp BEFORE any outcome was computed;
+# no results existed at amendment time (only touch counts).
 BASE_BARS = 3
-BASE_RANGE_FRAC = 0.5
-IMPULSE_BP = 60.0
+BASE_RANGE_FRAC = 0.75
+IMPULSE_BP = 40.0
 IMPULSE_WITHIN = 15
 FRESH_AFTER = 10
 CONFIRM_WITHIN = 10
