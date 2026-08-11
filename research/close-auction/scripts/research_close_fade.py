@@ -434,12 +434,112 @@ def stage_xray(args) -> None:
     print(f"\nwrote {out}")
 
 
+def stage_recut(args) -> None:
+    """ONE pre-declared re-cut, stated before running (the xray note's
+    condition for any further look): CLEAN of earnings adjacency, depth
+    >= 100bp, Tue/Wed/Thu only, top-2 slots by depth at 25% each, net@5.
+    No other configuration is run; a second cut would be shopping."""
+    raw, adj = daily_panels()
+    marks = pd.read_parquet(MARKS_F).dropna(subset=["px1530", "px1545"])
+    adj = adj.sort_values(["symbol", "date"])
+    ga = adj.groupby("symbol", sort=False)
+    adj = adj.assign(o_next=ga["o"].shift(-1))
+    adj["ov_ret"] = adj["o_next"] / adj["c"] - 1
+    j = marks.merge(adj[["symbol", "date", "ov_ret"]],
+                    on=["symbol", "date"], how="inner").dropna(
+        subset=["ov_ret"])
+    j["late_bp"] = (j["px1545"] / j["px1530"] - 1) * 1e4
+    j["year"] = j["date"].str[:4]
+    sig = j[j["late_bp"] <= -100.0].copy()
+    sig["bp"] = sig["ov_ret"] * 1e4
+    dow = pd.to_datetime(sig["date"]).dt.dayofweek
+    sig = sig[(dow >= 1) & (dow <= 3)]
+
+    ev = pd.concat([pd.read_parquet(f, columns=["symbol", "date", "acc_min"])
+                    for f in sorted((ROOT / "research" / "pead-llm-gate"
+                                     / "cache").glob("events_v2_*.parquet"))],
+                   ignore_index=True)
+    ev["date"] = ev["date"].astype(str)
+    tonight = set(zip(ev.loc[ev["acc_min"] >= 930, "symbol"],
+                      ev.loc[ev["acc_min"] >= 930, "date"]))
+    ev["d_next"] = (pd.to_datetime(ev["date"])
+                    + pd.Timedelta(days=1)).dt.strftime("%Y-%m-%d")
+    recent = set(zip(ev["symbol"], ev["d_next"])) | set(
+        zip(ev.loc[ev["acc_min"] < 570, "symbol"],
+            ev.loc[ev["acc_min"] < 570, "date"]))
+    clean = [ (s, d) not in tonight and (s, d) not in recent
+              for s, d in zip(sig["symbol"], sig["date"]) ]
+    sig = sig[np.array(clean)]
+
+    lines: list[str] = []
+
+    def emit(t=""):
+        print(t, flush=True)
+        lines.append(t)
+
+    emit(f"# close_fade re-cut, the ONE declared config — {STAMP}")
+    emit()
+    emit(f"{len(sig):,} signals (clean, depth >= 100bp, Tue-Thu). "
+         "Fade at the close print, exit next open, net@5. Declared in the "
+         "stage docstring before running; no other cut was tried.")
+    emit()
+    net = sig["bp"] - COST_BP
+    emit(f"- per trade: {net.mean():+.1f}bp net (t "
+         f"{tstat(net.to_numpy()):+.2f}, n {len(net):,}, "
+         f"{len(net) / sig['date'].nunique():.1f}/active day)")
+    emit()
+    emit("| year | n | net bp | t |")
+    emit("|---|---|---|---|")
+    for y in sorted(sig["year"].unique()):
+        x = (sig.loc[sig["year"] == y, "bp"] - COST_BP).to_numpy()
+        emit(f"| {y} | {len(x):,} | {x.mean():+.1f} | {tstat(x):+.2f} |")
+    emit()
+    spyf = sorted((ROOT / "research" / "pead-llm-gate" / "cache").glob(
+        "bench_SPY_*.parquet"))
+    spy = (pd.concat([pd.read_parquet(f) for f in spyf])
+           .drop_duplicates("date").sort_values("date"))
+    spy["date"] = spy["date"].astype(str)
+    spy_ret = spy.set_index("date")["close"].pct_change()
+    days = [d for d in spy_ret.index if START <= d <= max(j["date"])]
+    picks = (sig.assign(depth=sig["late_bp"].abs())
+             .sort_values(["date", "depth"], ascending=[True, False])
+             .groupby("date").head(2))
+    day_ret = ((picks["bp"] - COST_BP) * 0.25 / 1e4).groupby(
+        picks["date"]).sum()
+    ret = day_ret.reindex(days).fillna(0.0)
+    eq = np.cumprod(1 + ret.to_numpy())
+    years = len(days) / 252
+    ann = float(eq[-1] ** (1 / years) - 1) * 100
+    sh = float(ret.mean() / ret.std(ddof=1) * np.sqrt(252))
+    dd = float((1 - eq / np.maximum.accumulate(eq)).max() * 100)
+    emit(f"Slot sim (top-2 by depth, 25% each): {len(picks):,} trades, "
+         f"ann {ann:+.2f}%, Sharpe {sh:+.2f}, maxDD {dd:.1f}%")
+    emit()
+    emit("Verdict rule, declared: this cut earns a pre-registration ONLY "
+         "if Sharpe >= 1.0 here AND stays positive ex-2026; otherwise "
+         "close_fade stays parked with no further cuts.")
+
+    try:
+        rev = subprocess.run(["git", "rev-parse", "--short", "HEAD"],
+                             capture_output=True, text=True, timeout=5,
+                             cwd=str(STUDY)).stdout.strip() or "?"
+    except Exception:
+        rev = "?"
+    lines.append("")
+    lines.append(f"_Provenance: `research_close_fade.py recut` at {rev}, "
+                 f"{datetime.now(ET).strftime('%Y-%m-%d %H:%M ET')}_")
+    NOTES.mkdir(parents=True, exist_ok=True)
+    out = NOTES / f"close_fade_recut_{STAMP}.md"
+    out.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    print(f"\nwrote {out}")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("stage", choices=["fetch", "score", "xray"])
+    ap.add_argument("stage", choices=["fetch", "score", "xray", "recut"])
     args = ap.parse_args()
     {"fetch": stage_fetch, "score": stage_score,
-     "xray": stage_xray}[args.stage](args)
+     "xray": stage_xray, "recut": stage_recut}[args.stage](args)
 
 
 if __name__ == "__main__":
