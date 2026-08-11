@@ -111,6 +111,28 @@ table, slot-level account sim, pre-registration; decide LLM stacking
 (the gate reads the tape, the flagship reads the filing — independent
 channels) only after the mechanical version has its own numbers.
 
+## 3e. gff fade-quality gate — ML take/skip on `gap_fail_fade` (studied 2026-08-10)
+
+Queue #1 of the handoff, delivered: walk-forward 2019-26 (train from
+2016), 23 decision-time features (nothing at/after 09:30), primary cell
+pre-declared before results (HGB, both legs, tau 0.50, net@10).
+Evidence: `research/open-window/notes/gff_gate_20260810_2339.md` —
+**+12.3 -> +21.1bp/trade at 61% keep (t 4.37), beats its own
+random-skipping null at p=0.003; account level Sharpe 1.24 -> 1.57 with
+maxDD 13.4% -> 6.0% and slightly HIGHER annual return on 40% fewer
+trades.** Rescues the bad years (2019: -5 -> +20; 2023: -3 -> +14),
+gives back -9bp in 2026. Top features: fade-crowdedness that morning,
+prior-day return, turn magnitude, premarket dollars. Honest negatives:
+rank-by-P slot selection LOSES to the registered pmvol ranking (the
+registered selection stands), and the 09:00->09:15 premarket segment
+adds nothing. Family risk is the delayed-gate precedent's: a fitted
+model stays quarantined from the high-confidence book until a forward
+test. Deployment path: journal-only first — gff-1 computes and journals
+P per candidate each morning (every feature is in the scanner's hands by
+09:27) for a season, then a pre-registered tau=0.50 skip rule lands as a
+pre-reg amendment. The gate only decides which candidates submit; MOO
+mechanics never change.
+
 ## 4. NEEDS-STUDY shelf (do the study before any code)
 
 - **Single-name earnings 0DTE/weekly fly**: selling event vol on the
