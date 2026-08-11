@@ -139,6 +139,24 @@ mechanics never change.
   flagship's own watchlist names. The implied-move data exists (Alpaca
   options bars 2024-02+); the tail is nastier and the spreads wider than
   index products. Study must price the wings at real quotes.
+- **Minute-tape ML at scale (the 3090 project)**: the one workload where
+  the RTX 3090 (24GB, verified 2026-08-10; torch NOT installed) genuinely
+  changes what is testable. Scope: build a top-100-liquid full-session
+  minute cache 2022-2026 (~40M bars, ~2-3GB, one overnight resumable
+  fetch); train cross-sectional k-minute-ahead models with the house
+  protocol (walk-forward by year, train-label placebo, thresholds as
+  families — the gate study's exact discipline). ORDER OF BATTLE: a CPU
+  GBM on engineered bar features is the baseline any deep model must
+  beat; only then TCN/small-transformer sequence models on GPU. Setup
+  rule: torch goes in a SEPARATE research venv (`research/.venv-ml`,
+  `pip install torch --index-url https://download.pytorch.org/whl/cu121`)
+  — NEVER into backend/.venv while the engine runs from it. Honest
+  prior stated up front: minute-horizon alpha must clear ~6-10bp retail
+  costs, and the repo's own evidence (GHLZ dead at our latency, learned
+  exits rejected) says most of what a net finds will be cost-dominated;
+  the deliverable is a measured yes/no, not a promised sleeve. Event
+  panels (n~10^3) stay OFF the GPU — deep nets at that sample size are
+  overfit machines and the tabular gate already owns that ground.
 - **Month-end Etula overlay**: the battery showed first-3-days +8.3bp
   (t 2.29) on 33 years but +3.1 (t 0.5) since 2016 — decayed; only worth
   revisiting as a timing overlay on flows the fund already trades.
