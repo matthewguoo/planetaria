@@ -31,10 +31,11 @@ day2_shift notes (all 2026-08-10):
 |---|---|---|---|
 | gff LONG | 10.6y | 0.99 @10bp / 1.25 @6bp | +14.5bp/tr t 3.27; PASSED 6y backward OOS test (2016-21 fetched fresh); cost decides everything; dead at 20bp |
 | gff BOTH (needs shorts) | 10.6y | 0.96 @10bp / 1.38 @6bp | t 4.52 |
-| fly 1-set | 2.5y max (no data/instrument earlier) | 1.26 | 15:30-exit variant is ZERO — edge is the last 30 min; registered 15:50 exit sits inside the forfeited window — exit study needed |
+| fly 1-set | 2.5y max (no data/instrument earlier) | 1.26 at INTRINSIC only | 15:30-exit ZERO; **exit study DONE 2026-08-11 (fly_exit_curve note): 15:50 exit keeps ~36% of intrinsic, 15:59 keeps 51%, the 15:59->settlement step (+1.45bp/d t 4.7) is unharvestable (desk force-closes expiring positions); at 15:50 the years read 2024 +3.50 / 2025 -0.92 / 2026 +0.16 — BELOW the pre-reg band; amendment decision is Matthew's** |
 | day2_pop @09:32 | 10.6y | ~0.80 | entry shift from open is FREE-to-positive (+3.3bp, t 0.97) → stacks with gff on shared dollars |
 | delayed-entry mech ungated | 10.6y | 0.64-0.72 | +36.9bp/tr t 2.12 decade-stable; NOT an overnight play — open-exit guts it (+81→+16 gated); dollar busy 17:30→next 15:55 |
 | delayed gated P>=0.45 (ML) | 2019-26 OOS | 1.16 | +81.2bp/tr t 3.33; AUC 0.737 stable each year; quarantined from high-confidence book (fitted model, family risk) |
+| gff gated tau=0.50 (ML, added 2026-08-11) | 2019-26 OOS | **1.57** @10bp flat / 1.27 @measured books | +21.1bp/tr t 4.37 (+16.9 t 3.51 at per-trade NBBO); CAGR +11.5% flat / +9.1% measured vs ungated 1.24/0.88 & +10.8/+7.4%; maxDD 6-7% (halved); placebo-clean, crowdedness-concentrated (robustness note); QUARANTINED (fitted) — journal-only in gff-1 first, tau-skip only as pre-reg amendment (gff_gate_/gff_gate_robustness_/gff_exit_cost_ notes, designs brief §3e) |
 | mech carry | 10.6y | 0.34 | dead, stays out |
 | short-gap-up (minute universe) | 4.6y | — | REJECTED (+3.3bp net best, t~0.6) — anti-queue |
 | CSP 0DTE (IRA-legal premium) | 2.5y | 0.52 on secured cash | REJECTED — +2.7%/yr on the strike cash it locks; the wings were the capital structure |
