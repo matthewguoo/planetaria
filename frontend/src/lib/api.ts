@@ -507,8 +507,10 @@ export type StrategyPlanRow = {
 
 export type StrategyPerformance = {
   name: string;
-  registered: RegisteredBlock | null;
-  ladder: LadderState | null;
+  /** Absent (undefined) from an engine older than the registered plane —
+   * the console renders nothing then; null means genuinely unregistered. */
+  registered?: RegisteredBlock | null;
+  ladder?: LadderState | null;
   open: number;
   closed: number;
   win_rate: number | null;

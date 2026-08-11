@@ -591,11 +591,11 @@ function PerformancePanel({ inst }: { inst: StrategyInstance }) {
 
   return (
     <>
-      {perf && (
+      {perf && perf.registered !== undefined && (
         <RegistrationPanel
           name={inst.name}
           registered={perf.registered}
-          ladder={perf.ladder}
+          ladder={perf.ladder ?? null}
         />
       )}
       <div className="panel flex shrink-0 flex-col">
