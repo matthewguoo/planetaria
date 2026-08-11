@@ -298,11 +298,148 @@ def stage_score(args) -> None:
     print(f"\nwrote {out}")
 
 
+def stage_xray(args) -> None:
+    """The pre-registration battery the score note queued: earnings x-ray
+    (is the dumper-bounce just pre-AMC risk warehousing, or post-earnings
+    drift?), the sub-split family (depth, day-of-week — reported in FULL),
+    and the slot-level account sim (top-4/day by dump depth, 25% each)."""
+    raw, adj = daily_panels()
+    marks = pd.read_parquet(MARKS_F).dropna(subset=["px1530", "px1545"])
+    adj = adj.sort_values(["symbol", "date"])
+    ga = adj.groupby("symbol", sort=False)
+    adj = adj.assign(o_next=ga["o"].shift(-1))
+    adj["ov_ret"] = adj["o_next"] / adj["c"] - 1
+    j = marks.merge(adj[["symbol", "date", "ov_ret"]],
+                    on=["symbol", "date"], how="inner").dropna(
+        subset=["ov_ret"])
+    j["late_bp"] = (j["px1545"] / j["px1530"] - 1) * 1e4
+    j["year"] = j["date"].str[:4]
+    sig = j[j["late_bp"] <= -PRIMARY_THRESH].copy()      # the LONG side
+    sig["bp"] = sig["ov_ret"] * 1e4
+
+    ev = pd.concat([pd.read_parquet(f, columns=["symbol", "date", "acc_min"])
+                    for f in sorted((ROOT / "research" / "pead-llm-gate"
+                                     / "cache").glob("events_v2_*.parquet"))],
+                   ignore_index=True)
+    ev["date"] = ev["date"].astype(str)
+    tonight = set(zip(ev.loc[ev["acc_min"] >= 930, "symbol"],
+                      ev.loc[ev["acc_min"] >= 930, "date"]))
+    ev["d_next"] = (pd.to_datetime(ev["date"])
+                    + pd.Timedelta(days=1)).dt.strftime("%Y-%m-%d")
+    recent = set(zip(ev["symbol"], ev["d_next"])) | set(
+        zip(ev.loc[ev["acc_min"] < 570, "symbol"],
+            ev.loc[ev["acc_min"] < 570, "date"]))
+    sig["reports_tonight"] = [
+        (s, d) in tonight for s, d in zip(sig["symbol"], sig["date"])]
+    sig["reported_recently"] = [
+        (s, d) in recent for s, d in zip(sig["symbol"], sig["date"])]
+
+    lines: list[str] = []
+
+    def emit(t=""):
+        print(t, flush=True)
+        lines.append(t)
+
+    def row(label, mask):
+        x = sig.loc[mask, "bp"].to_numpy()
+        x = x[np.isfinite(x)]
+        if len(x) < 20:
+            emit(f"| {label} | {len(x)} | — | — | — |")
+            return
+        emit(f"| {label} | {len(x):,} | {x.mean():+.1f} "
+             f"| {tstat(x):+.2f} | {x.mean() - COST_BP:+.1f} |")
+
+    emit(f"# close_fade pre-registration battery — {STAMP}")
+    emit()
+    emit(f"{len(sig):,} long signals (late <= -{PRIMARY_THRESH:.0f}bp). "
+         "Earnings flags from the events_v2 panel (8-K acceptances, "
+         "2016-26): `reports_tonight` = same symbol accepted >= 15:30 "
+         "that day; `reported_recently` = accepted the prior day or "
+         "pre-open same day.")
+    emit()
+    emit("## Earnings x-ray (gross bp to next open)")
+    emit()
+    emit("| slice | n | bp | t | net@5 |")
+    emit("|---|---|---|---|---|")
+    row("ALL long signals", pd.Series(True, index=sig.index))
+    row("reports TONIGHT (warehouses the print)", sig["reports_tonight"])
+    row("reported recently (post-earnings drift)", sig["reported_recently"])
+    clean = ~sig["reports_tonight"] & ~sig["reported_recently"]
+    row("CLEAN (no earnings adjacency)", clean)
+    emit()
+    emit("## Sub-split family on the CLEAN set (report in full; x9 family)")
+    emit()
+    emit("| slice | n | bp | t | net@5 |")
+    emit("|---|---|---|---|---|")
+    d = sig["late_bp"].abs()
+    for lab, m in (("depth 50-75bp", (d >= 50) & (d < 75)),
+                   ("depth 75-100bp", (d >= 75) & (d < 100)),
+                   ("depth 100-150bp", (d >= 100) & (d < 150)),
+                   ("depth >= 150bp", d >= 150)):
+        row(lab, clean & m)
+    dow = pd.to_datetime(sig["date"]).dt.dayofweek
+    for lab, m in (("Mon", dow == 0), ("Tue-Thu", (dow >= 1) & (dow <= 3)),
+                   ("Fri (holds the weekend)", dow == 4)):
+        row(lab, clean & m)
+    for y in sorted(sig["year"].unique()):
+        row(f"{y} clean", clean & (sig["year"] == y))
+    emit()
+
+    # ---- slot-level account sim ------------------------------------------
+    emit("## Slot-level account sim (CLEAN set, top-4/day by depth, "
+         "25%/slot, @5bp)")
+    emit()
+    spy = spy_ret = None
+    spyf = sorted((ROOT / "research" / "pead-llm-gate" / "cache").glob(
+        "bench_SPY_*.parquet"))
+    spy = (pd.concat([pd.read_parquet(f) for f in spyf])
+           .drop_duplicates("date").sort_values("date"))
+    spy["date"] = spy["date"].astype(str)
+    spy_ret = spy.set_index("date")["close"].pct_change()
+    days = [d_ for d_ in spy_ret.index if START <= d_ <= max(sig["date"])]
+    picks = (sig[clean].assign(depth=sig.loc[clean, "late_bp"].abs())
+             .sort_values(["date", "depth"], ascending=[True, False])
+             .groupby("date").head(4))
+    net = picks["bp"] - COST_BP
+    day_ret = (net * 0.25 / 1e4).groupby(picks["date"]).sum()
+    ret = day_ret.reindex(days).fillna(0.0)
+    eq = np.cumprod(1 + ret.to_numpy())
+    years = len(days) / 252
+    ann = float(eq[-1] ** (1 / years) - 1) * 100
+    shp = float(ret.mean() / ret.std(ddof=1) * np.sqrt(252))
+    mdd = float((1 - eq / np.maximum.accumulate(eq)).max() * 100)
+    jj = pd.concat([ret, spy_ret], axis=1, join="inner").dropna()
+    b = float(np.cov(jj.iloc[:, 0], jj.iloc[:, 1], ddof=1)[0, 1]
+              / np.var(jj.iloc[:, 1], ddof=1))
+    emit(f"- {len(picks):,} slot-trades on {picks['date'].nunique():,} "
+         f"active days of {len(days):,}: ann {ann:+.2f}%, Sharpe "
+         f"{shp:+.2f}, maxDD {mdd:.1f}%, beta {b:+.3f}")
+    emit()
+    emit("Overnight beta note: every slot holds the close->open gap; the "
+         "beta above is the measured net-of-conditioning number, not an "
+         "assumption.")
+
+    try:
+        rev = subprocess.run(["git", "rev-parse", "--short", "HEAD"],
+                             capture_output=True, text=True, timeout=5,
+                             cwd=str(STUDY)).stdout.strip() or "?"
+    except Exception:
+        rev = "?"
+    lines.append("")
+    lines.append(f"_Provenance: `research_close_fade.py xray` at {rev}, "
+                 f"{datetime.now(ET).strftime('%Y-%m-%d %H:%M ET')}_")
+    NOTES.mkdir(parents=True, exist_ok=True)
+    out = NOTES / f"close_fade_xray_{STAMP}.md"
+    out.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    print(f"\nwrote {out}")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("stage", choices=["fetch", "score"])
+    ap.add_argument("stage", choices=["fetch", "score", "xray"])
     args = ap.parse_args()
-    {"fetch": stage_fetch, "score": stage_score}[args.stage](args)
+    {"fetch": stage_fetch, "score": stage_score,
+     "xray": stage_xray}[args.stage](args)
 
 
 if __name__ == "__main__":
