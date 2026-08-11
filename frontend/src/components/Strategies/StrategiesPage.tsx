@@ -475,7 +475,7 @@ function DecisionsPanel({
  * early scary/euphoric one beside a frozen backtest number is goal-pressure
  * by UI (docs/briefs/fund-capital-scheduling.md §7).
  */
-function RegistrationPanel({
+export function RegistrationPanel({
   name,
   registered,
   ladder,
