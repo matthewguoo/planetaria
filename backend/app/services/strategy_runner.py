@@ -30,6 +30,7 @@ from app.models.strategies import (
 )
 from app.models.trade import OPEN_STATUSES, SIM_CLOSED, SIM_OPEN, TradePlan, utcnow
 from app.services.llm import LLMAnalyst
+from app.services.registered import ladder_state
 from app.services.signals.events import EventBus
 from app.services.signals.store import SignalStore
 from app.services.supervision import supervise
@@ -1148,11 +1149,22 @@ class StrategyRunner:
                 .order_by(TradePlan.created_at.desc())
                 .limit(200)
             )).all()
+            # Timestamps only: sessions_observed is a distinct-ET-dates count
+            # and the decision bodies would be dead weight here.
+            decision_ts = (await session.scalars(
+                select(StrategyDecisionRow.ts)
+                .where(StrategyDecisionRow.strategy_id == row_id)
+            )).all()
         closed = [p for p in plans if p.realized_pnl is not None]
         wins = [p.realized_pnl for p in closed if p.realized_pnl > 0]
         losses = [p.realized_pnl for p in closed if p.realized_pnl <= 0]
+        cls = REGISTRY.get(row.kind)
+        registered = getattr(cls, "registered", None) if cls else None
         return {
             "name": row.name,
+            "registered": registered,
+            "ladder": ladder_state(registered, row.params or {}, plans,
+                                   decision_ts),
             "open": sum(1 for p in plans
                         if p.status in OPEN_STATUSES or p.status == SIM_OPEN),
             "closed": len(closed),

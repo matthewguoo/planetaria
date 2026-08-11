@@ -57,6 +57,26 @@ class AfternoonFly(Strategy):
     subscriptions = ("timer", "manual")
     requires = frozenset({"options"})
 
+    # Frozen at registration (ec841f8) + amendments 1-2 (same day, pre-live).
+    # The band is the NET expectation, not the gross best cell — deviations
+    # 1-3 in the doc are why they differ.
+    registered = {
+        "doc": "docs/pre-registration-afternoon-fly.md",
+        "registered_commit": "ec841f8",
+        "source_note": "research/0dte-vrp/notes/flies_0dte_20260810_0214.md",
+        "window": "2024-02..2026-08",
+        "metric": "bp_of_underlying_per_day",
+        "metric_label": "net bp of underlying/day",
+        "band": [1.5, 2.5],
+        "sharpe_band": [1.3, 1.8],
+        "backtest": {"value": 3.2, "t": 3.51, "sharpe": 2.20,
+                     "basis": "gross, best-of-9 cell; honest prior +2.5-2.8"},
+        "costs_assumed": "$0.02/structure marketability; 2-5c/side leg friction unpriced",
+        "ladder": [{"stage": "note-mode", "sessions": 20},
+                   {"stage": "one-set live", "sessions": 10},
+                   {"stage": "full size", "sessions": None}],
+    }
+
     default_params = {
         "underlying": "QQQ",       # where the premium lives; SPY measured thin
         "entry_et": "14:00",       # measured cell; 15:30 is the other live one

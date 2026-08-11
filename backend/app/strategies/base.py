@@ -154,6 +154,14 @@ class Strategy(abc.ABC):
     # legitimately blocks (ctx.analyze) — the queue is per-instance, so a
     # longer budget only delays THIS strategy's own later events.
     event_timeout_s: ClassVar[float] = EVENT_TIMEOUT_S
+    # The pre-registration, as data (docs/briefs/fund-capital-scheduling.md
+    # §5). FROZEN at the pre-reg commit: live results never edit it; a better
+    # backtest later is a NEW registration. None = unregistered, and the
+    # console says so rather than showing naked backtest numbers. Keys the
+    # ladder aggregation reads: metric (net_bp_per_trade |
+    # bp_of_underlying_per_day), band [lo, hi] on that metric, ladder
+    # [{stage, sessions}]. Everything else is provenance for humans.
+    registered: ClassVar[dict | None] = None
 
     @classmethod
     def validate_params(cls, params: dict) -> dict:

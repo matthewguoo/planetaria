@@ -70,6 +70,7 @@ async def catalog(request: Request) -> dict:
                 "default_params": cls.default_params,
                 "requires": sorted(cls.requires),
                 "doc": (cls.__doc__ or "").strip().split("\n")[0],
+                "registered": cls.registered,
             }
             for cls in REGISTRY.values()
         ],

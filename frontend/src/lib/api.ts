@@ -361,6 +361,38 @@ export type StrategyKind = {
   default_params: Record<string, unknown>;
   requires: string[];
   doc: string;
+  registered: RegisteredBlock | null;
+};
+
+/** The pre-registration as data — FROZEN at the pre-reg commit; live
+ * results never edit it (docs/briefs/fund-capital-scheduling.md §5). */
+export type RegisteredBlock = {
+  doc: string;
+  registered_commit: string;
+  source_note: string;
+  window: string;
+  metric: string;
+  metric_label: string;
+  band: [number, number];
+  sharpe_band?: [number, number];
+  trades_per_day_band?: [number, number];
+  backtest: { value: number; t?: number; sharpe?: number; basis: string };
+  costs_assumed: string;
+  ladder: { stage: string; sessions: number | null }[];
+};
+
+/** The instance's own record measured on the registered metric. */
+export type LadderState = {
+  stage: string;
+  target_sessions: number | null;
+  sessions_observed: number;
+  trades_closed: number;
+  samples: number;
+  metric: string;
+  metric_label: string | null;
+  running_metric: number | null;
+  band: [number, number] | null;
+  band_status: "in" | "above" | "below" | null;
 };
 
 /** What the platform currently provides, against what strategies declare. */
@@ -474,6 +506,8 @@ export type StrategyPlanRow = {
 
 export type StrategyPerformance = {
   name: string;
+  registered: RegisteredBlock | null;
+  ladder: LadderState | null;
   open: number;
   closed: number;
   win_rate: number | null;

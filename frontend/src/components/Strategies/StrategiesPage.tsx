@@ -16,6 +16,8 @@ import {
   type Allocation,
   type Capabilities,
   type CircuitBreaker,
+  type LadderState,
+  type RegisteredBlock,
   type SignalRecord,
   type StrategyDecision,
   type StrategyInstance,
@@ -465,6 +467,108 @@ function DecisionsPanel({
   );
 }
 
+/**
+ * The pre-reg ladder as a progress bar: the registered band — FROZEN at the
+ * pre-registration commit — against the instance's own record on the SAME
+ * metric. Deliberately absent: a live Sharpe. At ladder sample sizes a
+ * Sharpe is noise with a confidence interval wider than itself, and an
+ * early scary/euphoric one beside a frozen backtest number is goal-pressure
+ * by UI (docs/briefs/fund-capital-scheduling.md §7).
+ */
+function RegistrationPanel({
+  name,
+  registered,
+  ladder,
+}: {
+  name: string;
+  registered: RegisteredBlock | null;
+  ladder: LadderState | null;
+}) {
+  if (!registered || !ladder) {
+    return (
+      <div className="panel flex shrink-0 flex-col">
+        <div className="panel-title">PRE-REGISTRATION — {name.toUpperCase()}</div>
+        <div
+          className="px-2 py-2 text-[11px] text-bb-orange"
+          title="Write docs/pre-registration-<kind>.md and freeze it on the strategy class before this kind ever goes live."
+        >
+          UNREGISTERED — this kind carries no frozen expectation band
+        </div>
+      </div>
+    );
+  }
+  const progress =
+    ladder.target_sessions != null && ladder.target_sessions > 0
+      ? Math.min(ladder.sessions_observed / ladder.target_sessions, 1)
+      : null;
+  const bandCls =
+    ladder.band_status === "in"
+      ? "text-bb-profit"
+      : ladder.band_status === "below"
+        ? "text-bb-loss"
+        : ladder.band_status === "above"
+          ? "text-bb-orange"
+          : "text-bb-muted";
+  const [lo, hi] = registered.band;
+  return (
+    <div className="panel flex shrink-0 flex-col">
+      <div
+        className="panel-title"
+        title={`${registered.doc} @ ${registered.registered_commit} — frozen; live results never edit it`}
+      >
+        PRE-REGISTRATION — {name.toUpperCase()}
+      </div>
+      <div className="flex flex-col gap-1 px-2 py-1.5 text-[11px]">
+        <div className="flex items-center gap-4" data-numeric>
+          <span className="text-bb-muted">
+            stage <span className="text-bb-amber">{ladder.stage}</span>
+          </span>
+          <span
+            className="text-bb-muted"
+            title="ET dates with journal or plan activity — the gate sample, not a score"
+          >
+            sessions{" "}
+            <span className="text-bb-amber">
+              {ladder.sessions_observed}
+              {ladder.target_sessions != null ? `/${ladder.target_sessions}` : ""}
+            </span>
+          </span>
+          <span className="text-bb-muted">
+            closed <span className="text-bb-amber">{ladder.trades_closed}</span>
+          </span>
+          <span className="text-bb-muted">
+            band{" "}
+            <span className="text-white">
+              {lo}–{hi} {ladder.metric_label ?? registered.metric_label}
+            </span>
+          </span>
+          <span className="text-bb-muted">
+            running{" "}
+            <span className={bandCls}>
+              {ladder.running_metric == null
+                ? "no closed trades yet"
+                : `${ladder.running_metric > 0 ? "+" : ""}${ladder.running_metric.toFixed(1)} (${ladder.band_status})`}
+            </span>
+          </span>
+        </div>
+        {progress != null && (
+          <div className="h-1.5 w-full bg-bb-border/40" title="sessions toward this stage's gate">
+            <div className="h-full bg-bb-amber" style={{ width: `${progress * 100}%` }} />
+          </div>
+        )}
+        <div
+          className="text-[10px] text-bb-muted"
+          title={`evidence: ${registered.source_note}`}
+        >
+          backtest {registered.backtest.value > 0 ? "+" : ""}
+          {registered.backtest.value} ({registered.backtest.basis}) · window{" "}
+          {registered.window} · costs {registered.costs_assumed}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function PerformancePanel({ inst }: { inst: StrategyInstance }) {
   const [perf, setPerf] = useState<StrategyPerformance | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -484,7 +588,15 @@ function PerformancePanel({ inst }: { inst: StrategyInstance }) {
   }, [inst.id]);
 
   return (
-    <div className="panel flex shrink-0 flex-col">
+    <>
+      {perf && (
+        <RegistrationPanel
+          name={inst.name}
+          registered={perf.registered}
+          ladder={perf.ladder}
+        />
+      )}
+      <div className="panel flex shrink-0 flex-col">
       <div className="panel-title">
         PERFORMANCE — {inst.name.toUpperCase()}
       </div>
@@ -572,7 +684,8 @@ function PerformancePanel({ inst }: { inst: StrategyInstance }) {
           )}
         </>
       )}
-    </div>
+      </div>
+    </>
   );
 }
 

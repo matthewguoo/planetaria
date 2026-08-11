@@ -64,6 +64,27 @@ class GapFailFade(Strategy):
     subscriptions = ("timer", "manual")
     requires = frozenset()      # premarket IEX + MOO: nothing gated
 
+    # Frozen at registration (246f21e). Band and Sharpe are the LONG leg —
+    # the short leg journals would-takes until shorts unlock (both-legs
+    # registered expectation is 1.2-1.7).
+    registered = {
+        "doc": "docs/pre-registration-gap-fail-fade.md",
+        "registered_commit": "246f21e",
+        "source_note": "research/open-window/notes/failed_gap_split_20260810.md",
+        "window": "2022-01..2026-08",
+        "metric": "net_bp_per_trade",
+        "metric_label": "net bp/trade (long leg)",
+        "band": [8.0, 15.0],
+        "sharpe_band": [0.7, 1.1],
+        "trades_per_day_band": [0.5, 0.8],
+        "backtest": {"value": 23.9, "t": 5.85, "sharpe": 1.00,
+                     "basis": "gross at the auction print; Sharpe is the account sim at 10bp"},
+        "costs_assumed": "10bp round trip; measured exit cost >20bp is stopping rule #1",
+        "ladder": [{"stage": "note-mode", "sessions": 20},
+                   {"stage": "one-share live", "sessions": 10},
+                   {"stage": "full size", "sessions": None}],
+    }
+
     default_params = {
         "min_gap_pct": 1.5,      # |open gap| vs prior close, at 09:27
         "min_turn_bp": 20.0,     # 09:15 -> 09:27 move against the gap
