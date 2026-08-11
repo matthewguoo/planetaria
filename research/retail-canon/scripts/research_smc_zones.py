@@ -332,11 +332,114 @@ def stage_score(args) -> None:
     print(f"\nwrote {out}")
 
 
+def stage_anti(args) -> None:
+    """ONE pre-declared follow-up to the score's paradox (features real,
+    playbook inverted): trade the canon BACKWARDS and hold longer. Two
+    cells only, declared here before running: (1) ANTI-pullback — enter
+    AGAINST the zone when the pullback-structure setup fires (the t -16
+    cell inverted), hold to 15:55; (2) the GBM's own top-vs-bottom decile
+    (canon+generic, walk-forward P), hold to 15:55. Costs 10bp RT. If
+    neither clears costs with year stability, the canon closes as
+    'informative, unharvestable at our friction' — no further cuts."""
+    from sklearn.ensemble import HistGradientBoostingClassifier
+
+    df = pd.read_parquet(TOUCH_F)
+    df["year"] = df["date"].str[:4]
+    # one tape pass per month: the 15:55 close AND the touch-minute print
+    # (px was not cached in the build; exact-minute merge recovers it,
+    # dropping the few touches whose minute bar was ffilled)
+    eod_parts, px_parts = [], []
+    for month, g in df.groupby(df["date"].str[:7]):
+        f = MTAPE / f"mtape_{month}.parquet"
+        if not f.exists():
+            continue
+        m = pd.read_parquet(f, columns=["symbol", "date", "minute", "c"])
+        eod = (m[(m["minute"] >= 380) & (m["minute"] < 386)]
+               .sort_values("minute").groupby(["symbol", "date"])["c"]
+               .last().rename("c_eod").reset_index())
+        eod_parts.append(eod)
+        px = m.merge(g[["symbol", "date", "touch"]],
+                     left_on=["symbol", "date", "minute"],
+                     right_on=["symbol", "date", "touch"])[
+            ["symbol", "date", "touch", "c"]].rename(columns={"c": "px_touch"})
+        px_parts.append(px)
+    df = (df.merge(pd.concat(eod_parts), on=["symbol", "date"], how="left")
+          .merge(pd.concat(px_parts), on=["symbol", "date", "touch"],
+                 how="left"))
+    df["fwd_eod_bp"] = (df["c_eod"] / df["px_touch"] - 1) * 1e4
+
+    lines: list[str] = []
+
+    def emit(t=""):
+        print(t, flush=True)
+        lines.append(t)
+
+    emit(f"# The anti-canon, one declared pass — {STAMP}")
+    emit()
+    emit("Two cells, declared in the stage docstring before running. "
+         "Hold to ~15:55; net@10bp RT.")
+    emit()
+    emit("| cell | n | gross bp | t | net@10 |")
+    emit("|---|---|---|---|---|")
+    anti = df[df["pulled_back"] == 1].copy()
+    x = (-anti["side"] * anti["fwd_eod_bp"]).dropna()
+    emit(f"| ANTI-pullback (continuation through the zone) to 15:55 "
+         f"| {len(x):,} | {x.mean():+.1f} | {tstat(x.to_numpy()):+.2f} "
+         f"| {x.mean() - COST_RT_BP:+.1f} |")
+    for y in sorted(df["year"].unique()):
+        xy = x[anti["year"] == y].dropna()
+        emit(f"|   {y} | {len(xy):,} | {xy.mean():+.1f} "
+             f"| {tstat(xy.to_numpy()):+.2f} | {xy.mean() - COST_RT_BP:+.1f} |")
+
+    CANON = ["impulse_bp", "base_w", "age", "minute", "day_vol",
+             "confirmed", "side", "r5", "r30"]
+    y_tgt = ((df["side"] * df["fwd_bp"]) > 0).astype(int).to_numpy()
+    yrs = df["year"].astype(int).to_numpy()
+    X = np.nan_to_num(df[CANON].to_numpy(dtype=float))
+    prob = np.full(len(df), np.nan)
+    for t in (2024, 2025, 2026):
+        tr, te = yrs < t, yrs == t
+        if te.sum() == 0 or tr.sum() < 5000:
+            continue
+        mdl = HistGradientBoostingClassifier(
+            max_depth=3, max_iter=200, learning_rate=0.08,
+            min_samples_leaf=200, random_state=7).fit(X[tr], y_tgt[tr])
+        prob[te] = mdl.predict_proba(X[te])[:, 1]
+    oos = np.isfinite(prob) & np.isfinite(df["fwd_eod_bp"])
+    sgn_eod = (df["side"] * df["fwd_eod_bp"]).to_numpy()
+    hi = oos & (prob >= np.nanquantile(prob[oos], 0.9))
+    lo = oos & (prob <= np.nanquantile(prob[oos], 0.1))
+    ls = np.concatenate([sgn_eod[hi], -sgn_eod[lo]])
+    emit(f"| GBM decile LS (top follow zone, bottom fade zone) to 15:55 "
+         f"| {len(ls):,} | {np.nanmean(ls):+.1f} | {tstat(ls):+.2f} "
+         f"| {np.nanmean(ls) - COST_RT_BP:+.1f} |")
+    emit()
+    emit("Closure rule (declared): neither cell clearing net@10 with "
+         "year stability closes the retail canon as 'informative, "
+         "unharvestable at our friction' — knowledge for gates, not a "
+         "sleeve; no further cuts.")
+
+    try:
+        rev = subprocess.run(["git", "rev-parse", "--short", "HEAD"],
+                             capture_output=True, text=True, timeout=5,
+                             cwd=str(STUDY)).stdout.strip() or "?"
+    except Exception:
+        rev = "?"
+    lines.append("")
+    lines.append(f"_Provenance: `research_smc_zones.py anti` at {rev}, "
+                 f"{datetime.now(ET).strftime('%Y-%m-%d %H:%M ET')}_")
+    NOTES.mkdir(parents=True, exist_ok=True)
+    out = NOTES / f"smc_anti_{STAMP}.md"
+    out.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    print(f"\nwrote {out}")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("stage", choices=["build", "score"])
+    ap.add_argument("stage", choices=["build", "score", "anti"])
     args = ap.parse_args()
-    {"build": stage_build, "score": stage_score}[args.stage](args)
+    {"build": stage_build, "score": stage_score,
+     "anti": stage_anti}[args.stage](args)
 
 
 if __name__ == "__main__":
