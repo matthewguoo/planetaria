@@ -195,10 +195,13 @@ export default function StrategiesPage() {
       </div>
 
       {selected && <CapitalPanel key={`cap-${selected.id}`} inst={selected} onAction={run} />}
-      {selected && <ParamsPanel key={selected.id} inst={selected} onAction={run} />}
-      {selected && <CommandPanel key={`cmd-${selected.id}`} inst={selected} onAction={run} />}
+      {/* Registration + performance directly under capital: the band-vs-live
+          read comes before the editing panels — the operator's first question
+          is "is it conforming", not "what are the params". */}
       {selected && <PerformancePanel key={`perf-${selected.id}`} inst={selected} />}
       {selected && <TwinPanel key={`twin-${selected.id}`} inst={selected} />}
+      {selected && <ParamsPanel key={selected.id} inst={selected} onAction={run} />}
+      {selected && <CommandPanel key={`cmd-${selected.id}`} inst={selected} onAction={run} />}
       {selected && <DecisionsPanel inst={selected} decisions={decisions} />}
       {selected && <SourcePanel key={`src-${selected.kind}`} kind={selected.kind} />}
 
