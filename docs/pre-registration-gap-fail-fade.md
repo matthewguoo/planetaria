@@ -55,6 +55,33 @@ live), trades/day, and the measured exit cost vs the 10bp assumption.
 Sample: every session from enable. Gates: >= 20 note-mode sessions
 consistent with the band -> one-share live >= 10 sessions -> full size.
 
+## Amendment 1 — 2026-08-11, before any live decision
+
+First note-mode morning (2026-08-11): the movers screen WORKED (100 rows,
+3 candidates: VREX/HZO/SLN) but all three marks failed the freshness bar
+— the free tier's premarket sight is IEX-only, and gapped small/mids had
+no IEX quote younger than 120s at 09:15. Zero of three candidates were
+measurable; the turn signal never existed live. Deviation 3 anticipated
+missed *names*; the sharper live truth is missed *marks*.
+
+Change: the 09:15 and 09:27 marks now price from the freshest of the
+broker feed and consolidated public prints (`services/ah_quotes.py`:
+Yahoo 1m includePrePost primary, Finnhub fallback) via
+`market.ah_quote` — the same seam `pead_nosip` trades through every
+evening. Justification: the study's panel was CONSOLIDATED MINUTE
+PRINTS; the IEX-only quote was itself the deviation, and the print path
+restores the measured basis. Freshness bars unchanged (120s snapshot /
+90s decision). Entry unchanged (MOO at the auction — no latency race
+exists anywhere in this strategy).
+
+Prints carry no NBBO (bid == ask == last), so the journal's spread field
+— the cost stopping rule's input — records true broker spreads only;
+print-priced marks journal `px_src` provenance and a null spread rather
+than a fake zero. The snapshot now also journals `unusable` per
+candidate (staleness or no-quote), making the coverage stopping rule
+measurable. The instance remains note-mode; no live decision has been
+made under either source.
+
 ## Stopping rules (written before the first trade)
 
 - Measured round-trip cost (auction fill vs 09:31:30 exit fill, vs the

@@ -20,11 +20,15 @@ ET = ZoneInfo("America/New_York")
 
 
 class FakeMarket:
-    """Movers + quotes with a settable phase price per symbol."""
+    """Movers + quotes with a settable phase price per symbol. `prints`
+    symbols price like ah_quotes externals (bid == ask == last, src tag);
+    `dark` symbols have no quote at all — the Amendment 1 seam."""
 
-    def __init__(self, movers, px):
+    def __init__(self, movers, px, prints=()):
         self.movers = movers
         self.px = px            # symbol -> current price (mutable per phase)
+        self.prints = set(prints)
+        self.dark = set()
 
     async def premarket_movers(self, top=50):
         return self.movers
@@ -32,8 +36,13 @@ class FakeMarket:
     async def daily_dollar_volumes(self, symbols):
         return {s: 5e8 for s in symbols}
 
-    async def fetch_latest_stock_quote(self, symbol):
+    async def ah_quote(self, symbol, max_age_s=120.0):
+        if symbol in self.dark:
+            return None
         p = self.px[symbol]
+        if symbol in self.prints:
+            return {"bid": p, "ask": p, "ts": _time.time() * 1000,
+                    "src": "yahoo"}
         return {"bid": p - 0.02, "ask": p + 0.02, "ts": _time.time() * 1000}
 
 
@@ -52,10 +61,10 @@ class FakeRunner:
         return {"equity": 10_000.0, "available": 10_000.0}
 
 
-def make(movers, px, params=None):
+def make(movers, px, params=None, prints=()):
     strat = GapFailFade()
     runner = FakeRunner()
-    market = FakeMarket(movers, px)
+    market = FakeMarket(movers, px, prints=prints)
     ctx = StrategyContext(
         market=market, clock=None,
         params=GapFailFade.validate_params(params or {}),
@@ -127,6 +136,46 @@ async def test_aligned_gap_and_small_turn_are_skipped():
     assert "no_trade" in note
     sk = note["no_trade"]["skipped"]
     assert "not failing" in sk["ALGN"] and "not failing" in sk["SMLL"]
+
+
+@pytest.mark.asyncio
+async def test_print_marks_qualify_and_carry_provenance():
+    """Amendment 1: IEX dark -> consolidated prints price the marks. The
+    print's bid==ask must journal a null spread (not a fake zero) and its
+    source must be visible in the record."""
+    movers = [mover("THIN", -0.03, 97.0)]
+    strat, ctx, runner, market = make(movers, {"THIN": 96.5},
+                                      prints=["THIN"])
+    await strat._scan(ctx)
+    await strat._snapshot(ctx)
+    snap = runner.notes[-1]
+    assert snap["snapshot_0915"]["THIN"] == 96.5
+    assert snap["src"]["THIN"] == "yahoo" and snap["unusable"] == {}
+    market.px["THIN"] = 97.3
+    await strat._decide(ctx)
+    q = runner.notes[-1]["would_trade"]
+    assert q["px_src"] == "yahoo"
+    assert q["spread_pct"] is None
+    (intent,) = runner.intents
+    assert intent.legs[0]["auction"] == "open"
+
+
+@pytest.mark.asyncio
+async def test_dark_candidate_journals_why_not_silence():
+    """A candidate with no quote from ANY source lands in `unusable` — the
+    coverage stopping rule's raw data — and is skipped at decide."""
+    movers = [mover("DARK", -0.03, 97.0), mover("GAPD", -0.03, 97.0)]
+    strat, ctx, runner, market = make(movers, {"DARK": 96.5, "GAPD": 96.5})
+    market.dark.add("DARK")
+    await strat._scan(ctx)
+    await strat._snapshot(ctx)
+    snap = runner.notes[-1]
+    assert snap["unusable"]["DARK"] == "no quote"
+    assert "GAPD" in snap["snapshot_0915"]
+    market.px["GAPD"] = 97.3
+    await strat._decide(ctx)
+    note = runner.notes[-1]
+    assert note["would_trade"]["symbol"] == "GAPD"
 
 
 def test_params_and_registry():

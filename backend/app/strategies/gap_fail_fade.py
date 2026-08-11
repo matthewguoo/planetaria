@@ -20,7 +20,10 @@ refuses after the broker's 09:28 ET cutoff).
 Clock (ET, weekdays):
   09:12  candidates from the premarket movers screen; prior closes derive
          from the screen's own percent-vs-close; dollar-volume ranks fetch
-  09:15  premarket price snapshot per candidate (inside IEX hours)
+  09:15  premarket price snapshot per candidate — broker feed while fresh,
+         consolidated public prints where IEX is dark (Amendment 1: the
+         first live morning proved IEX-only premarket sight is blind on
+         gapped small/mids; the study's own panel was consolidated prints)
   09:27  the decision: gap vs prior close >= min_gap, premarket turn
          (09:15 -> now) >= min_turn AGAINST the gap -> trade against the
          gap; contested slots to the highest |gap| x log10(dollar volume)
@@ -40,6 +43,7 @@ Run in note-mode (`live: false`) until the pre-registration's gates pass.
 """
 
 import math
+import time
 from datetime import datetime, time as dtime, timezone
 from zoneinfo import ZoneInfo
 
@@ -179,14 +183,36 @@ class GapFailFade(Strategy):
             "candidates": {s: c["pct_at_scan"]
                            for s, c in self._cands.items()}}})
 
+    async def _mark(self, sym: str, ctx: StrategyContext,
+                    max_age_s: float) -> tuple[float | None, dict | None]:
+        """A premarket price mark: the broker feed while it is fresh,
+        consolidated public prints where IEX is dark (pre-reg Amendment 1).
+        The study's panel WAS consolidated minute prints, so the fallback
+        restores the measured basis rather than deviating from it — the
+        same seam pead_nosip trades through every evening. `src` carries
+        provenance into the journal; callers age-check via _usable_price
+        exactly as before."""
+        quote = await ctx.market.ah_quote(sym, max_age_s=max_age_s)
+        return _usable_price(quote, max_age_s=max_age_s), quote
+
     async def _snapshot(self, ctx: StrategyContext) -> None:
+        srcs: dict[str, str] = {}
+        unusable: dict[str, str] = {}
         for sym in list(self._cands):
-            quote = await ctx.market.fetch_latest_stock_quote(sym)
-            px = _usable_price(quote, max_age_s=120.0)
+            px, quote = await self._mark(sym, ctx, 120.0)
             if px is not None:
                 self._px0915[sym] = px
+                srcs[sym] = str((quote or {}).get("src") or "broker")
+            elif quote and quote.get("ts"):
+                age_s = time.time() - float(quote["ts"]) / 1000.0
+                unusable[sym] = f"quote {age_s:.0f}s stale"
+            else:
+                unusable[sym] = "no quote"
+        # unusable is the coverage stopping rule's raw data — a morning of
+        # "no quote" rows is a data gap, not a quiet market.
         await ctx.note({"snapshot_0915": {s: round(v, 4)
-                                          for s, v in self._px0915.items()}})
+                                          for s, v in self._px0915.items()},
+                        "src": srcs, "unusable": unusable})
 
     async def _decide(self, ctx: StrategyContext, dry: bool = False) -> None:
         p = ctx.params
@@ -200,8 +226,7 @@ class GapFailFade(Strategy):
             if px15 is None:
                 skipped[sym] = "no 09:15 snapshot"
                 continue
-            quote = await ctx.market.fetch_latest_stock_quote(sym)
-            px27 = _usable_price(quote, max_age_s=90.0)
+            px27, quote = await self._mark(sym, ctx, 90.0)
             if px27 is None:
                 skipped[sym] = "no fresh 09:27 quote"
                 continue
@@ -225,7 +250,10 @@ class GapFailFade(Strategy):
                 "gap_pct": round(gap_pct, 2), "turn_bp": round(turn_bp, 0),
                 "dv": cand["dv"],
                 "rank": abs(gap_pct) * math.log10(max(cand["dv"], 10.0)),
+                # prints have bid == ask, which _spread_of maps to None —
+                # the cost stopping rule reads true NBBO spreads only
                 "spread_pct": _spread_of(quote),
+                "px_src": str((quote or {}).get("src") or "broker"),
             })
         slots = int(p["slots_per_leg"])
         qualified.sort(key=lambda q: -q["rank"])
