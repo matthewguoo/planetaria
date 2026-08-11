@@ -47,6 +47,38 @@ allocation and breaker, the metric, and the stopping rule, committed as
 `docs/pre-registration-<name>.md`. A number chosen after that commit is a
 new hypothesis, not a result.
 
+### 2b. The ML testing bar (set 2026-08-11, the gff gate is the exemplar)
+
+Any FITTED model (gate, ranker, classifier) clears ALL of these before it
+is believed, in this order — each answers a distinct failure mode:
+
+1. **Walk-forward, expanding by year** — the deployment claim. Nothing
+   from a test year touches the model that scores it.
+2. **Primary cell pre-declared in the script docstring** before results;
+   every swept threshold/config reported as a FULL family with the
+   multiplicity haircut named.
+3. **Selection-shuffle null** — the pre-declared cell must beat random
+   selection at the same keep-rate (2,000 within-year shuffles).
+4. **Train-label placebo** — refit the whole pipeline on shuffled labels;
+   if it still shows lift, the pipeline manufactures edge and everything
+   downstream is void.
+5. **Seed + ablation** — the result must survive seeds and must not die
+   with one feature column (concentration is fine if the feature is
+   economically legible; report it).
+6. **Paired block bootstrap** of the daily OOS series — CI on the Sharpe
+   difference and drawdown, because point estimates of both are noisy.
+7. **Combinatorial year-block CV** — the lift as a DISTRIBUTION, with the
+   walk-forward number located inside it; PLAN on the CV-central value,
+   not the walk-forward draw (the gate: +8.8 WF was the 89th percentile
+   of a +5.2-centered distribution).
+8. **Live forward test** (journal-only) before any dollar routes through
+   the model; tau/threshold changes are pre-reg amendments.
+
+Deliberately NOT run: synthetic price paths (GBM worlds) — a market
+without our microstructure cannot confirm or deny an edge that lives in
+it. Scripts: `research/open-window/scripts/research_gff_gate*.py` are the
+working exemplars of every step.
+
 ## 3. Fleet rules
 
 Every experimental strategy runs inside an envelope the operator sets in
