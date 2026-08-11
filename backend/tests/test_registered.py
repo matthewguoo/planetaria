@@ -14,7 +14,8 @@ from app.services.registered import ladder_state
 from app.strategies import REGISTRY
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-KNOWN_METRICS = {"net_bp_per_trade", "bp_of_underlying_per_day"}
+KNOWN_METRICS = {"net_bp_per_trade", "bp_of_underlying_per_day",
+                 "drift_hit_rate_nonneutral"}
 
 DAY1 = datetime(2026, 8, 11, 13, 35, tzinfo=timezone.utc)   # 09:35 ET
 DAY2 = datetime(2026, 8, 12, 13, 35, tzinfo=timezone.utc)
@@ -35,7 +36,19 @@ def test_registered_blocks_are_valid():
         assert block["registered_commit"]
         stages = [s["stage"] for s in block["ladder"]]
         assert len(stages) >= 2 and len(set(stages)) == len(stages)
-    assert seen >= 2  # afternoon_fly and gap_fail_fade are registered
+    assert seen >= 3  # afternoon_fly, gap_fail_fade, pead_nosip
+
+
+def test_unmeasured_metric_never_falls_back():
+    """nosip registers drift hit rate; the engine doesn't compute it yet.
+    The ladder must say so — NOT quietly measure per-trade bp instead."""
+    block = REGISTRY["pead_nosip"].registered
+    plans = [_equity_plan(DAY1, 100.0, 1, 0.11)]  # would be +11bp if measured
+    state = ladder_state(block, {"live": True}, plans, [])
+    assert state["metric_computed"] is False
+    assert state["running_metric"] is None and state["band_status"] is None
+    assert state["trades_closed"] == 1
+    assert state["stage"] == "live forward test"
 
 
 def _equity_plan(created: datetime, entry: float, qty: int,

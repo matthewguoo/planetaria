@@ -545,9 +545,11 @@ function RegistrationPanel({
           <span className="text-bb-muted">
             running{" "}
             <span className={bandCls}>
-              {ladder.running_metric == null
-                ? "no closed trades yet"
-                : `${ladder.running_metric > 0 ? "+" : ""}${ladder.running_metric.toFixed(1)} (${ladder.band_status})`}
+              {!ladder.metric_computed
+                ? "not yet measured by the engine"
+                : ladder.running_metric == null
+                  ? "no closed trades yet"
+                  : `${ladder.running_metric > 0 ? "+" : ""}${ladder.running_metric.toFixed(1)} (${ladder.band_status})`}
             </span>
           </span>
         </div>

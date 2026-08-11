@@ -389,6 +389,7 @@ export type LadderState = {
   trades_closed: number;
   samples: number;
   metric: string;
+  metric_computed: boolean;
   metric_label: string | null;
   running_metric: number | null;
   band: [number, number] | null;

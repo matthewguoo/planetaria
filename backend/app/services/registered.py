@@ -84,10 +84,18 @@ def ladder_state(registered: dict | None, params: dict, plans: list,
     sessions = {_et_date(ts) for ts in decision_ts if ts is not None}
     sessions.update(_et_date(p.created_at) for p in plans if p.created_at)
 
-    if registered.get("metric") == "bp_of_underlying_per_day":
+    metric = registered.get("metric")
+    if metric == "bp_of_underlying_per_day":
         values = _per_day_underlying_bp(closed)
-    else:  # net_bp_per_trade
+    elif metric == "net_bp_per_trade":
         values = [bp for p in closed if (bp := _trade_bp(p)) is not None]
+    else:
+        # Registered on a yardstick the engine does not measure yet (the
+        # nosip drift hit rate needs verdict-vs-next-session joins). The
+        # card must say "not yet measured" — never fall back to a metric
+        # the pre-reg did not name.
+        values = []
+    metric_computed = metric in ("bp_of_underlying_per_day", "net_bp_per_trade")
     running = sum(values) / len(values) if values else None
 
     band = registered.get("band") or [None, None]
@@ -110,7 +118,8 @@ def ladder_state(registered: dict | None, params: dict, plans: list,
         "sessions_observed": len(sessions),
         "trades_closed": len(closed),
         "samples": len(values),
-        "metric": registered.get("metric"),
+        "metric": metric,
+        "metric_computed": metric_computed,
         "metric_label": registered.get("metric_label"),
         "running_metric": round(running, 2) if running is not None else None,
         "band": registered.get("band"),

@@ -51,6 +51,28 @@ class PeadNoSip(PeadFlagship):
     kind = "pead_nosip"
     requires = frozenset({"shorts", "llm"})
 
+    # Frozen at registration (8cfb36c). The metric is DRIFT HIT RATE on
+    # non-neutral verdicts — deliberately not P&L (a single reaction is
+    # hundreds of bp of noise) and not tape agreement (healthy regardless).
+    # The engine does not compute it yet (needs verdict-vs-next-session
+    # joins); the ladder card says "not yet measured" rather than falling
+    # back to a yardstick the pre-reg did not name. ~200 non-neutral
+    # verdicts (2-3 earnings seasons) separate 55% from chance at z~2.
+    registered = {
+        "doc": "docs/pre-registration-nosip.md",
+        "registered_commit": "8cfb36c",
+        "source_note": "docs/report.html (the PEAD paper); Fable panel 2026-08-09",
+        "window": "in-corpus reference: 57.6% (Opus 5, n=1,787)",
+        "metric": "drift_hit_rate_nonneutral",
+        "metric_label": "% drift hit rate (non-neutral verdicts)",
+        "band": [55.0, 100.0],
+        "verdict_target": 200,
+        "backtest": {"value": 57.6, "basis": "in-corpus; forward events are the control"},
+        "costs_assumed": "23.2bp round trip; fill_check journals measure it live",
+        "ladder": [{"stage": "note-mode", "sessions": None},
+                   {"stage": "live forward test", "sessions": None}],
+    }
+
     default_params = {
         **PeadFlagship.default_params,
         # How old a print may be and still count as a price. The flagship's
