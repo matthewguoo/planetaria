@@ -97,7 +97,9 @@ def build_pretrain_windows() -> tuple[np.ndarray, np.ndarray]:
         m = pd.read_parquet(f, columns=["symbol", "date", "minute",
                                         "c", "v", "h", "l", "vw"])
         for (_, _), d in m.groupby(["symbol", "date"], sort=False):
-            d = d.sort_values("minute")
+            d = d[(d["minute"] >= 0) & (d["minute"] < 390)].sort_values("minute")
+            if d.empty:
+                continue
             mins = d["minute"].to_numpy()
             full = np.full(390, np.nan, dtype=np.float32)
             arrs = {}
@@ -166,9 +168,17 @@ def stage_embed(args) -> None:
             v = np.asarray(r.v, dtype=np.float32)
             h = np.asarray(r.h, dtype=np.float32)
             low = np.asarray(r.l, dtype=np.float32)
+            mod = np.asarray(r.mod)
+            dayoff = np.asarray(r.dayoff)
             react = int(r.react_min) if np.isfinite(r.react_min) else 0
-            # window: EMBED_MIN steps from the reaction minute; pad short
-            seg = slice(react, react + EMBED_MIN)
+            # entry INDEX exactly as Path1 computes it: first bar of the
+            # event day at/after the reaction minute (react_min is a
+            # minute-of-day, not an index — the first embed run sliced by
+            # it directly and silently kept 187 of 1,800 events)
+            d0 = dayoff == dayoff.min()
+            after = np.where(d0 & (mod >= react))[0]
+            i_entry = int(after[0]) if len(after) else 0
+            seg = slice(i_entry, i_entry + EMBED_MIN)
             cc, vv = c[seg], v[seg]
             hh, ll = h[seg], low[seg]
             if np.isfinite(cc).sum() < 20:
