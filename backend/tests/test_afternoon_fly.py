@@ -169,3 +169,26 @@ def test_param_validation():
         AfternoonFly.validate_params({"entry_et": "16:00", "exit_et": "15:50"})
     with pytest.raises(ValueError):
         AfternoonFly.validate_params({"max_margin_frac": 2.0})
+
+
+@pytest.mark.asyncio
+async def test_on_start_feeds_the_stock_stream():
+    """2026-08-11: options plans face the GLOBAL stream-age gate, and on a
+    day when nothing else subscribes a share symbol it reads "no ticks
+    received yet" at 14:00. The fly subscribes its own underlying."""
+    ctx, _runner, market = make_ctx()
+    market.stock_subs = []
+
+    async def sub(sym):
+        market.stock_subs.append(sym)
+
+    async def unsub(sym):
+        market.stock_subs.remove(sym)
+
+    market.subscribe_stock = sub
+    market.unsubscribe_stock = unsub
+    fly = AfternoonFly()
+    await fly.on_start(ctx)
+    assert market.stock_subs == ["QQQ"]
+    await fly.on_stop(ctx)
+    assert market.stock_subs == []

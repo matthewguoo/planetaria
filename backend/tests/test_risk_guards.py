@@ -131,3 +131,13 @@ async def test_new_settings_validate(risk):
         await risk.update_settings({"entry_ttl_min": 0})
     with pytest.raises(ValueError):
         await risk.update_settings({"max_spread_pct": 0.9})
+
+
+@pytest.mark.asyncio
+async def test_penny_leg_passes_on_absolute_floor(risk):
+    """2026-08-11: a $0.03 wing with a 2c half-spread is 67% of mid and
+    pocket change in dollars — the absolute floor passes it; the relative
+    cap still governs wider legs (test_wide_spread_blocks above)."""
+    penny = [dict(GOOD_LEGS[0], entry=0.03, half_spread=0.02)]
+    v = await risk.validate_new_trade(**_base(legs=penny))
+    assert not any("illiquid" in s for s in v)

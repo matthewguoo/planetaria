@@ -278,11 +278,18 @@ class RiskService:
                    else f"({stream_age_s:.0f}s since last tick)")
             )
         # Illiquidity: wide legs make TP/SL execution unreliable and the
-        # round-trip spread eats the edge.
+        # round-trip spread eats the edge. The relative cap misreads PENNY
+        # legs, though: a defined-risk fly's $0.03 wing quoting a 2-cent
+        # half-spread is 67% "of mid" and pocket change in dollars — cheap,
+        # not illiquid (the 2026-08-11 one-set rejection). Absolute floor,
+        # both books, per Matthew 2026-08-11: half-spread <= $0.05 passes;
+        # the relative cap governs everything wider.
         if legs:
             for leg in legs:
                 half_spread = leg.get("half_spread")
                 mid = abs(leg.get("entry", 0) or 0)
+                if half_spread and half_spread <= 0.05:
+                    continue
                 if half_spread and mid > 0 and half_spread / mid > cfg["max_spread_pct"]:
                     violations.append(
                         f"{leg.get('symbol', '?')}: half-spread {half_spread / mid:.0%} of mid "

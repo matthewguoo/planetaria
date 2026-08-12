@@ -104,6 +104,18 @@ class AfternoonFly(Strategy):
     def __init__(self):
         self._done: set[str] = set()
 
+    async def on_start(self, ctx: StrategyContext) -> None:
+        # The global risk gate reads the STOCK stream's age, and options
+        # plans always face that global check — on 2026-08-11 nothing else
+        # subscribed a share symbol all day, the stream had "no ticks
+        # received yet" at 14:00, and the one-set intent died on it. The
+        # fly is options-only, so it feeds the gate itself: one refcounted
+        # subscription to its own underlying.
+        await ctx.market.subscribe_stock(str(ctx.params["underlying"]))
+
+    async def on_stop(self, ctx: StrategyContext) -> None:
+        await ctx.market.unsubscribe_stock(str(ctx.params["underlying"]))
+
     @classmethod
     def validate_params(cls, params: dict) -> dict:
         clean = super().validate_params(params)
