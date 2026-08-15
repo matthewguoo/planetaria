@@ -20,7 +20,7 @@ the reason the trees are separate rather than adjacent.
 | `exdiv/` | Ex-dividend seams from the raw/adjusted panel pair. Real premium, overlay-sized. 2026-08-10. |
 | `macro-drift/` | Post-FOMC/CPI continuation. Dead. 2026-08-10. |
 | `open-window/` | The first 90 minutes at minute resolution -> **feeds `gap_fail_fade` (gff-1)**. 2026-08-10. |
-| `sr-levels/` | The stop-loss meme on 5m candles: trendline/breakout/zone with the meme's own stops, plus the 0/1DTE wrap. Dead; trendline inverted. 2026-08-14. |
+| `sr-levels/` | The stop-loss meme on 5m candles: trendline/breakout/zone with the meme's own stops, the 0/1DTE wrap, order blocks, and a five-policy stop sweep. All dead; trendline and OB-retest inverted; no stop rescues any entry. 2026-08-14. |
 | `notes/` | Research that belongs to no single study (overnight alpha, the latency band, the 2026-08-10 alpha scan). |
 
 The two LLM studies are deliberately built on the same statistic — a gate

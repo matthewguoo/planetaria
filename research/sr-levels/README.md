@@ -9,9 +9,10 @@ universe, bracket engine, costs and random-entry null as `chart-llm-gate`'s
 mechanical arm, so the two notes read as one table of eight retail setups.
 
 ```
-scripts/research_sr_levels.py   fetch|build|report|wrap
-notes/                          dated results, one per question
-cache/                          bars + IV proxies (gitignored, regenerable)
+scripts/research_sr_levels.py     fetch|build|report|wrap
+scripts/research_order_blocks.py  build|report|stops
+notes/                            dated results, one per question
+cache/                            bars + IV proxies (gitignored, regenerable)
 ```
 
 Headline (levels note, 3,853 trades, 12 symbols, 60 sessions): all three
@@ -27,6 +28,19 @@ wrapping a ~zero-edge underlying signal in a long ATM 0DTE costs −17% to
 −45% of premium per trade (theta + a spread that is ~40–100x the share
 spread as a fraction of capital at risk); 1DTE cuts that to −2% to −10%.
 An option cannot manufacture edge the underlying signal does not have.
+
+Second round (ob note, 727 trades): **order blocks**, the third pillar of
+the ICT school the archive already bled twice (iFVG random, PO3 inverted).
+The respected-block retest is the school's headline trade and it measures
+WORSE than random (−5.15 net bp, null pctile 15.5); the block FAILING is a
+coin flip. And the **stop sweep** (stops note, same 4,580 entries × five
+stop policies — the meme's line, 5-bar swing, nearest confirmed pivot,
+±0.5/1.0 ATR buffers): no policy turns any strategy green. Wider,
+"structure-aware" stops mostly convert fast stop-outs into slow
+session-end bleed — breakout with a pivot stop is the worst cell in the
+study (−16.2 bp) because a wide stop under a momentum entry means the
+losers are large. The stop is where these patterns' losses are TAKEN, not
+where they are CAUSED; the entries carry no edge for any stop to protect.
 
 Data caveats, honestly: this container is keyless, so bars are Yahoo's
 trailing 60 days (fetch stage) rather than the SIP year, and option P&L is
