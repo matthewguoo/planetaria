@@ -15,16 +15,22 @@
 import { useState } from "react";
 import { apiError, postOrder } from "../../lib/api";
 import { playCue } from "../../lib/audio";
+import { sharedBars } from "../../lib/chartShared";
 import {
   capitalUsd,
+  dailySigmaPct,
   equityExits,
   equityPreflight,
+  holdDaysUntil,
+  holdSigmaPct,
   rr,
   sharesForRisk,
+  suggestedStopPct,
   swingBackstopUtc,
 } from "../../lib/equityMath";
+import { realizedVolAnnualized } from "../../lib/indicators";
 import { useAccountStore } from "../../store/accountStore";
-import { freshSpot, quoteIsStale, useTradingStore } from "../../store/tradingStore";
+import { freshSpot, quoteIsStale, TF_MS, useTradingStore } from "../../store/tradingStore";
 
 /** ET 15:55 on a calendar date -> UTC ISO (same offset trick as OrderPanel). */
 function etCloseToUtcIso(dateStr: string): string {
@@ -98,6 +104,7 @@ function StepRow({
 export function EquityTicket() {
   const symbol = useTradingStore((s) => s.symbol);
   const quote = useTradingStore((s) => s.quote);
+  const tf = useTradingStore((s) => s.tf);
   const account = useAccountStore((s) => s.account);
   const refreshAccount = useAccountStore((s) => s.refreshAccount);
   const refreshPositions = useAccountStore((s) => s.refreshPositions);
@@ -116,7 +123,9 @@ export function EquityTicket() {
   const [error, setError] = useState<string | null>(null);
   const [placed, setPlaced] = useState<string | null>(null);
 
-  const book = account?.manual_book;
+  // The SHARE book: separate bankroll from the options book by design.
+  const books = account?.manual_book;
+  const book = books?.enabled ? books.equity : null;
   const quoteFresh = !!quote && quote.mid > 0 && !quoteIsStale(quote);
   // Marketable pricing: pay the ask long, hit the bid short; mid fallback.
   const rawPx = side > 0 ? quote?.ask : quote?.bid;
@@ -127,8 +136,17 @@ export function EquityTicket() {
       : null;
 
   const exits = equityExits(price, side, slPct / 100, tpOn ? tpPct / 100 : null);
-  const bookEquity = book?.enabled ? book.equity_usd : account?.equity ?? 0;
+  const bookEquity = book ? book.equity_usd : account?.equity ?? 0;
   const riskBudget = (bookEquity * riskPct) / 100;
+
+  // Vol-scaled stop intelligence off the symbol's own tape (chart bars).
+  const bars = sharedBars.current;
+  const rv = bars.n > 30 ? realizedVolAnnualized(bars, 30, TF_MS[tf] / 60_000) : 0;
+  const dSigma = dailySigmaPct(rv);
+  const holdDays = timeStopDate ? holdDaysUntil(timeStopDate) : 5; // default swing horizon
+  const stopSuggestion = suggestedStopPct(dSigma, holdDays);
+  const noiseSigma = dSigma > 0 ? holdSigmaPct(dSigma, holdDays) : 0;
+  const stopInsideNoise = noiseSigma > 0 && slPct < noiseSigma;
   const autoShares = price > 0 ? sharesForRisk(riskBudget, exits.entry, exits.sl) : 0;
   const shares = sharesOverride > 0 ? Math.min(sharesOverride, Math.max(autoShares, 1)) : autoShares;
   const notional = capitalUsd(price, shares, side);
@@ -198,7 +216,7 @@ export function EquityTicket() {
     <div className="panel relative flex min-w-0 flex-col">
       <div className="panel-title flex items-center justify-between">
         <span>EQUITY SWING TICKET</span>
-        {book?.enabled && (
+        {book && (
           <span
             className="text-[10px] tracking-normal text-bb-muted sm:text-[9px]"
             title="Manual book envelope: used / total. Sized to mirror the real account."
@@ -240,9 +258,55 @@ export function EquityTicket() {
         <StepRow label="STOP DISTANCE" value={slPct} onChange={edit(setSlPct)}
           step={0.5} min={0.5} max={50} accent="text-bb-loss"
           title="Hard stop below entry. The enforcer executes it — entries without a stop are refused." />
+        {/* Vol-scaled stop intelligence: suggestion from the symbol's OWN
+            measured volatility for the intended hold, and a warning when
+            the chosen stop sits inside ordinary noise (shakeout-prone). */}
+        {stopSuggestion != null && (
+          <div className="flex items-center justify-between gap-2">
+            <button
+              onClick={() => edit(setSlPct)(stopSuggestion)}
+              className={
+                "h-9 border px-2 text-[11px] sm:h-5 sm:px-1.5 sm:text-[10px] " +
+                (Math.abs(slPct - stopSuggestion) < 0.26
+                  ? "border-bb-profit text-bb-profit"
+                  : "border-bb-border text-bb-muted active:text-bb-amber")
+              }
+              title={
+                `Suggested stop for a ~${holdDays}-trading-day hold: 1.5× the ` +
+                `hold-horizon 1σ (daily σ ${dSigma.toFixed(1)}% from this chart's ` +
+                `realized vol). Outside ordinary noise, inside disaster range.`
+              }
+            >
+              SUGGEST {stopSuggestion}% (1.5σ·{holdDays}d)
+            </button>
+            {stopInsideNoise && (
+              <span
+                className="text-right text-[10px] text-bb-orange sm:text-[9px]"
+                title="House wick study: winners routinely trade ~1σ against entry before paying — a stop inside the noise band mostly harvests shakeouts."
+              >
+                ⚠ inside {holdDays}d noise (1σ≈{noiseSigma.toFixed(1)}%)
+              </span>
+            )}
+          </div>
+        )}
         <div className="flex items-center justify-between gap-2 py-0.5">
           <span className="text-[11px] text-bb-muted sm:text-[10px]">TARGET</span>
           <span className="inline-flex items-center gap-1">
+            {[2, 3].map((mult) => (
+              <button
+                key={mult}
+                onClick={() => {
+                  edit(setTpOn)(true);
+                  setTpPct(Math.round(slPct * mult * 2) / 2);
+                }}
+                className={
+                  "h-9 border border-bb-border px-1.5 text-[10px] text-bb-muted active:text-bb-amber sm:h-5 sm:px-1 sm:text-[9px]"
+                }
+                title={`Set target at ${mult}R (${mult}× the stop distance)`}
+              >
+                {mult}R
+              </button>
+            ))}
             <button
               onClick={() => edit(setTpOn)(!tpOn)}
               className={toggleBtn(tpOn)}
@@ -311,7 +375,7 @@ export function EquityTicket() {
           <Row label="R / R" value={rrMult != null ? `${rrMult.toFixed(1)} : 1` : "open-ended"} />
           <Row label="NOTIONAL · % OF BOOK"
             value={notional > 0 ? `$${notional.toLocaleString("en-US", { maximumFractionDigits: 0 })}${side < 0 ? " (1.5×)" : ""} · ${bookEquity > 0 ? ((notional / bookEquity) * 100).toFixed(1) : "—"}%` : "—"} />
-          {book?.enabled && (
+          {book && (
             <Row label="BOOK DAY P/L" value={`$${book.realized_today.toFixed(0)} / −$${book.daily_loss_usd.toFixed(0)}`}
               cls={book.realized_today < 0 ? "text-bb-loss" : "text-bb-profit"} />
           )}

@@ -72,9 +72,11 @@ async def startup(app: FastAPI, settings: Settings) -> None:
     app.state.risk = risk
     app.state.trade = trade
     app.state.enforcer = enforcer
+    from app.services.portfolio_accounts import PortfolioAccounts
     from app.services.portfolio_risk import PortfolioRisk
 
     app.state.portfolio_risk = PortfolioRisk(trade, market)
+    app.state.portfolio_accounts = PortfolioAccounts(accounts, db)
     app.state.feed_settings = feed_settings
     app.state.trading_stream = None
     app.state.trading_stream_task = None

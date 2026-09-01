@@ -38,27 +38,32 @@ export type RiskSettings = {
   equity_short_overnight: boolean;
   manual_book: {
     enabled: boolean;
-    equity_usd: number;
-    max_loss_pct: number;
-    daily_loss_usd: number;
-    max_open_plans: number;
     require_stop_equity: boolean;
+    equity: { equity_usd: number; max_loss_pct: number; daily_loss_usd: number; max_open_plans: number };
+    option: { equity_usd: number; max_loss_pct: number; daily_loss_usd: number; max_open_plans: number };
   };
 };
 
-/** The discretionary book's envelope, as GET /api/account reports it. */
-export type ManualBook = {
-  enabled: boolean;
+/** One discretionary book's envelope + live state, per asset class. */
+export type BookEnvelope = {
   equity_usd: number;
   max_loss_pct: number;
   per_trade_max_loss_usd: number;
   daily_loss_usd: number;
   max_open_plans: number;
-  require_stop_equity: boolean;
   open_plans: number;
   used_usd: number;
   remaining_usd: number;
   realized_today: number;
+};
+
+/** The discretionary books (shares + options are separate bankrolls), as
+ * GET /api/account reports them. */
+export type ManualBook = {
+  enabled: boolean;
+  require_stop_equity: boolean;
+  equity: BookEnvelope;
+  option: BookEnvelope;
 };
 
 export type Account = {
@@ -639,6 +644,43 @@ export const getAccounts = () =>
   api.get<AccountList>("/api/system/accounts").then((r) => r.data);
 export const selectAccount = (name: string) =>
   api.post<AccountList>("/api/system/accounts/select", { name }).then((r) => r.data);
+
+/** ---------------------------------------------------- PORTFOLIO (all accounts)
+ * Read-only aggregation over EVERY registered paper account (.env pairs),
+ * not just the one the engine trades. 30s server cache. */
+export type PortfolioAccountRow = {
+  name: string;
+  active: boolean;
+  error?: string;
+  status?: string;
+  equity?: number;
+  cash?: number | null;
+  buying_power?: number | null;
+  day_pl?: number;
+  positions?: number;
+  unrealized_pl?: number;
+  history?: { timestamps: number[]; equity: (number | null)[] };
+  plans_closed: number;
+  realized_pnl: number;
+};
+
+export type PortfolioSnapshot = {
+  asof: number;
+  accounts: PortfolioAccountRow[];
+  totals: {
+    equity: number;
+    day_pl: number;
+    unrealized_pl: number;
+    positions: number;
+    accounts: number;
+    errors: number;
+  };
+};
+
+export const getPortfolio = (period = "1M", timeframe = "1D") =>
+  api
+    .get<PortfolioSnapshot>("/api/portfolio", { params: { period, timeframe } })
+    .then((r) => r.data);
 
 /** ------------------------------------------------------------- FUND page
  * One payload for the fund root: allocation envelopes, per-strategy open

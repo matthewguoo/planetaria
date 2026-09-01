@@ -14,7 +14,14 @@ import type { Plan } from "../lib/api";
 
 export type PnlMode = "entry" | "live";
 
-export type View = "terminal" | "fund" | "account" | "strategies" | "market" | "system";
+export type View =
+  | "terminal"
+  | "fund"
+  | "portfolio"
+  | "account"
+  | "strategies"
+  | "market"
+  | "system";
 
 type UiState = {
   view: View;

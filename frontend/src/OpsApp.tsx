@@ -29,6 +29,7 @@ import { EnforcementBanner } from "./components/EnforcementBanner";
 import FundPage from "./components/Fund/FundPage";
 import { Header } from "./components/Header";
 import MarketPage from "./components/Market/MarketPage";
+import PortfolioPage from "./components/Portfolio/PortfolioPage";
 import StrategiesPage from "./components/Strategies/StrategiesPage";
 import SystemPage from "./components/System/SystemPage";
 import { useAccountStore } from "./store/accountStore";
@@ -76,6 +77,8 @@ export default function OpsApp() {
       <EnforcementBanner />
       {view === "account" ? (
         <AccountPage />
+      ) : view === "portfolio" ? (
+        <PortfolioPage />
       ) : view === "strategies" ? (
         <StrategiesPage />
       ) : view === "market" ? (

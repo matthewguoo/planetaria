@@ -1,7 +1,7 @@
 import { useSystemState } from "./System/SystemPanels";
 import { useUiStore, type View } from "../store/uiStore";
 
-const TABS: View[] = ["fund", "account", "strategies", "market", "system"];
+const TABS: View[] = ["fund", "portfolio", "account", "strategies", "market", "system"];
 
 /**
  * Feed health, read from the BACKEND's view rather than from a browser

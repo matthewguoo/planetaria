@@ -1,21 +1,23 @@
 import { describe, expect, it } from "vitest";
-import type { ManualBook } from "./api";
+import type { BookEnvelope } from "./api";
 import {
   capitalUsd,
+  dailySigmaPct,
   equityExits,
   equityPreflight,
+  holdDaysUntil,
+  holdSigmaPct,
   rr,
   sharesForRisk,
+  suggestedStopPct,
 } from "./equityMath";
 
-const BOOK: ManualBook = {
-  enabled: true,
+const BOOK: BookEnvelope = {
   equity_usd: 11_000,
   max_loss_pct: 0.02,
   per_trade_max_loss_usd: 220,
   daily_loss_usd: 330,
   max_open_plans: 4,
-  require_stop_equity: true,
   open_plans: 0,
   used_usd: 0,
   remaining_usd: 11_000,
@@ -110,5 +112,33 @@ describe("equityPreflight mirrors the backend gates", () => {
   it("stale quote blocks", () => {
     const r = equityPreflight(base({ quoteFresh: false }));
     expect(r.some((x) => x.includes("no fresh quote"))).toBe(true);
+  });
+});
+
+describe("smart stop suggestions (vol-scaled)", () => {
+  it("daily sigma from annualized RV", () => {
+    // 32% annualized ≈ 2.0%/day (32 / sqrt(252))
+    expect(dailySigmaPct(0.32)).toBeCloseTo(2.016, 2);
+    expect(dailySigmaPct(0)).toBe(0);
+  });
+
+  it("hold sigma scales with sqrt(days)", () => {
+    expect(holdSigmaPct(2, 4)).toBeCloseTo(4);
+    expect(holdSigmaPct(2, 1)).toBeCloseTo(2);
+  });
+
+  it("suggested stop = 1.5x hold sigma, clamped and half-rounded", () => {
+    expect(suggestedStopPct(2, 4)).toBe(6); // 1.5 * 4
+    expect(suggestedStopPct(2, 1)).toBe(3);
+    expect(suggestedStopPct(0.1, 1)).toBe(1); // floor clamp
+    expect(suggestedStopPct(20, 25)).toBe(30); // ceiling clamp
+    expect(suggestedStopPct(0, 5)).toBeNull(); // no vol data -> no claim
+  });
+
+  it("holdDaysUntil converts calendar to trading days with a floor", () => {
+    const now = new Date("2026-09-01T12:00:00Z");
+    expect(holdDaysUntil("2026-09-15", now)).toBe(10); // 14 cal -> 10 trading
+    expect(holdDaysUntil("2026-09-01", now)).toBe(1); // floor
+    expect(holdDaysUntil("garbage", now)).toBe(1);
   });
 });

@@ -7,7 +7,7 @@
  * same convention, so these must not drift.
  */
 
-import type { ManualBook } from "./api";
+import type { BookEnvelope } from "./api";
 
 const round2 = (v: number) => Math.round(v * 100) / 100;
 
@@ -58,7 +58,8 @@ export type EquityPreflightArgs = {
   side: 1 | -1;
   shares: number;
   exits: EquityExits;
-  book: ManualBook | null | undefined;
+  /** The EQUITY book's envelope; null/undefined = books disabled. */
+  book: BookEnvelope | null | undefined;
   equityLongOnly: boolean;
   quoteFresh: boolean;
 };
@@ -76,7 +77,7 @@ export function equityPreflight(a: EquityPreflightArgs): string[] {
   if (a.shares < 1) reasons.push("risk budget sizes to 0 shares — widen risk % or tighten stop");
 
   const book = a.book;
-  if (book?.enabled) {
+  if (book) {
     const maxLoss = (a.exits.entry - a.exits.sl) * a.shares;
     if (maxLoss > book.per_trade_max_loss_usd + 0.01)
       reasons.push(
@@ -103,4 +104,39 @@ export function equityPreflight(a: EquityPreflightArgs): string[] {
  * enforcer always has a hard exit even if the trader forgets the trade. */
 export function swingBackstopUtc(now: Date = new Date()): string {
   return new Date(now.getTime() + 30 * 24 * 3600 * 1000).toISOString();
+}
+
+// ------------------------------------------------------- smart stop levels
+// The edge of running our own stack: the stop suggestion comes from the
+// symbol's OWN measured volatility, not a habit number. House research
+// backs the shape (wick study): winners routinely trade ~1σ against the
+// entry before paying, so a stop inside the hold-horizon noise band is a
+// shakeout machine, not protection.
+
+/** Daily 1σ move (% of price) from annualized realized vol (fraction). */
+export function dailySigmaPct(rvAnnualized: number): number {
+  return rvAnnualized > 0 ? (rvAnnualized / Math.sqrt(252)) * 100 : 0;
+}
+
+/** 1σ expected |move| (% of price) over a hold of N trading days. */
+export function holdSigmaPct(dailySigma: number, holdDays: number): number {
+  return dailySigma * Math.sqrt(Math.max(holdDays, 0.5));
+}
+
+/** Suggested stop distance: k× the hold-horizon 1σ (default 1.5×), so
+ * ordinary noise doesn't tag it; clamped to [1%, 30%], rounded to 0.5. */
+export function suggestedStopPct(
+  dailySigma: number, holdDays: number, k = 1.5,
+): number | null {
+  if (dailySigma <= 0) return null;
+  const raw = k * holdSigmaPct(dailySigma, holdDays);
+  return Math.min(30, Math.max(1, Math.round(raw * 2) / 2));
+}
+
+/** Trading days until an ISO date (yyyy-mm-dd), floor 1; crude 5/7 scale. */
+export function holdDaysUntil(dateStr: string, now: Date = new Date()): number {
+  const target = Date.parse(`${dateStr}T20:00:00Z`);
+  if (!Number.isFinite(target)) return 1;
+  const cal = (target - now.getTime()) / 86_400_000;
+  return Math.max(1, Math.round(cal * (5 / 7)));
 }

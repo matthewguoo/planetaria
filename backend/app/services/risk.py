@@ -42,25 +42,35 @@ DEFAULT_RISK = {
     # risk on the short side. Exits (covers) are never gated.
     "equity_long_only": True,
     "equity_short_overnight": False,
-    # MANUAL BOOK: the capital envelope for discretionary trades (plans with
-    # no strategy_id). Sized to mirror the real account this book rehearses
-    # for, so every gate binds at realistic dollars, not at the paper
-    # account's $100k. Layered UNDER the global gates — both must pass.
+    # MANUAL BOOKS: capital envelopes for discretionary trades (plans with
+    # no strategy_id), ONE PER ASSET CLASS — the share swing book and the
+    # options book are separate bankrolls with separate breakers. Sized to
+    # mirror the real accounts they rehearse for, so every gate binds at
+    # realistic dollars, not at the paper account's $100k. Layered UNDER
+    # the global gates — both must pass.
     "manual_book": {
         "enabled": True,
-        "equity_usd": 11_000.0,        # the book's whole capital
-        "max_loss_pct": 0.02,          # per trade, % of the BOOK
-        "daily_loss_usd": 330.0,       # manual-only daily circuit breaker
-        "max_open_plans": 4,
         # Discipline rule: manual EQUITY entries must carry a stop loss —
         # big loss runners are the failure mode this book exists to fix.
         "require_stop_equity": True,
+        "equity": {
+            "equity_usd": 11_000.0,    # the book's whole capital
+            "max_loss_pct": 0.02,      # per trade, % of the BOOK
+            "daily_loss_usd": 330.0,   # book-only daily circuit breaker
+            "max_open_plans": 4,
+        },
+        "option": {
+            "equity_usd": 5_000.0,
+            "max_loss_pct": 0.05,      # options risk is chunkier per contract
+            "daily_loss_usd": 300.0,
+            "max_open_plans": 3,
+        },
     },
 }
 
 MANUAL_BOOK_BOUNDS = {
-    "equity_usd": (1_000.0, 100_000.0),
-    "max_loss_pct": (0.001, 0.10),
+    "equity_usd": (500.0, 100_000.0),
+    "max_loss_pct": (0.001, 0.25),
     "daily_loss_usd": (25.0, 5_000.0),
     "max_open_plans": (1, 10),
 }
@@ -76,37 +86,59 @@ class RiskService:
         async with self.db.session() as session:
             row = await session.get(AppSetting, RISK_KEY)
             merged = dict(DEFAULT_RISK)
-            merged["manual_book"] = dict(DEFAULT_RISK["manual_book"])
+            defaults_mb = DEFAULT_RISK["manual_book"]
+            mb = {**defaults_mb,
+                  "equity": dict(defaults_mb["equity"]),
+                  "option": dict(defaults_mb["option"])}
             if row:
                 stored = dict(row.value)
                 stored_mb = stored.pop("manual_book", None)
                 merged.update(stored)
-                # Nested block deep-merges so a partial patch (or an old row
+                # Nested blocks deep-merge so a partial patch (or an old row
                 # predating a new subkey) keeps the other defaults.
                 if isinstance(stored_mb, dict):
-                    merged["manual_book"] = {**DEFAULT_RISK["manual_book"], **stored_mb}
+                    for cls in ("equity", "option"):
+                        sub = stored_mb.get(cls)
+                        if isinstance(sub, dict):
+                            mb[cls] = {**defaults_mb[cls], **sub}
+                    for key in ("enabled", "require_stop_equity"):
+                        if key in stored_mb:
+                            mb[key] = bool(stored_mb[key])
+            merged["manual_book"] = mb
             return merged
 
     @staticmethod
-    def _clean_manual_book(value: dict) -> dict:
+    def _clean_book_envelope(cls: str, value: dict) -> dict:
+        if not isinstance(value, dict):
+            raise ValueError(f"manual_book.{cls} must be an object")
+        clean: dict = {}
+        for key, sub in value.items():
+            if key == "max_open_plans":
+                iv = int(sub)
+                lo, hi = MANUAL_BOOK_BOUNDS[key]
+                if not lo <= iv <= hi:
+                    raise ValueError(f"manual_book.{cls}.{key} must be {lo}-{hi}")
+                clean[key] = iv
+            elif key in MANUAL_BOOK_BOUNDS:
+                fv = float(sub)
+                lo, hi = MANUAL_BOOK_BOUNDS[key]
+                if not lo <= fv <= hi:
+                    raise ValueError(f"manual_book.{cls}.{key} out of bounds ({lo}, {hi})")
+                clean[key] = fv
+            else:
+                raise ValueError(f"unknown setting manual_book.{cls}.{key!r}")
+        return clean
+
+    @classmethod
+    def _clean_manual_book(cls_, value: dict) -> dict:
         if not isinstance(value, dict):
             raise ValueError("manual_book must be an object")
         clean: dict = {}
         for key, sub in value.items():
             if key in ("enabled", "require_stop_equity"):
                 clean[key] = bool(sub)
-            elif key == "max_open_plans":
-                iv = int(sub)
-                lo, hi = MANUAL_BOOK_BOUNDS[key]
-                if not lo <= iv <= hi:
-                    raise ValueError(f"manual_book.{key} must be {lo}-{hi}")
-                clean[key] = iv
-            elif key in MANUAL_BOOK_BOUNDS:
-                fv = float(sub)
-                lo, hi = MANUAL_BOOK_BOUNDS[key]
-                if not lo <= fv <= hi:
-                    raise ValueError(f"manual_book.{key} out of bounds ({lo}, {hi})")
-                clean[key] = fv
+            elif key in ("equity", "option"):
+                clean[key] = cls_._clean_book_envelope(key, sub)
             else:
                 raise ValueError(f"unknown setting manual_book.{key!r}")
         return clean
@@ -157,9 +189,12 @@ class RiskService:
             else:
                 merged_value = {**row.value, **clean}
                 if "manual_book" in clean and isinstance(row.value.get("manual_book"), dict):
-                    merged_value["manual_book"] = {
-                        **row.value["manual_book"], **clean["manual_book"]
-                    }
+                    old_mb = row.value["manual_book"]
+                    new_mb = {**old_mb, **clean["manual_book"]}
+                    for cls in ("equity", "option"):
+                        if cls in clean["manual_book"] and isinstance(old_mb.get(cls), dict):
+                            new_mb[cls] = {**old_mb[cls], **clean["manual_book"][cls]}
+                    merged_value["manual_book"] = new_mb
                 row.value = merged_value
             await session.commit()
         return await self.get_settings()
@@ -315,8 +350,14 @@ class RiskService:
         )
         return notional * (1.5 if is_short_equity else 1.0)
 
-    async def manual_open_plans(self) -> list[TradePlan]:
-        """Open plans with no strategy_id — the discretionary book."""
+    @staticmethod
+    def _plan_class(plan: TradePlan) -> str:
+        # Pre-migration rows carry NULL asset_class; they are all options.
+        return plan.asset_class or "option"
+
+    async def manual_open_plans(self, asset_class: str | None = None) -> list[TradePlan]:
+        """Open plans with no strategy_id — the discretionary books.
+        asset_class filters to one book's plans."""
         async with self.db.session() as session:
             result = await session.execute(
                 select(TradePlan).where(
@@ -324,9 +365,12 @@ class RiskService:
                     TradePlan.status.in_(OPEN_STATUSES),
                 )
             )
-            return list(result.scalars())
+            plans = list(result.scalars())
+        if asset_class is not None:
+            plans = [p for p in plans if self._plan_class(p) == asset_class]
+        return plans
 
-    async def manual_realized_today(self) -> float:
+    async def manual_realized_today(self, asset_class: str | None = None) -> float:
         now_et = datetime.now(ET)
         start_utc = now_et.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(
             timezone.utc
@@ -339,26 +383,36 @@ class RiskService:
                     TradePlan.updated_at >= start_utc,
                 )
             )
-            return sum(plan.realized_pnl or 0.0 for plan in result.scalars())
+            plans = list(result.scalars())
+        if asset_class is not None:
+            plans = [p for p in plans if self._plan_class(p) == asset_class]
+        return sum(plan.realized_pnl or 0.0 for plan in plans)
 
-    async def manual_book_state(self) -> dict:
-        """The envelope as the SizingPanel/EquityTicket should render it."""
-        cfg = (await self.get_settings())["manual_book"]
-        plans = await self.manual_open_plans()
+    async def _book_state(self, cls: str, cfg: dict) -> dict:
+        env = cfg[cls]
+        plans = await self.manual_open_plans(cls)
         used = sum(self._plan_capital_usd(p) for p in plans)
-        realized = await self.manual_realized_today()
+        realized = await self.manual_realized_today(cls)
         return {
-            "enabled": bool(cfg["enabled"]),
-            "equity_usd": float(cfg["equity_usd"]),
-            "max_loss_pct": float(cfg["max_loss_pct"]),
-            "per_trade_max_loss_usd": float(cfg["equity_usd"]) * float(cfg["max_loss_pct"]),
-            "daily_loss_usd": float(cfg["daily_loss_usd"]),
-            "max_open_plans": int(cfg["max_open_plans"]),
-            "require_stop_equity": bool(cfg["require_stop_equity"]),
+            "equity_usd": float(env["equity_usd"]),
+            "max_loss_pct": float(env["max_loss_pct"]),
+            "per_trade_max_loss_usd": float(env["equity_usd"]) * float(env["max_loss_pct"]),
+            "daily_loss_usd": float(env["daily_loss_usd"]),
+            "max_open_plans": int(env["max_open_plans"]),
             "open_plans": len(plans),
             "used_usd": round(used, 2),
-            "remaining_usd": round(max(float(cfg["equity_usd"]) - used, 0.0), 2),
+            "remaining_usd": round(max(float(env["equity_usd"]) - used, 0.0), 2),
             "realized_today": round(realized, 2),
+        }
+
+    async def manual_book_state(self) -> dict:
+        """Both envelopes as the tickets should render them."""
+        cfg = (await self.get_settings())["manual_book"]
+        return {
+            "enabled": bool(cfg["enabled"]),
+            "require_stop_equity": bool(cfg["require_stop_equity"]),
+            "equity": await self._book_state("equity", cfg),
+            "option": await self._book_state("option", cfg),
         }
 
     async def validate_new_trade(
@@ -509,41 +563,45 @@ class RiskService:
                 f"{cfg['max_loss_pct']:.1%} of equity (${account_equity * cfg['max_loss_pct']:.0f})"
             )
 
-        # ---- MANUAL BOOK (discretionary trades only) ----------------------
-        # A capital envelope sized to the real account this book rehearses
-        # for. Layered UNDER everything above/below — both must pass.
+        # ---- MANUAL BOOKS (discretionary trades only) ---------------------
+        # Per-asset-class capital envelopes sized to the real accounts they
+        # rehearse for. Layered UNDER everything above/below — both must
+        # pass. The share book and the options book never share dollars.
         mb = cfg["manual_book"]
         if strategy_id is None and mb.get("enabled", False):
-            book = float(mb["equity_usd"])
+            cls = "equity" if is_equity else "option"
+            env = mb[cls]
+            book = float(env["equity_usd"])
+            label = f"manual {cls} book"
             if is_equity and mb.get("require_stop_equity", True) and max_loss_dollars is None:
                 violations.append(
                     "manual book: equity entries require a stop loss "
                     "(sl_premium) — the book's discipline rule"
                 )
-            per_trade_cap = book * float(mb["max_loss_pct"])
+            per_trade_cap = book * float(env["max_loss_pct"])
             if max_loss_dollars is not None and max_loss_dollars > per_trade_cap + 0.01:
                 violations.append(
-                    f"manual book: max loss ${max_loss_dollars:.0f} exceeds "
-                    f"{float(mb['max_loss_pct']):.1%} of the ${book:.0f} book "
+                    f"{label}: max loss ${max_loss_dollars:.0f} exceeds "
+                    f"{float(env['max_loss_pct']):.1%} of the ${book:.0f} book "
                     f"(${per_trade_cap:.0f})"
                 )
-            open_manual = await self.manual_open_plans()
+            open_manual = await self.manual_open_plans(cls)
             used = sum(self._plan_capital_usd(p) for p in open_manual)
             if used + entry_cost_dollars > book + 0.01:
                 violations.append(
-                    f"manual book: ${used:.0f} deployed + ${entry_cost_dollars:.0f} "
+                    f"{label}: ${used:.0f} deployed + ${entry_cost_dollars:.0f} "
                     f"would exceed the ${book:.0f} envelope"
                 )
-            if len(open_manual) >= int(mb["max_open_plans"]):
+            if len(open_manual) >= int(env["max_open_plans"]):
                 violations.append(
-                    f"manual book: {len(open_manual)} open manual plans "
-                    f"(max {int(mb['max_open_plans'])})"
+                    f"{label}: {len(open_manual)} open manual plans "
+                    f"(max {int(env['max_open_plans'])})"
                 )
-            manual_realized = await self.manual_realized_today()
-            if manual_realized <= -abs(float(mb["daily_loss_usd"])):
+            manual_realized = await self.manual_realized_today(cls)
+            if manual_realized <= -abs(float(env["daily_loss_usd"])):
                 violations.append(
-                    f"manual book: daily loss breaker tripped "
-                    f"(realized {manual_realized:+.0f} vs -${float(mb['daily_loss_usd']):.0f})"
+                    f"{label}: daily loss breaker tripped "
+                    f"(realized {manual_realized:+.0f} vs -${float(env['daily_loss_usd']):.0f})"
                 )
         if entry_cost_dollars > account_equity * cfg["bp_cap_pct"] + 0.01:
             violations.append(

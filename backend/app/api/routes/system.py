@@ -15,6 +15,20 @@ async def get_system_state(request: Request) -> dict:
         raise HTTPException(502, f"system state failed: {exc}")
 
 
+@router.get("/portfolio")
+async def portfolio(request: Request, period: str = "1M", timeframe: str = "1D") -> dict:
+    """Cross-account portfolio: every registered paper account's equity,
+    day P/L, positions and curve — read-only, 30s cached."""
+    if period not in {"1D", "1W", "1M", "3M", "6M", "1A", "all"}:
+        raise HTTPException(422, "period must be one of 1D/1W/1M/3M/6M/1A/all")
+    if timeframe not in {"1Min", "5Min", "15Min", "1H", "1D"}:
+        raise HTTPException(422, "timeframe must be one of 1Min/5Min/15Min/1H/1D")
+    try:
+        return await request.app.state.portfolio_accounts.snapshot(period, timeframe)
+    except Exception as exc:
+        raise HTTPException(502, f"portfolio snapshot failed: {exc}")
+
+
 @router.get("/market/clock")
 async def market_clock(request: Request) -> dict:
     """Broker session calendar: open now, and the next open/close.
