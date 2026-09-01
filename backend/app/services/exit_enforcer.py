@@ -57,6 +57,19 @@ SL_QUALITY_HS_FRAC = 0.10
 KF_PROC_FRAC = 0.05
 
 
+def _bracket_span(plan: TradePlan) -> float:
+    """Premium-space scale for thresholds, cadence and filter noise.
+    Bracketed plans use the TP-SL span; SL-only swing plans (no target) use
+    the entry-basis -> SL distance, which is the risk the trader declared."""
+    sl = plan.sl_premium
+    if sl is None:
+        return 1.0
+    if plan.tp_premium is not None:
+        return abs(plan.tp_premium - sl) or 1.0
+    basis = plan.fill_premium if plan.fill_premium is not None else plan.entry_limit
+    return abs(basis - sl) or 1.0
+
+
 def model_position_value(plan: TradePlan, spot: float, now_ms: float) -> float | None:
     """BSM position value from the plan's stored leg IVs at a given spot —
     the TRIGGER used on underlying ticks (stock quotes stream constantly;
@@ -750,9 +763,12 @@ class ExitEnforcer:
                 log.info("monitor armed: plan %s NO BRACKET, time stop %s",
                          plan.id, plan.time_stop_utc)
             else:
-                log.info("monitor armed: plan %s TP=%.2f SL=%.2f stop=%s",
-                         plan.id, plan.tp_premium, plan.sl_premium,
-                         plan.time_stop_utc)
+                # SL-only (tp None) is the equity swing shape: a hard stop
+                # under an open-ended winner.
+                log.info("monitor armed: plan %s TP=%s SL=%.2f stop=%s",
+                         plan.id,
+                         "-" if plan.tp_premium is None else f"{plan.tp_premium:.2f}",
+                         plan.sl_premium, plan.time_stop_utc)
             # Seed the quote cache NOW over REST: a leg that never ticks on
             # the stream must not leave TP/SL unevaluable.
             try:
@@ -842,7 +858,7 @@ class ExitEnforcer:
                     # backoff on failure — never spam a broken broker).
                     if (
                         self.resting_tp
-                        and not bracketless          # nothing to rest
+                        and plan.tp_premium is not None  # nothing to rest otherwise
                         and self.trade.alpaca.configured
                         and plan.status == "filled"
                         and not plan.tp_order_id
@@ -910,9 +926,11 @@ class ExitEnforcer:
                             # Theo drift: the model's CHANGE moves the fair
                             # value between option quotes (level bias cancels).
                             fv_filter.on_model_value(mv)
-                            span = abs(plan.tp_premium - plan.sl_premium) or 1.0
+                            span = _bracket_span(plan)
                             near = 0.15 * span
-                            if mv >= plan.tp_premium - near or mv <= plan.sl_premium + near:
+                            near_tp = (plan.tp_premium is not None
+                                       and mv >= plan.tp_premium - near)
+                            if near_tp or mv <= plan.sl_premium + near:
                                 try:
                                     await self.market.refresh_option_quotes(
                                         symbols, max_age_s=1.0
@@ -941,7 +959,7 @@ class ExitEnforcer:
                         continue
                     self.monitor_health[plan_id] = "ok"
                     micro, half_spread = stats
-                    span = abs(plan.tp_premium - plan.sl_premium) or 1.0
+                    span = _bracket_span(plan)
                     # Kalman update: quote trust scales with its spread —
                     # a wide junk print CANNOT move the trigger price. Only
                     # NEW quotes count as observations: re-reading the same
@@ -961,11 +979,15 @@ class ExitEnforcer:
                         fv = fv_filter.value
                     quality = half_spread <= SL_QUALITY_HS_FRAC * span
                     # Adaptive cadence: tighten the poll floor near thresholds.
-                    dist = min(abs(fv - plan.tp_premium), abs(fv - plan.sl_premium))
+                    dist = abs(fv - plan.sl_premium)
+                    if plan.tp_premium is not None:
+                        dist = min(dist, abs(fv - plan.tp_premium))
                     wait_s = self.quote_poll_near_s if dist < 0.2 * span else self.quote_poll_s
                     # TP side: software trigger only when no broker-resting TP
-                    # is working the level already.
-                    if not plan.tp_order_id and fv >= plan.tp_premium:
+                    # is working the level already (and only when a TP exists —
+                    # SL-only swing plans have no target).
+                    if (plan.tp_premium is not None
+                            and not plan.tp_order_id and fv >= plan.tp_premium):
                         log.info("TP hit for plan %s (fv %.2f)", plan.id, fv)
                         await self._execute_exit(plan_id, "tp")
                         return
@@ -1351,13 +1373,14 @@ class ExitEnforcer:
         if tp is not None:
             if tp == plan.tp_premium:
                 raise ValueError("TP unchanged")
-            if tp <= plan.sl_premium:
+            if plan.sl_premium is not None and tp <= plan.sl_premium:
                 raise ValueError("TP must stay above SL")
             fields["tp_premium"] = tp
         if sl is not None:
-            if sl <= plan.sl_premium:
+            if plan.sl_premium is not None and sl <= plan.sl_premium:
                 raise ValueError("SL may only move up (tighten)")
-            if sl >= (fields.get("tp_premium", plan.tp_premium)):
+            effective_tp = fields.get("tp_premium", plan.tp_premium)
+            if effective_tp is not None and sl >= effective_tp:
                 raise ValueError("SL must stay below TP")
             fields["sl_premium"] = sl
         if time_stop_utc is not None:

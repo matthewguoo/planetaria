@@ -54,10 +54,7 @@ ENGINE_PATHS = {
     "/api/settings/risk",
     "/api/health",
 }
-# The chain route and the WebSocket that used to anchor this set went with
-# the discretionary terminal (retired 2026-08-07); the quote REST is what
-# remains of the UI-serving surface.
-UI_PATHS = {"/api/quote/{symbol}"}
+UI_PATHS = {"/ws/stream", "/api/options/chain/{underlying}", "/api/quote/{symbol}"}
 
 
 def test_headless_mounts_engine_api_only(monkeypatch):
@@ -72,3 +69,26 @@ def test_default_mounts_everything(monkeypatch):
     paths = _routes_with_env(monkeypatch, headless=False)
     for p in ENGINE_PATHS | UI_PATHS:
         assert p in paths, f"path {p} missing in full mode"
+
+
+def _mount_names_with_env(monkeypatch, headless: bool) -> set:
+    monkeypatch.setenv("HEADLESS", "true" if headless else "false")
+    from app import config
+
+    config.get_settings.cache_clear()
+    import app.main
+
+    importlib.reload(app.main)
+    return {getattr(r, "name", None) for r in app.main.app.routes}
+
+
+def test_headless_never_serves_static_ui(monkeypatch):
+    assert "ui" not in _mount_names_with_env(monkeypatch, headless=True)
+
+
+def test_full_mode_serves_static_ui_when_built(monkeypatch):
+    names = _mount_names_with_env(monkeypatch, headless=False)
+    import app.main
+
+    # The mount exists exactly when a frontend build is on disk.
+    assert ("ui" in names) == app.main._dist.is_dir()

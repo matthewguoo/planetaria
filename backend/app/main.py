@@ -3,16 +3,20 @@ behavior lives in app.services.*. Keep this file boring."""
 
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from app import bootstrap
 from app.api.routes.market_data import router as market_router
 from app.api.routes.monitor import router as monitor_router
+from app.api.routes.options import router as options_router
 from app.api.routes.strategies import router as strategies_router
 from app.api.routes.system import router as system_router
 from app.api.routes.trading import router as trading_router
+from app.api.websocket import router as ws_router
 from app.config import get_settings
 
 logging.basicConfig(
@@ -47,16 +51,17 @@ app.add_middleware(
 )
 
 # The ENGINE API (trading commands + system ops) is always mounted; the
-# UI-serving surface (the quote REST the MARKET page polls) is skipped in
-# HEADLESS mode — engine-only deployments for reliability. The chain, bars
-# REST and browser WebSocket fanout that also lived behind this flag went
-# with the discretionary terminal (retired 2026-08-07).
+# UI-serving surface (chain, bars REST, browser WebSocket fanout, and the
+# built frontend itself) is skipped in HEADLESS mode — engine-only
+# deployments for reliability.
 app.include_router(trading_router)
 app.include_router(system_router)
 app.include_router(strategies_router)
 app.include_router(monitor_router)
 if not get_settings().headless:
     app.include_router(market_router)
+    app.include_router(options_router)
+    app.include_router(ws_router)
 
 
 @app.get("/api/health")
@@ -71,3 +76,13 @@ async def health(request: Request) -> dict:
         "alpaca_keys_configured": bool(s.alpaca_api_key and s.alpaca_secret_key),
         "reconciled": reconcile is None or reconcile.done(),
     }
+
+
+# Serve the built frontend (ops console at /, terminal at /terminal.html)
+# from this process so no node/vite tooling is needed at runtime. A "/"
+# mount matches every path, so it MUST be registered after all API routes
+# (registration order is match order); StaticFiles reads from disk per
+# request, so `npm run build` redeploys the UI without a restart.
+_dist = Path(__file__).resolve().parent.parent.parent / "frontend" / "dist"
+if not get_settings().headless and _dist.is_dir():
+    app.mount("/", StaticFiles(directory=str(_dist), html=True), name="ui")

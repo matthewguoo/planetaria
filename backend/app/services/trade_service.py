@@ -291,23 +291,36 @@ class TradeService:
         legs = payload["legs"]
         qty = int(payload["qty"])
         entry_limit = float(payload["entry_limit"])
-        # BOTH null = a time-stop-only plan. The exit enforcer runs it without
-        # thresholds and the hard time stop is the exit plan; risk bounds it at
-        # the strategy level (allocation + circuit breaker) rather than at the
-        # position. One null is not a thing — see the check below.
+        asset_class = payload.get("asset_class") or "option"
+        # Exit combinations. BOTH null = a time-stop-only plan (the exit
+        # enforcer runs it without thresholds; risk bounds it at the strategy
+        # level). Equity additionally allows SL-WITHOUT-TP — the swing
+        # contract: a hard stop under an open-ended winner. A target without
+        # a stop is not an exit plan anywhere.
         tp = payload.get("tp_premium")
         sl = payload.get("sl_premium")
         bracketless = tp is None and sl is None
         if not bracketless:
-            if tp is None or sl is None:
+            if sl is None:
+                raise ValueError(
+                    "a take-profit without a stop is not an exit plan — set "
+                    "sl_premium too (or null both for time-stop-only)")
+            if tp is None and asset_class != "equity":
                 raise ValueError(
                     "tp_premium and sl_premium must both be set, or both be "
-                    "null for a time-stop-only plan — one bracket alone is "
-                    "neither a target nor a stop")
-            tp, sl = float(tp), float(sl)
-        asset_class = payload.get("asset_class") or "option"
+                    "null for a time-stop-only plan — SL-only is an equity "
+                    "swing shape")
+            sl = float(sl)
+            tp = float(tp) if tp is not None else None
         extended_hours = bool(payload.get("extended_hours", False))
-        time_stop = datetime.fromisoformat(payload["time_stop_utc"])
+        ts_raw = payload.get("time_stop_utc")
+        if not ts_raw:
+            # The column is non-null and the enforcer's wake math keys on it.
+            # Open-ended swing holds send a FAR backstop instead of nothing.
+            raise ValueError(
+                "time_stop_utc required — for an open-ended swing hold send "
+                "a far backstop (e.g. +30 days)")
+        time_stop = datetime.fromisoformat(ts_raw)
         if time_stop.tzinfo is None:
             time_stop = time_stop.replace(tzinfo=timezone.utc)
 
@@ -342,9 +355,13 @@ class TradeService:
                     "09:28 ET — today's opening auction is not joinable")
         if abs(entry_limit) < TICK:
             raise ValueError("net premium must be at least one tick")
-        if not bracketless and not (sl < entry_limit < tp):
+        if sl is not None and tp is not None and not (sl < entry_limit < tp):
             raise ValueError(
                 f"exits must bracket entry: SL {sl} < entry {entry_limit} < TP {tp}"
+            )
+        if sl is not None and tp is None and not (sl < entry_limit):
+            raise ValueError(
+                f"stop must sit below entry on the value axis: SL {sl} < entry {entry_limit}"
             )
 
         account = await self.get_account()
@@ -354,7 +371,7 @@ class TradeService:
             # expiry. max_loss is the SL distance in dollars (x1); the signed
             # convention makes it positive for shorts too (SL sits below the
             # negative entry credit on the position-value axis).
-            max_loss = None if bracketless else (entry_limit - sl) * qty
+            max_loss = None if sl is None else (entry_limit - sl) * qty
             # Capital consumed: longs claim their notional. Shorts claim
             # Reg-T initial — 150% of market value (100% proceeds held +50%)
             # — so the per-name and gross caps count the true BP bite.
@@ -365,7 +382,7 @@ class TradeService:
             # standard 20%-of-spot formula rather than full cash-secured value —
             # a jade lizard's short put must not consume $70k/set of "BP" that
             # Alpaca itself would never require in a margin account.
-            max_loss = None if bracketless else (entry_limit - sl) * 100 * qty
+            max_loss = None if sl is None else (entry_limit - sl) * 100 * qty
             from app.services.options_math import Leg, bp_per_set_estimate
 
             spot = self.market.spot(payload["underlying"].upper())
@@ -388,6 +405,25 @@ class TradeService:
                     entry_cost = (max_loss * 3 if max_loss is not None
                                   else abs(entry_limit) * 100 * qty)
             expiry = max(leg["expiry"] for leg in legs)
+        # Force-refresh the legs' quotes BEFORE validation, and fill any
+        # missing half_spread from the live book — the illiquidity gate must
+        # not be skippable by a client simply omitting the field.
+        leg_symbols = [leg["symbol"] for leg in legs]
+        if self.alpaca.configured:
+            try:
+                if asset_class == "equity":
+                    await self.market.fetch_latest_stock_quote(leg_symbols[0])
+                else:
+                    await self.market.refresh_option_quotes(leg_symbols, max_age_s=1.5)
+            except Exception as exc:
+                log.warning("entry-guard quote refresh failed: %s", exc)
+            for leg in legs:
+                if leg.get("half_spread") is None:
+                    q = self.market.latest_quote(leg["symbol"]) or {}
+                    bid, ask = q.get("bid"), q.get("ask")
+                    if bid is not None and ask is not None and ask >= bid:
+                        leg["half_spread"] = max((float(ask) - float(bid)) / 2, 0.0)
+
         stream_age: float | None = None
         if self.alpaca.configured:
             stream_age = self._entry_staleness_s(asset_class, legs)
@@ -408,6 +444,7 @@ class TradeService:
             shortable=shortable,
             overnight_session=(asset_class == "equity"
                                and equity_session() == "overnight"),
+            strategy_id=payload.get("strategy_id"),
         )
         if violations:
             raise ValueError("; ".join(violations))
@@ -421,14 +458,7 @@ class TradeService:
         if self.alpaca.configured:
             from app.services.fair_value import position_quote_stats
 
-            leg_symbols = [leg["symbol"] for leg in legs]
-            try:
-                if asset_class == "equity":
-                    await self.market.fetch_latest_stock_quote(leg_symbols[0])
-                else:
-                    await self.market.refresh_option_quotes(leg_symbols, max_age_s=1.5)
-            except Exception as exc:
-                log.warning("entry-guard quote refresh failed: %s", exc)
+            # Quotes were force-refreshed just before validation above.
             live = position_quote_stats(
                 legs, {s: self.market.latest_quote(s) for s in leg_symbols}
             )

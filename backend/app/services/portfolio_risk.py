@@ -113,7 +113,12 @@ def combine_correlated(risks: dict[str, float], rho: dict[tuple[str, str], float
 
 def plan_stop_risk(plan: TradePlan) -> float:
     """Dollars lost if this plan exits exactly at its stop (per current or
-    would-be quantity). Gap-through can exceed this — it is the PLANNED risk."""
+    would-be quantity). Gap-through can exceed this — it is the PLANNED risk.
+    A plan with no stop (bracketless / time-stop-only) carries no
+    stop-defined risk here: its risk is bounded by its strategy's
+    allocation/breaker (or the manual book), not by a level."""
+    if plan.sl_premium is None:
+        return 0.0
     basis = plan.fill_premium if plan.fill_premium is not None else plan.entry_limit
     per_set = max(basis - plan.sl_premium, 0.0) * plan.contract_multiplier
     qty = plan.effective_qty if plan.filled_qty is not None else plan.qty
@@ -219,6 +224,8 @@ class PortfolioRisk:
                 "status": plan.status,
                 "risk_dollars": round(dollars, 2),
                 "risk_pct": round(dollars / equity * 100.0, 3) if equity > 0 else None,
+                # No stop level -> the 0 above is "unmeasured here", not "safe".
+                "bracketless": plan.sl_premium is None,
             })
             risk_by_underlying[plan.underlying] = risk_by_underlying.get(plan.underlying, 0.0) + dollars
             spot = self._spot(plan.underlying)

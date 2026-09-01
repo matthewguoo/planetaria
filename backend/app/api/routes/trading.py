@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -17,11 +18,13 @@ class LegOrder(BaseModel):
     right: str | None = None
     strike: float | None = None
     expiry: str | None = None
-    side: int = Field(ge=-1, le=1)
+    side: Literal[-1, 1]
     ratio: int = 1
     entry: float
     iv: float | None = None
     half_spread: float | None = Field(default=None, ge=0)  # liquidity guard input
+    # "open" = market-on-open entry (equity only; refused past 09:28 ET).
+    auction: Literal["open"] | None = None
 
 
 class OrderIn(BaseModel):
@@ -33,9 +36,14 @@ class OrderIn(BaseModel):
     legs: list[LegOrder] = Field(min_length=1, max_length=4)
     qty: int = Field(ge=1, le=10_000)  # contract sets / shares
     entry_limit: float
-    tp_premium: float
-    sl_premium: float
-    time_stop_utc: str
+    # Nullable exits: place_trade validates the allowed combinations —
+    # options need both-or-neither; equity additionally allows SL-only
+    # (swing entries that let winners run under a hard stop).
+    tp_premium: float | None = None
+    sl_premium: float | None = None
+    # Optional for equity swing plans (no time stop = held until TP/SL or
+    # manual close); place_trade still requires it for options.
+    time_stop_utc: str | None = None
 
 
 class TightenIn(BaseModel):
@@ -52,7 +60,8 @@ async def account(request: Request) -> dict:
         raise HTTPException(502, f"account fetch failed: {exc}")
     risk = await request.app.state.risk.get_settings()
     realized = await request.app.state.risk.todays_realized_pnl()
-    return {**acct, "risk": risk, "day_realized_pnl": realized}
+    manual_book = await request.app.state.risk.manual_book_state()
+    return {**acct, "risk": risk, "day_realized_pnl": realized, "manual_book": manual_book}
 
 
 @router.get("/account/risk")

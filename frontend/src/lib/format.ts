@@ -13,6 +13,12 @@ export const fmtUsd = (v: number | null | undefined, sign = false) =>
 export const pnlCls = (v: number | null | undefined) =>
   v === null || v === undefined ? "text-bb-muted" : v >= 0 ? "text-bb-profit" : "text-bb-loss";
 
+/** "63%" from a 0–1 probability; "—" unknown. */
+export const pct = (v: number | null) => (v === null ? "—" : `${(v * 100).toFixed(0)}%`);
+
+/** Signed whole-dollar amount: "+$12" / "-$3". */
+export const usd = (v: number) => `${v >= 0 ? "+" : "-"}$${Math.abs(v).toFixed(0)}`;
+
 /** "HH:MM:SS" clipped from an ISO timestamp — shown in the timestamp's own
  * zone (the backend journals UTC); "—" when absent. */
 export const hhmmss = (iso: string | null | undefined) => (iso ? iso.slice(11, 19) : "—");

@@ -158,19 +158,19 @@ function ExitQualityPanel({ closed }: { closed: Plan[] | null }) {
   const qty = (t: Plan) => t.filled_qty || t.qty;
 
   const slExits = closed.filter(
-    (t) => t.exit_reason === "sl" && t.exit_premium != null,
+    (t) => t.exit_reason === "sl" && t.exit_premium != null && t.sl_premium != null,
   );
   const tpExits = closed.filter(
-    (t) => t.exit_reason === "tp" && t.exit_premium != null,
+    (t) => t.exit_reason === "tp" && t.exit_premium != null && t.tp_premium != null,
   );
   if (!slExits.length && !tpExits.length) return null;
 
   const slRows = slExits.map((t) => {
-    const slip = t.sl_premium - (t.exit_premium as number); // premium/share
+    const slip = (t.sl_premium as number) - (t.exit_premium as number); // premium/share
     return { t, slip, slipPct: slip / basis(t), dollars: slip * 100 * qty(t) };
   });
   const tpRows = tpExits.map((t) => {
-    const improve = (t.exit_premium as number) - t.tp_premium;
+    const improve = (t.exit_premium as number) - (t.tp_premium as number);
     return { t, improve, improvePct: improve / basis(t) };
   });
   const avg = (xs: number[]) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : 0);
@@ -284,7 +284,10 @@ function EquityCurve({ history }: { history: PortfolioHistory | null }) {
   return <canvas ref={ref} className="h-full w-full" />;
 }
 
-export function AccountPage() {
+/** `onViewPlan` hands a position off to the chart. The terminal shell passes
+ * it; the ops console has no chart, so it passes nothing and the row simply
+ * stops being clickable — the page itself stays shell-agnostic. */
+export function AccountPage({ onViewPlan }: { onViewPlan?: (plan: Plan) => void } = {}) {
   const account = useAccountStore((s) => s.account);
   const positions = useAccountStore((s) => s.positions);
   const untracked = useAccountStore((s) => s.untracked);
@@ -411,11 +414,25 @@ export function AccountPage() {
           </thead>
           <tbody>
             {positions.map((p) => (
-              <tr key={p.id} className="border-b border-bb-border/50 hover:bg-bb-hover">
+              <tr
+                key={p.id}
+                className={
+                  "border-b border-bb-border/50 hover:bg-bb-hover " +
+                  (onViewPlan ? "cursor-pointer" : "")
+                }
+                onClick={onViewPlan ? () => onViewPlan(p) : undefined}
+                title={onViewPlan ? "View this position on the chart (entry-anchored P/L surface)" : ""}
+              >
                 <td className="px-2 py-1 text-white">
                   {p.underlying}
                   <span className="ml-1 text-[10px] text-bb-muted">
-                    {p.legs.map((l) => `${l.side > 0 ? "+" : "−"}${l.ratio || 1}${l.right}${l.strike}`).join(" ")}
+                    {p.legs
+                      .map((l) =>
+                        l.right != null
+                          ? `${l.side > 0 ? "+" : "−"}${l.ratio || 1}${l.right}${l.strike}`
+                          : `${l.side > 0 ? "+" : "−"}${l.ratio || 1} SH`,
+                      )
+                      .join(" ")}
                   </span>
                 </td>
                 <td data-numeric className="px-2 py-1 text-right">{p.filled_qty || p.qty}</td>
@@ -426,8 +443,8 @@ export function AccountPage() {
                   {fmtUsd(p.unrealized_pnl, true)}
                 </td>
                 <td data-numeric className="px-2 py-1 text-right">
-                  <span className="text-bb-profit">{p.tp_premium.toFixed(2)}</span> /{" "}
-                  <span className="text-bb-loss">{p.sl_premium.toFixed(2)}</span>
+                  <span className="text-bb-profit">{p.tp_premium?.toFixed(2) ?? "—"}</span> /{" "}
+                  <span className="text-bb-loss">{p.sl_premium?.toFixed(2) ?? "—"}</span>
                 </td>
                 <td
                   data-numeric
@@ -437,6 +454,17 @@ export function AccountPage() {
                   {account?.equity ? `${((planStopRisk(p) / account.equity) * 100).toFixed(1)}%` : "—"}
                 </td>
                 <td className="px-2 py-1 text-right">
+                  {onViewPlan && (
+                    <button
+                      className="border border-bb-amber px-1.5 text-[10px] text-bb-amber hover:bg-bb-amber hover:text-black"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onViewPlan(p);
+                      }}
+                    >
+                      VIEW
+                    </button>
+                  )}
                   <button
                     className="ml-1 border border-bb-loss px-1.5 text-[10px] text-bb-loss hover:bg-bb-loss hover:text-black"
                     onClick={async (e) => {

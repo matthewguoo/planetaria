@@ -3,6 +3,7 @@ import random
 
 import pytest
 
+from app.services.analytics import compute_probabilities, compute_sizing, position_iv
 from app.services.options_math import (
     Leg,
     breakevens,
@@ -167,6 +168,53 @@ def test_premium_barrier_solve():
     assert abs(bs_price(s_star, 455.0, tau_eval, 0.2, "C") - 4.0) < 1e-6
 
 
+def test_compute_probabilities_consistency():
+    legs = long_call(strike=455.0, entry=2.0, iv=0.2)
+    out = compute_probabilities(legs, 452.0, 13.0, tp_premium=4.0, sl_premium=1.0)
+    assert 0.0 < out["p_profit_expiry"] < 0.6
+    assert out["p_touch_tp"] is not None and 0 < out["p_touch_tp"] < 1
+    assert out["p_touch_sl"] is not None and 0 < out["p_touch_sl"] < 1
+    assert out["tp_barrier"] > 452.0 > out["sl_barrier"]
+    assert out["rr"] == pytest.approx(2.0)
+    assert out["breakevens"] == [457.0]
+
+
+def test_sizing_respects_budgets():
+    legs = long_call(entry=2.0)
+    sizing = compute_sizing(legs, 25_000, 0.02, sl_premium=1.0, bp_cap_pct=0.25)
+    # risk/contract = (2-1)*100 = $100; budget = $500 -> 5 contracts; cost $1000 < bp cap
+    assert sizing.contracts == 5
+    assert sizing.max_loss_at_stop == 500.0
+    assert sizing.entry_cost == 1000.0
+
+    capped = compute_sizing(legs, 25_000, 0.02, sl_premium=1.9, bp_cap_pct=0.02)
+    # risk $10 -> 50 contracts; bp cap $500 // $200 = 2 contracts
+    assert capped.contracts == 2
+    assert any("buying-power" in reason for reason in capped.reasons)
+
+
+def test_sizing_credit_structures():
+    # Naked short call: undefined risk -> stop-based sizing with a warning.
+    naked = [Leg("C", 450, 1, -1, 2.0, 0.2)]  # entry = -2.0 (credit)
+    sizing = compute_sizing(naked, 25_000, 0.02, sl_premium=-3.0, bp_cap_pct=0.25)
+    # risk/contract = (-2.0 - -3.0)*100 = $100; budget $500 -> 5 contracts
+    assert sizing.contracts == 5
+    assert sizing.max_loss_at_stop == 500.0
+    assert any("undefined risk" in r for r in sizing.reasons)
+
+    # Defined-risk credit spread: margin = structural max loss.
+    spread = [Leg("C", 450, 1, -1, 2.0, 0.2), Leg("C", 455, 1, 1, 0.8, 0.19)]  # credit 1.2
+    s = compute_sizing(spread, 25_000, 0.02, sl_premium=-2.4, bp_cap_pct=0.25)
+    # structural loss = width 5 - credit 1.2 = 3.8/share = $380/set
+    assert s.contracts >= 1
+    assert s.max_loss_structural == pytest.approx(380.0 * s.contracts)
+
+
+def test_sizing_refuses_inverted_stops():
+    legs = long_call(entry=2.0)
+    assert compute_sizing(legs, 25_000, 0.02, sl_premium=2.5, bp_cap_pct=0.25).contracts == 0
+
+
 def test_structural_max_loss():
     from app.services.options_math import structural_max_loss
 
@@ -189,3 +237,9 @@ def test_structural_max_loss():
     ]
     net_credit = 1.2 + 1.1 - 0.5 - 0.4
     assert structural_max_loss(condor) == pytest.approx(5.0 - net_credit)
+
+
+def test_position_iv_weighting():
+    legs = [Leg("C", 450, 1, 1, 4.0, 0.20), Leg("C", 455, 1, -1, 2.0, 0.30)]
+    iv = position_iv(legs)
+    assert abs(iv - (4 * 0.20 + 2 * 0.30) / 6) < 1e-9

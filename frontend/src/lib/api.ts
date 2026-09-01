@@ -8,6 +8,15 @@ export const api = axios.create({
   timeout: 10_000,
 });
 
+export type SymbolHit = { symbol: string; name: string };
+
+export async function searchSymbols(q: string): Promise<SymbolHit[]> {
+  const { data } = await api.get<{ results: SymbolHit[] }>("/api/symbols/search", {
+    params: { q },
+  });
+  return data.results;
+}
+
 export type RiskSettings = {
   max_loss_pct: number;
   daily_loss_pct: number;
@@ -23,6 +32,33 @@ export type RiskSettings = {
   /** SL breach must persist this long (on the Kalman fair value) before
    * firing; deep breaches fire immediately. 0 = instant. */
   sl_confirm_s: number;
+  equity_max_notional_per_name_pct: number;
+  equity_gross_exposure_pct: number;
+  equity_long_only: boolean;
+  equity_short_overnight: boolean;
+  manual_book: {
+    enabled: boolean;
+    equity_usd: number;
+    max_loss_pct: number;
+    daily_loss_usd: number;
+    max_open_plans: number;
+    require_stop_equity: boolean;
+  };
+};
+
+/** The discretionary book's envelope, as GET /api/account reports it. */
+export type ManualBook = {
+  enabled: boolean;
+  equity_usd: number;
+  max_loss_pct: number;
+  per_trade_max_loss_usd: number;
+  daily_loss_usd: number;
+  max_open_plans: number;
+  require_stop_equity: boolean;
+  open_plans: number;
+  used_usd: number;
+  remaining_usd: number;
+  realized_today: number;
 };
 
 export type Account = {
@@ -34,17 +70,19 @@ export type Account = {
   paper: boolean;
   risk: RiskSettings;
   day_realized_pnl: number;
+  manual_book?: ManualBook;
 };
 
 export type PlanLeg = {
   symbol: string;
-  right: "C" | "P";
-  strike: number;
-  expiry: string;
+  /** null on equity legs — a share leg has no right/strike/expiry. */
+  right: "C" | "P" | null;
+  strike: number | null;
+  expiry: string | null;
   side: number;
   ratio: number;
   entry: number;
-  iv: number;
+  iv: number | null;
 };
 
 export type Plan = {
@@ -52,12 +90,16 @@ export type Plan = {
   created_at: string;
   underlying: string;
   strategy: string;
+  strategy_id?: string | null;
+  asset_class?: "option" | "equity";
+  extended_hours?: boolean;
   legs: PlanLeg[];
   qty: number;
   entry_limit: number;
-  tp_premium: number;
-  sl_premium: number;
-  time_stop_utc: string;
+  /** null = bracketless (time-stop-only, or SL-only swing plans). */
+  tp_premium: number | null;
+  sl_premium: number | null;
+  time_stop_utc: string | null;
   status: string;
   filled_qty?: number | null;
   exit_reason: string | null;
@@ -108,14 +150,23 @@ export type PositionsPayload = {
 };
 
 export const getAccount = () => api.get<Account>("/api/account").then((r) => r.data);
+export const putRisk = (patch: Partial<RiskSettings>) =>
+  api.put<RiskSettings>("/api/settings/risk", patch).then((r) => r.data);
 export const getPositions = () =>
   api.get<PositionsPayload>("/api/positions").then((r) => r.data);
 export const adoptPositions = (symbols: string[]) =>
   api.post<{ adopted: Plan[] }>("/api/positions/adopt", { symbols }).then((r) => r.data.adopted);
 export const getHistory = () =>
   api.get<{ trades: Plan[] }>("/api/history").then((r) => r.data.trades);
+export const postOrder = (payload: object) =>
+  api.post<Plan>("/api/orders", payload).then((r) => r.data);
 export const closePosition = (planId: string) =>
   api.post(`/api/positions/${planId}/close`).then((r) => r.data);
+export const flattenAll = () => api.post("/api/positions/flatten").then((r) => r.data);
+export const tightenExits = (
+  planId: string,
+  patch: { tp_premium?: number; sl_premium?: number; time_stop_utc?: string },
+) => api.patch<Plan>(`/api/positions/${planId}/exits`, patch).then((r) => r.data);
 
 export type PortfolioHistory = {
   timestamps: number[];
@@ -258,25 +309,40 @@ export type FeedSettings = {
   restart_required_keys: string[];
 };
 
+export type PlanEvent = {
+  ts: string | null;
+  event: string;
+  source: string;
+  target: string | null;
+  applied: boolean;
+  detail: string | null;
+};
+
 export const getSystemState = () =>
   api.get<SystemState>("/api/system/state").then((r) => r.data);
 export const getFeedSettings = () =>
   api.get<FeedSettings>("/api/settings/feed").then((r) => r.data);
 export const putFeedSettings = (patch: Partial<FeedSettings>) =>
   api.put<FeedSettings>("/api/settings/feed", patch).then((r) => r.data);
+export const getPlanEvents = (planId: string) =>
+  api.get<{ events: PlanEvent[] }>(`/api/positions/${planId}/events`).then((r) => r.data.events);
 
 /** Client-side mirror of the server's plan_stop_risk: dollars lost if this
- * plan exits exactly at its stop. */
+ * plan exits exactly at its stop. Bracketless plans (sl null) carry no
+ * stop-defined risk — they are bounded by their book/allocation instead. */
 export function planStopRisk(plan: {
   fill_premium?: number | null;
   entry_limit: number;
-  sl_premium: number;
+  sl_premium: number | null;
   filled_qty?: number | null;
   qty: number;
+  asset_class?: string;
 }): number {
+  if (plan.sl_premium == null) return 0;
   const basis = plan.fill_premium ?? plan.entry_limit;
   const qty = plan.filled_qty ?? plan.qty;
-  return Math.max(basis - plan.sl_premium, 0) * 100 * Math.max(qty, 0);
+  const mult = plan.asset_class === "equity" ? 1 : 100;
+  return Math.max(basis - plan.sl_premium, 0) * mult * Math.max(qty, 0);
 }
 
 export const getAccountHistory = (period = "1M", timeframe = "1D") =>

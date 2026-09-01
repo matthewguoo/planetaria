@@ -42,6 +42,27 @@ DEFAULT_RISK = {
     # risk on the short side. Exits (covers) are never gated.
     "equity_long_only": True,
     "equity_short_overnight": False,
+    # MANUAL BOOK: the capital envelope for discretionary trades (plans with
+    # no strategy_id). Sized to mirror the real account this book rehearses
+    # for, so every gate binds at realistic dollars, not at the paper
+    # account's $100k. Layered UNDER the global gates — both must pass.
+    "manual_book": {
+        "enabled": True,
+        "equity_usd": 11_000.0,        # the book's whole capital
+        "max_loss_pct": 0.02,          # per trade, % of the BOOK
+        "daily_loss_usd": 330.0,       # manual-only daily circuit breaker
+        "max_open_plans": 4,
+        # Discipline rule: manual EQUITY entries must carry a stop loss —
+        # big loss runners are the failure mode this book exists to fix.
+        "require_stop_equity": True,
+    },
+}
+
+MANUAL_BOOK_BOUNDS = {
+    "equity_usd": (1_000.0, 100_000.0),
+    "max_loss_pct": (0.001, 0.10),
+    "daily_loss_usd": (25.0, 5_000.0),
+    "max_open_plans": (1, 10),
 }
 
 RISK_KEY = "risk"
@@ -55,16 +76,49 @@ class RiskService:
         async with self.db.session() as session:
             row = await session.get(AppSetting, RISK_KEY)
             merged = dict(DEFAULT_RISK)
+            merged["manual_book"] = dict(DEFAULT_RISK["manual_book"])
             if row:
-                merged.update(row.value)
+                stored = dict(row.value)
+                stored_mb = stored.pop("manual_book", None)
+                merged.update(stored)
+                # Nested block deep-merges so a partial patch (or an old row
+                # predating a new subkey) keeps the other defaults.
+                if isinstance(stored_mb, dict):
+                    merged["manual_book"] = {**DEFAULT_RISK["manual_book"], **stored_mb}
             return merged
+
+    @staticmethod
+    def _clean_manual_book(value: dict) -> dict:
+        if not isinstance(value, dict):
+            raise ValueError("manual_book must be an object")
+        clean: dict = {}
+        for key, sub in value.items():
+            if key in ("enabled", "require_stop_equity"):
+                clean[key] = bool(sub)
+            elif key == "max_open_plans":
+                iv = int(sub)
+                lo, hi = MANUAL_BOOK_BOUNDS[key]
+                if not lo <= iv <= hi:
+                    raise ValueError(f"manual_book.{key} must be {lo}-{hi}")
+                clean[key] = iv
+            elif key in MANUAL_BOOK_BOUNDS:
+                fv = float(sub)
+                lo, hi = MANUAL_BOOK_BOUNDS[key]
+                if not lo <= fv <= hi:
+                    raise ValueError(f"manual_book.{key} out of bounds ({lo}, {hi})")
+                clean[key] = fv
+            else:
+                raise ValueError(f"unknown setting manual_book.{key!r}")
+        return clean
 
     async def update_settings(self, patch: dict) -> dict:
         clean: dict = {}
         for key, value in patch.items():
             if key not in DEFAULT_RISK:
                 raise ValueError(f"unknown setting {key!r}")
-            if key in ("time_stop_et", "expiry_time_stop_et"):
+            if key == "manual_book":
+                clean[key] = self._clean_manual_book(value)
+            elif key in ("time_stop_et", "expiry_time_stop_et"):
                 time.fromisoformat(str(value))  # validate HH:MM
                 clean[key] = str(value)
             elif key in ("equity_long_only", "equity_short_overnight"):
@@ -101,7 +155,12 @@ class RiskService:
                 merged_value = {**clean}
                 session.add(AppSetting(key=RISK_KEY, value=merged_value))
             else:
-                row.value = {**row.value, **clean}
+                merged_value = {**row.value, **clean}
+                if "manual_book" in clean and isinstance(row.value.get("manual_book"), dict):
+                    merged_value["manual_book"] = {
+                        **row.value["manual_book"], **clean["manual_book"]
+                    }
+                row.value = merged_value
             await session.commit()
         return await self.get_settings()
 
@@ -242,6 +301,66 @@ class RiskService:
             )
             return sum(plan.realized_pnl or 0.0 for plan in result.scalars())
 
+    # ------------------------------------------------------- manual book
+
+    @staticmethod
+    def _plan_capital_usd(plan: TradePlan) -> float:
+        """Capital a plan holds against its book: notional (x multiplier),
+        with short equity charged at Reg-T initial (150%) like place_trade."""
+        notional = abs(plan.entry_limit) * plan.contract_multiplier * plan.effective_qty
+        is_short_equity = (
+            plan.asset_class == "equity"
+            and bool(plan.legs)
+            and plan.legs[0].get("side", 1) < 0
+        )
+        return notional * (1.5 if is_short_equity else 1.0)
+
+    async def manual_open_plans(self) -> list[TradePlan]:
+        """Open plans with no strategy_id — the discretionary book."""
+        async with self.db.session() as session:
+            result = await session.execute(
+                select(TradePlan).where(
+                    TradePlan.strategy_id.is_(None),
+                    TradePlan.status.in_(OPEN_STATUSES),
+                )
+            )
+            return list(result.scalars())
+
+    async def manual_realized_today(self) -> float:
+        now_et = datetime.now(ET)
+        start_utc = now_et.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(
+            timezone.utc
+        )
+        async with self.db.session() as session:
+            result = await session.execute(
+                select(TradePlan).where(
+                    TradePlan.strategy_id.is_(None),
+                    TradePlan.status == "closed",
+                    TradePlan.updated_at >= start_utc,
+                )
+            )
+            return sum(plan.realized_pnl or 0.0 for plan in result.scalars())
+
+    async def manual_book_state(self) -> dict:
+        """The envelope as the SizingPanel/EquityTicket should render it."""
+        cfg = (await self.get_settings())["manual_book"]
+        plans = await self.manual_open_plans()
+        used = sum(self._plan_capital_usd(p) for p in plans)
+        realized = await self.manual_realized_today()
+        return {
+            "enabled": bool(cfg["enabled"]),
+            "equity_usd": float(cfg["equity_usd"]),
+            "max_loss_pct": float(cfg["max_loss_pct"]),
+            "per_trade_max_loss_usd": float(cfg["equity_usd"]) * float(cfg["max_loss_pct"]),
+            "daily_loss_usd": float(cfg["daily_loss_usd"]),
+            "max_open_plans": int(cfg["max_open_plans"]),
+            "require_stop_equity": bool(cfg["require_stop_equity"]),
+            "open_plans": len(plans),
+            "used_usd": round(used, 2),
+            "remaining_usd": round(max(float(cfg["equity_usd"]) - used, 0.0), 2),
+            "realized_today": round(realized, 2),
+        }
+
     async def validate_new_trade(
         self,
         *,
@@ -262,6 +381,10 @@ class RiskService:
         # metadata and session state): None = not checked / not applicable.
         shortable: bool | None = None,
         overnight_session: bool = False,
+        # None = a MANUAL (discretionary) trade — the manual-book envelope
+        # applies. Strategy trades carry their id and are bounded by their
+        # instance allocation/budget/breaker instead.
+        strategy_id: str | None = None,
     ) -> list[str]:
         """Returns a list of violations; empty list = trade allowed."""
         cfg = await self.get_settings()
@@ -385,6 +508,43 @@ class RiskService:
                 f"max loss ${max_loss_dollars:.0f} exceeds "
                 f"{cfg['max_loss_pct']:.1%} of equity (${account_equity * cfg['max_loss_pct']:.0f})"
             )
+
+        # ---- MANUAL BOOK (discretionary trades only) ----------------------
+        # A capital envelope sized to the real account this book rehearses
+        # for. Layered UNDER everything above/below — both must pass.
+        mb = cfg["manual_book"]
+        if strategy_id is None and mb.get("enabled", False):
+            book = float(mb["equity_usd"])
+            if is_equity and mb.get("require_stop_equity", True) and max_loss_dollars is None:
+                violations.append(
+                    "manual book: equity entries require a stop loss "
+                    "(sl_premium) — the book's discipline rule"
+                )
+            per_trade_cap = book * float(mb["max_loss_pct"])
+            if max_loss_dollars is not None and max_loss_dollars > per_trade_cap + 0.01:
+                violations.append(
+                    f"manual book: max loss ${max_loss_dollars:.0f} exceeds "
+                    f"{float(mb['max_loss_pct']):.1%} of the ${book:.0f} book "
+                    f"(${per_trade_cap:.0f})"
+                )
+            open_manual = await self.manual_open_plans()
+            used = sum(self._plan_capital_usd(p) for p in open_manual)
+            if used + entry_cost_dollars > book + 0.01:
+                violations.append(
+                    f"manual book: ${used:.0f} deployed + ${entry_cost_dollars:.0f} "
+                    f"would exceed the ${book:.0f} envelope"
+                )
+            if len(open_manual) >= int(mb["max_open_plans"]):
+                violations.append(
+                    f"manual book: {len(open_manual)} open manual plans "
+                    f"(max {int(mb['max_open_plans'])})"
+                )
+            manual_realized = await self.manual_realized_today()
+            if manual_realized <= -abs(float(mb["daily_loss_usd"])):
+                violations.append(
+                    f"manual book: daily loss breaker tripped "
+                    f"(realized {manual_realized:+.0f} vs -${float(mb['daily_loss_usd']):.0f})"
+                )
         if entry_cost_dollars > account_equity * cfg["bp_cap_pct"] + 0.01:
             violations.append(
                 f"cost ${entry_cost_dollars:.0f} exceeds BP cap {cfg['bp_cap_pct']:.0%}"
