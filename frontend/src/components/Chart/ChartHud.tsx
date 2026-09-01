@@ -350,6 +350,8 @@ export function ChartHud({
 }) {
   const indicators = useTradingStore((s) => s.indicators);
   const toggleIndicator = useTradingStore((s) => s.toggleIndicator);
+  const assetMode = useTradingStore((s) => s.assetMode);
+  const equityMode = assetMode === "equity";
   const viewingPlanId = useUiStore((s) => s.viewingPlanId);
   const viewedHistorical = useUiStore((s) => s.viewedHistorical);
   const tf = useTradingStore((s) => s.tf);
@@ -386,7 +388,7 @@ export function ChartHud({
   const tfMinutes = TF_MS[tf] / 60000;
   const atr = bars && bars.n ? computeAtr(bars) : 0;
   const rv = bars && bars.n ? realizedVolAnnualized(bars, 30, tfMinutes) : 0;
-  const iv = designer.legs ? (designer.probabilities?.sigmaUsed ?? 0) : 0;
+  const iv = !equityMode && designer.legs ? (designer.probabilities?.sigmaUsed ?? 0) : 0;
   const ivRv = iv > 0 && rv > 0 ? iv - rv : null;
 
   const p = designer.probabilities;
@@ -396,10 +398,17 @@ export function ChartHud({
       ? "flex h-full w-52 shrink-0 flex-col gap-1 overflow-y-auto bg-bb-panel p-1.5 text-[10px]"
       : "pointer-events-none absolute left-1.5 top-1.5 z-10 flex w-56 flex-col gap-1 text-[10px]";
 
+  // EQUITY mode: heat/sim/theta and the IV shock controls are options
+  // machinery — hide them so the share trader's chart strip is just the
+  // price indicators (VWAP/EMA/BB) and the ATR/RV line.
+  const visibleToggles = equityMode
+    ? TOGGLES.filter(({ key }) => key === "vwap" || key === "ema" || key === "bb")
+    : TOGGLES;
+
   return (
     <div className={rootCls}>
       <div className="pointer-events-auto flex flex-wrap gap-px">
-        {TOGGLES.map(({ key, label, title }) => (
+        {visibleToggles.map(({ key, label, title }) => (
           <button
             key={key}
             onClick={() => toggleIndicator(key)}
@@ -414,6 +423,7 @@ export function ChartHud({
             {label}
           </button>
         ))}
+        {!equityMode && (
         <label
           className="ml-1 flex items-center gap-0.5 border border-bb-border bg-black/70 px-1 text-bb-muted"
           title="IV shock: parallel scenario vol shift for surface, contours, and sim"
@@ -432,6 +442,8 @@ export function ChartHud({
           />
           %
         </label>
+        )}
+        {!equityMode && (
         <label
           className="flex items-center gap-0.5 border border-bb-border bg-black/70 px-1 text-bb-muted"
           title="Skew beta: chain-derived directional vol response (selloff => vols up)"
@@ -444,6 +456,7 @@ export function ChartHud({
           />
           β
         </label>
+        )}
       </div>
 
       <div className="pointer-events-none flex items-center gap-1 bg-black/70 px-1.5 py-0.5 text-bb-muted">

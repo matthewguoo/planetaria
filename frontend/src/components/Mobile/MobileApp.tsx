@@ -17,6 +17,7 @@ import { PriceReadout } from "../PriceReadout";
 import { useUiStore } from "../../store/uiStore";
 import { AccountPage } from "../Account/AccountPage";
 import { CandlePane } from "../Chart/CandlePane";
+import { EquityTicket } from "../Panels/EquityTicket";
 import { OrderPanel } from "../Panels/OrderPanel";
 import { SizingPanel } from "../Panels/SizingPanel";
 import { StrategyPanel } from "../Panels/StrategyPanel";
@@ -142,6 +143,8 @@ export function MobileApp() {
   const designer = useDesigner();
   const tf = useTradingStore((s) => s.tf);
   const setTf = useTradingStore((s) => s.setTf);
+  const assetMode = useTradingStore((s) => s.assetMode);
+  const setAssetMode = useTradingStore((s) => s.setAssetMode);
   const positions = useAccountStore((s) => s.positions);
   const modified = useStrategyStore((s) => s.modified);
   const [sheet, setSheet] = useState<SheetTab>(null);
@@ -211,12 +214,14 @@ export function MobileApp() {
       </div>
 
       {/* The chart is the hero: chips-only HUD, all dense data lives in
-          the exchange-style tab strip below. */}
+          the exchange-style tab strip below. Equity mode drops the options
+          analytics strip entirely — the ticket holds its own numbers, the
+          chart gets the pixels back. */}
       <div ref={chartWrapRef} className="relative min-h-0 flex-1">
         <CandlePane designer={designer} hudVariant="chips" />
       </div>
 
-      <MobileDataTabs designer={designer} />
+      {assetMode === "options" && <MobileDataTabs designer={designer} />}
 
       <nav className="flex h-12 shrink-0 items-stretch gap-px border-t border-bb-border bg-bb-panel pb-[env(safe-area-inset-bottom)]">
         <button
@@ -226,7 +231,7 @@ export function MobileApp() {
             (sheet === "trade" ? "bg-bb-hover text-bb-amber" : "bg-bb-amber text-black")
           }
         >
-          {modified ? "TRADE · CUSTOM" : "TRADE"}
+          {assetMode === "equity" ? "TRADE · SHARES" : modified ? "TRADE · CUSTOM" : "TRADE · OPTIONS"}
         </button>
         <button
           onClick={() => setSheet(sheet === "bot" ? null : "bot")}
@@ -249,12 +254,33 @@ export function MobileApp() {
       </nav>
 
       {sheet === "trade" && (
-        <Sheet title="TRADE TICKET" onClose={() => setSheet(null)}>
-          <div className="flex flex-col gap-px">
-            <div className="h-56"><StrategyPanel designer={designer} /></div>
-            <div className="h-64"><SizingPanel designer={designer} /></div>
-            <div className="h-72"><OrderPanel designer={designer} /></div>
+        <Sheet title="TRADE TICKET" onClose={() => setSheet(null)} tall={assetMode === "equity"}>
+          {/* One decision at the top of the sheet: which book am I trading. */}
+          <div className="sticky top-0 z-10 flex gap-px border-b border-bb-border bg-bb-panel p-1">
+            {(["options", "equity"] as const).map((m) => (
+              <button
+                key={m}
+                onClick={() => setAssetMode(m)}
+                className={
+                  "h-9 flex-1 text-[11px] tracking-widest " +
+                  (assetMode === m
+                    ? "bg-bb-amber font-semibold text-black"
+                    : "border border-bb-border text-bb-muted active:text-bb-amber")
+                }
+              >
+                {m === "options" ? "OPTIONS" : "SHARES / ETF"}
+              </button>
+            ))}
           </div>
+          {assetMode === "equity" ? (
+            <div className="flex min-h-[60dvh] flex-col"><EquityTicket /></div>
+          ) : (
+            <div className="flex flex-col gap-px">
+              <div className="h-56"><StrategyPanel designer={designer} /></div>
+              <div className="h-64"><SizingPanel designer={designer} /></div>
+              <div className="h-72"><OrderPanel designer={designer} /></div>
+            </div>
+          )}
         </Sheet>
       )}
       {sheet === "bot" && (

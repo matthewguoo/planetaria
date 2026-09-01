@@ -4,6 +4,12 @@
  * (the backend refuses a stopless manual equity entry), the target is
  * optional (let winners run), and every gate shows its refusal reason
  * BEFORE submit. The server re-validates everything.
+ *
+ * One component for both shells, mobile-first: base classes are
+ * touch-sized (44px targets, steppers instead of bare number spinners,
+ * advanced fields behind MORE), `sm:` tightens everything for the desktop
+ * panel grid. Submit is a two-step with an explicit summary — the confirm
+ * shows exactly what the enforcer will hold you to.
  */
 
 import { useState } from "react";
@@ -32,41 +38,60 @@ function etCloseToUtcIso(dateStr: string): string {
   return new Date(etTarget.getTime() + offsetMs).toISOString();
 }
 
-function Row({ label, value, cls, title }: { label: string; value: string; cls?: string; title?: string }) {
+function Row({ label, value, cls, title, big }: {
+  label: string; value: string; cls?: string; title?: string; big?: boolean;
+}) {
   return (
     <div className="flex items-baseline justify-between gap-2" title={title}>
-      <span className="text-[10px] text-bb-muted">{label}</span>
-      <span data-numeric className={"text-[11px] " + (cls ?? "text-white")}>{value}</span>
+      <span className="text-[11px] text-bb-muted sm:text-[10px]">{label}</span>
+      <span
+        data-numeric
+        className={
+          (big ? "text-[15px] sm:text-[12px] " : "text-[12px] sm:text-[11px] ") +
+          (cls ?? "text-white")
+        }
+      >
+        {value}
+      </span>
     </div>
   );
 }
 
-function PctField({
-  label, value, onChange, step = 0.5, min = 0.1, max = 100, accent,
+/** Touch-first numeric control: [−] value [+] steppers plus a real input
+ * (inputMode=decimal so phones open the number pad). */
+function StepRow({
+  label, value, onChange, step, min, max, unit = "%", accent, title,
 }: {
   label: string; value: number; onChange: (v: number) => void;
-  step?: number; min?: number; max?: number; accent?: string;
+  step: number; min: number; max: number; unit?: string; accent?: string; title?: string;
 }) {
+  const clamp = (v: number) => Math.min(max, Math.max(min, Math.round(v * 100) / 100));
+  const btn =
+    "h-10 w-10 shrink-0 border border-bb-border text-[16px] leading-none text-bb-muted " +
+    "active:bg-bb-amber active:text-black sm:h-5 sm:w-5 sm:text-[11px]";
   return (
-    <label className="flex items-center justify-between gap-2">
-      <span className="text-[10px] text-bb-muted">{label}</span>
+    <div className="flex items-center justify-between gap-2 py-0.5" title={title}>
+      <span className="text-[11px] text-bb-muted sm:text-[10px]">{label}</span>
       <span className="inline-flex items-center gap-1">
-        <input
-          data-numeric
-          type="number"
-          step={step}
-          min={min}
-          max={max}
-          value={value}
-          onChange={(e) => onChange(Number(e.target.value))}
-          className={
-            "w-16 border border-bb-border bg-black px-1 py-0.5 text-right text-[11px] outline-none focus:border-bb-amber " +
-            (accent ?? "text-white")
-          }
-        />
-        <span className="text-[10px] text-bb-muted">%</span>
+        <button className={btn} onClick={() => onChange(clamp(value - step))} aria-label={`decrease ${label}`}>−</button>
+        <span className="inline-flex items-center gap-0.5">
+          <input
+            data-numeric
+            type="number"
+            inputMode="decimal"
+            step={step}
+            value={value}
+            onChange={(e) => onChange(clamp(Number(e.target.value)))}
+            className={
+              "h-10 w-16 border border-bb-border bg-black px-1 text-center text-[14px] outline-none " +
+              "focus:border-bb-amber sm:h-5 sm:w-14 sm:text-[11px] " + (accent ?? "text-white")
+            }
+          />
+          <span className="text-[11px] text-bb-muted sm:text-[10px]">{unit}</span>
+        </span>
+        <button className={btn} onClick={() => onChange(clamp(value + step))} aria-label={`increase ${label}`}>+</button>
       </span>
-    </label>
+    </div>
   );
 }
 
@@ -82,6 +107,7 @@ export function EquityTicket() {
   const [slPct, setSlPct] = useState(5.0);
   const [tpOn, setTpOn] = useState(false);
   const [tpPct, setTpPct] = useState(10.0);
+  const [more, setMore] = useState(false);
   const [sharesOverride, setSharesOverride] = useState(0); // 0 = auto
   const [timeStopDate, setTimeStopDate] = useState(""); // "" = +30d backstop
   const [extendedHours, setExtendedHours] = useState(false);
@@ -116,6 +142,16 @@ export function EquityTicket() {
     quoteFresh,
   });
   const canTrade = reasons.length === 0 && shares > 0 && !submitting;
+  const sideWord = side > 0 ? "BUY" : "SHORT";
+
+  const edit = <T,>(setter: (v: T) => void) => (v: T) => {
+    // Any edit invalidates a pending confirm and clears stale feedback —
+    // the confirm summary must never describe a different trade.
+    setConfirming(false);
+    setError(null);
+    setPlaced(null);
+    setter(v);
+  };
 
   const submit = async () => {
     setSubmitting(true);
@@ -139,11 +175,14 @@ export function EquityTicket() {
         sl_premium: exits.sl,
         time_stop_utc: timeStopDate ? etCloseToUtcIso(timeStopDate) : swingBackstopUtc(),
       });
+      playCue("submitted");
       setPlaced(plan.id);
       setConfirming(false);
       void refreshPositions();
       void refreshAccount();
     } catch (err) {
+      // Server-side risk rejections never create a plan, so no WS cue fires
+      // for them — buzz locally.
       playCue("rejected");
       setError(apiError(err));
     } finally {
@@ -151,29 +190,37 @@ export function EquityTicket() {
     }
   };
 
+  const toggleBtn = (on: boolean) =>
+    "h-10 min-w-14 border px-2 text-[11px] sm:h-5 sm:min-w-0 sm:px-1.5 sm:text-[10px] " +
+    (on ? "border-bb-amber text-bb-amber" : "border-bb-border text-bb-muted");
+
   return (
     <div className="panel relative flex min-w-0 flex-col">
       <div className="panel-title flex items-center justify-between">
         <span>EQUITY SWING TICKET</span>
         {book?.enabled && (
-          <span className="text-[9px] tracking-normal text-bb-muted" title="Manual book envelope: used / total. Sized to mirror the real account.">
+          <span
+            className="text-[10px] tracking-normal text-bb-muted sm:text-[9px]"
+            title="Manual book envelope: used / total. Sized to mirror the real account."
+          >
             BOOK ${Math.round(book.used_usd).toLocaleString()} / ${Math.round(book.equity_usd).toLocaleString()}
           </span>
         )}
       </div>
-      <div className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto p-2">
+      <div className="flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto p-2 sm:gap-1">
+        {/* Direction: the one decision that recolors everything below it. */}
         <div className="flex gap-px">
           {([1, -1] as const).map((s) => (
             <button
               key={s}
-              onClick={() => setSide(s)}
+              onClick={() => edit(setSide)(s)}
               className={
-                "flex-1 py-1 text-[11px] tracking-widest " +
+                "h-11 flex-1 text-[13px] tracking-widest sm:h-7 sm:text-[11px] " +
                 (side === s
                   ? s > 0
                     ? "bg-bb-profit font-semibold text-black"
                     : "bg-bb-loss font-semibold text-black"
-                  : "border border-bb-border text-bb-muted hover:text-bb-amber")
+                  : "border border-bb-border text-bb-muted active:text-bb-amber")
               }
             >
               {s > 0 ? "LONG" : "SHORT"}
@@ -181,127 +228,155 @@ export function EquityTicket() {
           ))}
         </div>
         {side < 0 && longOnly && (
-          <div className="text-[10px] text-bb-orange">
+          <div className="text-[11px] text-bb-orange sm:text-[10px]">
             shorts are gated off (equity_long_only) — long-only book
           </div>
         )}
 
-        <PctField label="RISK (% OF BOOK)" value={riskPct} onChange={setRiskPct} step={0.25} max={10} accent="text-bb-amber" />
-        <PctField label="STOP DISTANCE" value={slPct} onChange={setSlPct} step={0.5} max={50} accent="text-bb-loss" />
-        <label className="flex items-center justify-between gap-2">
-          <span className="text-[10px] text-bb-muted">TARGET</span>
+        {/* The two numbers that ARE the trade plan. */}
+        <StepRow label="RISK (% OF BOOK)" value={riskPct} onChange={edit(setRiskPct)}
+          step={0.25} min={0.1} max={10} accent="text-bb-amber"
+          title={`Risk budget: $${riskBudget.toFixed(0)} of the $${bookEquity.toLocaleString()} book`} />
+        <StepRow label="STOP DISTANCE" value={slPct} onChange={edit(setSlPct)}
+          step={0.5} min={0.5} max={50} accent="text-bb-loss"
+          title="Hard stop below entry. The enforcer executes it — entries without a stop are refused." />
+        <div className="flex items-center justify-between gap-2 py-0.5">
+          <span className="text-[11px] text-bb-muted sm:text-[10px]">TARGET</span>
           <span className="inline-flex items-center gap-1">
             <button
-              onClick={() => setTpOn(!tpOn)}
-              className={
-                "border px-1.5 py-0.5 text-[10px] " +
-                (tpOn ? "border-bb-profit text-bb-profit" : "border-bb-border text-bb-muted")
-              }
-              title="Optional: no target = let the winner run under the hard stop"
+              onClick={() => edit(setTpOn)(!tpOn)}
+              className={toggleBtn(tpOn)}
+              title="Optional: RUN = no target, let the winner run under the hard stop"
             >
-              {tpOn ? "ON" : "RUN"}
+              {tpOn ? `+${tpPct}%` : "RUN"}
             </button>
             {tpOn && (
-              <input
-                data-numeric type="number" step={1} min={1} max={200} value={tpPct}
-                onChange={(e) => setTpPct(Number(e.target.value))}
-                className="w-14 border border-bb-border bg-black px-1 py-0.5 text-right text-[11px] text-bb-profit outline-none focus:border-bb-amber"
-              />
+              <span className="inline-flex items-center gap-1">
+                <button className="h-10 w-10 border border-bb-border text-[16px] text-bb-muted active:bg-bb-amber active:text-black sm:h-5 sm:w-5 sm:text-[11px]"
+                  onClick={() => edit(setTpPct)(Math.max(1, tpPct - 1))} aria-label="decrease target">−</button>
+                <button className="h-10 w-10 border border-bb-border text-[16px] text-bb-muted active:bg-bb-amber active:text-black sm:h-5 sm:w-5 sm:text-[11px]"
+                  onClick={() => edit(setTpPct)(Math.min(200, tpPct + 1))} aria-label="increase target">+</button>
+              </span>
             )}
-            {tpOn && <span className="text-[10px] text-bb-muted">%</span>}
           </span>
-        </label>
-        <label className="flex items-center justify-between gap-2">
-          <span className="text-[10px] text-bb-muted" title="Hard exit date (15:55 ET). Empty = +30 day backstop so the enforcer always has an exit.">
-            TIME STOP
-          </span>
-          <input
-            type="date" value={timeStopDate}
-            onChange={(e) => setTimeStopDate(e.target.value)}
-            className="border border-bb-border bg-black px-1 py-0.5 text-[11px] text-bb-orange outline-none focus:border-bb-amber"
-          />
-        </label>
-        <label className="flex items-center justify-between gap-2">
-          <span className="text-[10px] text-bb-muted">SHARES (0 = AUTO)</span>
-          <input
-            data-numeric type="number" step={1} min={0} value={sharesOverride}
-            onChange={(e) => setSharesOverride(Math.max(0, Math.floor(Number(e.target.value))))}
-            className="w-16 border border-bb-border bg-black px-1 py-0.5 text-right text-[11px] text-white outline-none focus:border-bb-amber"
-          />
-        </label>
-        <label className="flex items-center justify-between gap-2">
-          <span className="text-[10px] text-bb-muted" title="DAY limit working the 24/5 extended book (premarket/AH/overnight). RTH-only when off.">
-            EXTENDED HOURS
-          </span>
-          <button
-            onClick={() => setExtendedHours(!extendedHours)}
-            className={
-              "border px-1.5 py-0.5 text-[10px] " +
-              (extendedHours ? "border-bb-amber text-bb-amber" : "border-bb-border text-bb-muted")
-            }
-          >
-            {extendedHours ? "ON" : "OFF"}
-          </button>
-        </label>
+        </div>
 
-        <div className="mt-1 border-t border-bb-border pt-1">
-          <Row label="ENTRY (MARKETABLE)" value={price > 0 ? `${side > 0 ? "" : "−"}${price.toFixed(2)}` : "—"} />
-          <Row label="SHARES" value={shares > 0 ? `${shares}${sharesOverride > 0 ? "" : " (auto)"}` : "—"} cls="text-bb-amber" />
-          <Row label="NOTIONAL" value={notional > 0 ? `$${notional.toLocaleString("en-US", { maximumFractionDigits: 0 })}${side < 0 ? " (1.5× held)" : ""}` : "—"}
-            title="Capital charged against the book (shorts at Reg-T 150%)" />
-          <Row label="% OF BOOK" value={bookEquity > 0 && notional > 0 ? `${((notional / bookEquity) * 100).toFixed(1)}%` : "—"} />
-          <Row label="STOP" value={price > 0 ? Math.abs(exits.sl).toFixed(2) : "—"} cls="text-bb-loss" />
-          <Row label="MAX LOSS @ STOP" value={shares > 0 ? `$${maxLoss.toFixed(0)}` : "—"} cls="text-bb-loss"
+        {/* Advanced fields fold away — the default ticket is 3 decisions. */}
+        <button
+          onClick={() => setMore(!more)}
+          className="self-start py-1 text-[11px] tracking-widest text-bb-muted active:text-bb-amber sm:py-0 sm:text-[10px]"
+        >
+          {more ? "▾ LESS" : "▸ MORE (time stop · shares · ext-hours)"}
+        </button>
+        {more && (
+          <div className="flex flex-col gap-1.5 border-l border-bb-border pl-2 sm:gap-1">
+            <label className="flex items-center justify-between gap-2">
+              <span className="text-[11px] text-bb-muted sm:text-[10px]"
+                title="Hard exit date (15:55 ET). Empty = +30 day backstop so the enforcer always has an exit.">
+                TIME STOP
+              </span>
+              <input
+                type="date" value={timeStopDate}
+                onChange={(e) => edit(setTimeStopDate)(e.target.value)}
+                className="h-10 border border-bb-border bg-black px-1 text-[12px] text-bb-orange outline-none focus:border-bb-amber sm:h-5 sm:text-[11px]"
+              />
+            </label>
+            <label className="flex items-center justify-between gap-2">
+              <span className="text-[11px] text-bb-muted sm:text-[10px]">SHARES (0 = AUTO)</span>
+              <input
+                data-numeric type="number" inputMode="numeric" step={1} min={0} value={sharesOverride}
+                onChange={(e) => edit(setSharesOverride)(Math.max(0, Math.floor(Number(e.target.value))))}
+                className="h-10 w-20 border border-bb-border bg-black px-1 text-right text-[14px] text-white outline-none focus:border-bb-amber sm:h-5 sm:w-16 sm:text-[11px]"
+              />
+            </label>
+            <label className="flex items-center justify-between gap-2">
+              <span className="text-[11px] text-bb-muted sm:text-[10px]"
+                title="DAY limit working the 24/5 extended book (premarket/AH/overnight). RTH-only when off.">
+                EXTENDED HOURS
+              </span>
+              <button onClick={() => edit(setExtendedHours)(!extendedHours)} className={toggleBtn(extendedHours)}>
+                {extendedHours ? "ON" : "OFF"}
+              </button>
+            </label>
+          </div>
+        )}
+
+        {/* Derived plan — the four numbers that matter, big; context muted. */}
+        <div className="mt-1 border-t border-bb-border pt-1.5 sm:pt-1">
+          <Row big label={`${sideWord} ${symbol}`} value={price > 0 ? `${shares} sh @ ${price.toFixed(2)}` : "—"} cls="text-bb-amber" />
+          <Row big label="MAX LOSS @ STOP" value={shares > 0 ? `$${maxLoss.toFixed(0)}` : "—"} cls="text-bb-loss"
             title="Planned risk. A gap through the stop (overnight, earnings) exceeds this — size is the only cap there." />
-          <Row label="TARGET" value={exits.tp != null ? Math.abs(exits.tp).toFixed(2) : "run (no target)"} cls="text-bb-profit" />
-          <Row label="R / R" value={rrMult != null ? `${rrMult.toFixed(1)} : 1` : "open-ended"} cls="text-bb-amber" />
+          <Row label="STOP / TARGET"
+            value={price > 0 ? `${Math.abs(exits.sl).toFixed(2)} / ${exits.tp != null ? Math.abs(exits.tp).toFixed(2) : "run"}` : "—"} />
+          <Row label="R / R" value={rrMult != null ? `${rrMult.toFixed(1)} : 1` : "open-ended"} />
+          <Row label="NOTIONAL · % OF BOOK"
+            value={notional > 0 ? `$${notional.toLocaleString("en-US", { maximumFractionDigits: 0 })}${side < 0 ? " (1.5×)" : ""} · ${bookEquity > 0 ? ((notional / bookEquity) * 100).toFixed(1) : "—"}%` : "—"} />
           {book?.enabled && (
             <Row label="BOOK DAY P/L" value={`$${book.realized_today.toFixed(0)} / −$${book.daily_loss_usd.toFixed(0)}`}
               cls={book.realized_today < 0 ? "text-bb-loss" : "text-bb-profit"} />
           )}
         </div>
 
+        {/* Feedback zone: refusals BEFORE submit, one state at a time. */}
         {reasons.length > 0 && (
-          <div className="flex flex-col gap-0.5 border border-bb-loss/40 p-1">
+          <div className="flex flex-col gap-0.5 border border-bb-loss/40 p-1.5 sm:p-1">
             {reasons.map((r) => (
-              <div key={r} className="text-[10px] text-bb-loss">✗ {r}</div>
+              <div key={r} className="text-[11px] text-bb-loss sm:text-[10px]">✗ {r}</div>
             ))}
           </div>
         )}
-        {error && <div className="text-[10px] text-bb-loss">{error}</div>}
+        {error && (
+          <div className="border border-bb-loss/60 p-1.5 text-[11px] text-bb-loss sm:p-1 sm:text-[10px]">
+            ✗ broker/engine refused: {error}
+          </div>
+        )}
         {placed && !error && (
-          <div className="text-[10px] text-bb-profit">plan {placed.slice(0, 8)} submitted — enforcer armed</div>
+          <div className="border border-bb-profit/60 p-1.5 text-[11px] text-bb-profit sm:p-1 sm:text-[10px]">
+            ✓ plan {placed.slice(0, 8)} submitted — enforcer armed (stop is live)
+          </div>
         )}
 
+        {/* Two-step submit: the confirm restates the whole contract. */}
         {!confirming ? (
           <button
             disabled={!canTrade}
             onClick={() => setConfirming(true)}
             className={
-              "mt-auto py-1.5 text-[11px] tracking-widest " +
+              "mt-auto h-12 text-[13px] tracking-widest sm:h-8 sm:text-[11px] " +
               (canTrade
-                ? "bg-bb-amber font-semibold text-black hover:bg-bb-orange"
+                ? "bg-bb-amber font-semibold text-black active:bg-bb-orange"
                 : "border border-bb-border text-bb-muted")
             }
           >
-            {side > 0 ? "BUY" : "SHORT"} {shares > 0 ? `${shares} ${symbol}` : symbol} (PAPER)
+            {canTrade
+              ? `${sideWord} ${shares} ${symbol} (PAPER)`
+              : reasons.length
+                ? `BLOCKED — ${reasons.length} ${reasons.length === 1 ? "REASON" : "REASONS"} ABOVE`
+                : `${sideWord} ${symbol}`}
           </button>
         ) : (
-          <div className="mt-auto flex gap-px">
-            <button
-              disabled={submitting}
-              onClick={() => void submit()}
-              className="flex-1 bg-bb-loss py-1.5 text-[11px] font-semibold tracking-widest text-black"
-            >
-              {submitting ? "SUBMITTING…" : `CONFIRM ${side > 0 ? "BUY" : "SHORT"} ${shares}`}
-            </button>
-            <button
-              disabled={submitting}
-              onClick={() => setConfirming(false)}
-              className="border border-bb-border px-3 text-[11px] text-bb-muted"
-            >
-              CANCEL
-            </button>
+          <div className="mt-auto flex flex-col gap-1">
+            <div className="border border-bb-amber/60 bg-bb-amber/10 p-1.5 text-[11px] text-bb-amber sm:text-[10px]">
+              {sideWord} {shares} {symbol} @ ≤{price.toFixed(2)} · stop {Math.abs(exits.sl).toFixed(2)} (−${maxLoss.toFixed(0)})
+              {exits.tp != null ? ` · target ${Math.abs(exits.tp).toFixed(2)}` : " · no target (run)"}
+              {timeStopDate ? ` · exit ${timeStopDate}` : " · 30d backstop"}
+            </div>
+            <div className="flex gap-px">
+              <button
+                disabled={submitting}
+                onClick={() => void submit()}
+                className="h-12 flex-[2] bg-bb-loss text-[13px] font-semibold tracking-widest text-black active:bg-bb-orange sm:h-8 sm:text-[11px]"
+              >
+                {submitting ? "SUBMITTING…" : "CONFIRM"}
+              </button>
+              <button
+                disabled={submitting}
+                onClick={() => setConfirming(false)}
+                className="h-12 flex-1 border border-bb-border text-[12px] text-bb-muted sm:h-8 sm:text-[11px]"
+              >
+                CANCEL
+              </button>
+            </div>
           </div>
         )}
       </div>
