@@ -68,11 +68,10 @@ export function useDesigner(): Designer {
   return useMemo(() => {
     const legs = buildLegs({ chain, expiry, kind, strikes, ratios, rights, sides });
     const spot = freshSpot(quote, chain?.spot ?? 0);
-    // Manual options trades size against the OPTIONS book envelope when
-    // books are enabled — the $100k paper account is not the discretionary
-    // bankroll, and the share book is a separate bankroll again.
-    const book = account?.manual_book?.enabled ? account.manual_book.option : null;
-    const equity = book ? book.equity_usd : account?.equity ?? 0;
+    // Sizing denominates in the SELECTED account's real equity — capital
+    // separation is done with real accounts (a $5k options account makes
+    // every %-gate bind at $5k by construction).
+    const equity = account?.equity ?? 0;
     const risk = account?.risk;
     const smiles = smileFromChain(chain, expiry);
     const timeStopHours = timeStopHoursFromEt(timeStopEt);
@@ -118,7 +117,7 @@ export function useDesigner(): Designer {
     const sizing = computeSizingClient(
       legs,
       equity,
-      (book ? book.max_loss_pct : risk?.max_loss_pct) ?? 0.02,
+      risk?.max_loss_pct ?? 0.02,
       slPremium,
       risk?.bp_cap_pct ?? 0.25,
       spot,

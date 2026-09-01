@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import type { BookEnvelope } from "./api";
 import {
   capitalUsd,
   dailySigmaPct,
@@ -11,18 +10,6 @@ import {
   sharesForRisk,
   suggestedStopPct,
 } from "./equityMath";
-
-const BOOK: BookEnvelope = {
-  equity_usd: 11_000,
-  max_loss_pct: 0.02,
-  per_trade_max_loss_usd: 220,
-  daily_loss_usd: 330,
-  max_open_plans: 4,
-  open_plans: 0,
-  used_usd: 0,
-  remaining_usd: 11_000,
-  realized_today: 0,
-};
 
 describe("equityExits — ref_tick's signed arithmetic, verbatim", () => {
   it("long: entry positive, sl below, tp above", () => {
@@ -75,14 +62,14 @@ describe("equityPreflight mirrors the backend gates", () => {
     side: 1 as const,
     shares: 20,
     exits: equityExits(100, 1 as const, 0.05, null),
-    book: BOOK,
+    maxLossCapUsd: 220, // 2% of a real $11k account
     equityLongOnly: true,
     quoteFresh: true,
     ...over,
   });
 
   it("clean long passes", () => {
-    // 20 shares * $5 stop = $100 loss < $220 cap; $2k notional < $11k
+    // 20 shares * $5 stop = $100 loss < $220 cap
     expect(equityPreflight(base())).toEqual([]);
   });
 
@@ -91,22 +78,11 @@ describe("equityPreflight mirrors the backend gates", () => {
     expect(r.some((x) => x.includes("shorts disabled"))).toBe(true);
   });
 
-  it("per-trade max loss vs the BOOK, not the account", () => {
+  it("per-trade max loss vs the account cap", () => {
     const r = equityPreflight(base({ shares: 60 })); // 60 * $5 = $300 > $220
     expect(r.some((x) => x.includes("per-trade cap"))).toBe(true);
-  });
-
-  it("envelope: notional past remaining refused", () => {
-    const book = { ...BOOK, remaining_usd: 1_000 };
-    const r = equityPreflight(base({ book, shares: 20 })); // $2k > $1k left
-    expect(r.some((x) => x.includes("remaining envelope"))).toBe(true);
-  });
-
-  it("max open plans + daily breaker", () => {
-    const full = { ...BOOK, open_plans: 4 };
-    expect(equityPreflight(base({ book: full })).some((x) => x.includes("open manual plans"))).toBe(true);
-    const bled = { ...BOOK, realized_today: -331 };
-    expect(equityPreflight(base({ book: bled })).some((x) => x.includes("daily loss breaker"))).toBe(true);
+    // Unknown cap: check skipped (server still enforces).
+    expect(equityPreflight(base({ shares: 60, maxLossCapUsd: null }))).toEqual([]);
   });
 
   it("stale quote blocks", () => {

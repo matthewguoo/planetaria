@@ -7,7 +7,6 @@
  * same convention, so these must not drift.
  */
 
-import type { BookEnvelope } from "./api";
 
 const round2 = (v: number) => Math.round(v * 100) / 100;
 
@@ -58,8 +57,9 @@ export type EquityPreflightArgs = {
   side: 1 | -1;
   shares: number;
   exits: EquityExits;
-  /** The EQUITY book's envelope; null/undefined = books disabled. */
-  book: BookEnvelope | null | undefined;
+  /** The account's per-trade max-loss cap in dollars (risk.max_loss_pct ×
+   * equity); null = unknown, skip the check (server still enforces). */
+  maxLossCapUsd: number | null;
   equityLongOnly: boolean;
   quoteFresh: boolean;
 };
@@ -76,25 +76,12 @@ export function equityPreflight(a: EquityPreflightArgs): string[] {
     reasons.push("target must sit above entry");
   if (a.shares < 1) reasons.push("risk budget sizes to 0 shares — widen risk % or tighten stop");
 
-  const book = a.book;
-  if (book) {
+  if (a.maxLossCapUsd != null) {
     const maxLoss = (a.exits.entry - a.exits.sl) * a.shares;
-    if (maxLoss > book.per_trade_max_loss_usd + 0.01)
+    if (maxLoss > a.maxLossCapUsd + 0.01)
       reasons.push(
-        `max loss $${maxLoss.toFixed(0)} exceeds the book's per-trade cap ` +
-          `$${book.per_trade_max_loss_usd.toFixed(0)}`,
-      );
-    const cost = capitalUsd(a.price, a.shares, a.side);
-    if (cost > book.remaining_usd + 0.01)
-      reasons.push(
-        `$${cost.toFixed(0)} exceeds the book's remaining envelope ` +
-          `$${book.remaining_usd.toFixed(0)}`,
-      );
-    if (book.open_plans >= book.max_open_plans)
-      reasons.push(`book already at ${book.open_plans}/${book.max_open_plans} open manual plans`);
-    if (book.realized_today <= -book.daily_loss_usd)
-      reasons.push(
-        `book's daily loss breaker tripped ($${book.realized_today.toFixed(0)} today)`,
+        `max loss $${maxLoss.toFixed(0)} exceeds the account's per-trade cap ` +
+          `$${a.maxLossCapUsd.toFixed(0)}`,
       );
   }
   return reasons;

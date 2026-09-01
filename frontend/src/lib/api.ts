@@ -36,34 +36,10 @@ export type RiskSettings = {
   equity_gross_exposure_pct: number;
   equity_long_only: boolean;
   equity_short_overnight: boolean;
-  manual_book: {
-    enabled: boolean;
-    require_stop_equity: boolean;
-    equity: { equity_usd: number; max_loss_pct: number; daily_loss_usd: number; max_open_plans: number };
-    option: { equity_usd: number; max_loss_pct: number; daily_loss_usd: number; max_open_plans: number };
-  };
-};
-
-/** One discretionary book's envelope + live state, per asset class. */
-export type BookEnvelope = {
-  equity_usd: number;
-  max_loss_pct: number;
-  per_trade_max_loss_usd: number;
-  daily_loss_usd: number;
-  max_open_plans: number;
-  open_plans: number;
-  used_usd: number;
-  remaining_usd: number;
-  realized_today: number;
-};
-
-/** The discretionary books (shares + options are separate bankrolls), as
- * GET /api/account reports them. */
-export type ManualBook = {
-  enabled: boolean;
-  require_stop_equity: boolean;
-  equity: BookEnvelope;
-  option: BookEnvelope;
+  /** Discretionary discipline: manual equity entries must carry a stop.
+   * Capital separation is done with REAL accounts (one per book), so the
+   * %-of-equity gates bind at the right dollars by construction. */
+  manual_equity_require_stop: boolean;
 };
 
 export type Account = {
@@ -75,7 +51,6 @@ export type Account = {
   paper: boolean;
   risk: RiskSettings;
   day_realized_pnl: number;
-  manual_book?: ManualBook;
 };
 
 export type PlanLeg = {

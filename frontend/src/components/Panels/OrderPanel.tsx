@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
+import { suggestSlPctFromUnderlying } from "../../lib/analytics";
 import { apiError, postOrder } from "../../lib/api";
 import { playCue } from "../../lib/audio";
 import { nakedShortUnits } from "../../lib/optionsMath";
@@ -68,6 +69,22 @@ export function OrderPanel({ designer }: { designer: Designer }) {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [placed, setPlaced] = useState<string | null>(null);
+
+  // Vol-scaled SL suggestion from the UNDERLYING's expected move over the
+  // intended hold (entry -> time stop) — same idea as the equity ticket's.
+  const slSuggestion = useMemo(
+    () =>
+      designer.ready && designer.legs
+        ? suggestSlPctFromUnderlying(
+            designer.legs,
+            designer.entry,
+            designer.spot,
+            designer.hoursToExpiry,
+            designer.timeStopHours,
+          )
+        : null,
+    [designer],
+  );
 
   const nakedCalls = designer.legs ? nakedShortUnits(designer.legs, "C") : 0;
   const canTrade =
@@ -166,10 +183,36 @@ export function OrderPanel({ designer }: { designer: Designer }) {
           </span>
         </div>
         <div
-          className="-mt-1 text-right text-[9px] text-bb-muted"
-          title="Underlying price where the position premium hits SL (red boundary on the chart)"
+          className="-mt-1 flex items-center justify-between gap-2"
         >
-          executes ≈ @{designer.probabilities?.slBarrier?.toFixed(2) ?? "—"}
+          {slSuggestion ? (
+            <button
+              onClick={() => setSlPct(slSuggestion.slPct)}
+              className={
+                "border px-1 py-0 text-[9px] " +
+                (Math.abs(slPct - slSuggestion.slPct) < 0.026
+                  ? "border-bb-profit text-bb-profit"
+                  : "border-bb-border text-bb-muted hover:text-bb-amber")
+              }
+              title={
+                `Vol-scaled stop: the premium if the UNDERLYING moves 1.5σ ` +
+                `(±${slSuggestion.movePct.toFixed(1)}%, IV-implied) against the ` +
+                `position by the time stop, theta included — executes ≈ ` +
+                `@${slSuggestion.adverseSpot.toFixed(2)}. Tighter stops mostly ` +
+                `harvest underlying noise.`
+              }
+            >
+              SUGGEST {Math.round(slSuggestion.slPct * 100)}% (1.5σ und)
+            </button>
+          ) : (
+            <span />
+          )}
+          <span
+            className="text-right text-[9px] text-bb-muted"
+            title="Underlying price where the position premium hits SL (red boundary on the chart)"
+          >
+            executes ≈ @{designer.probabilities?.slBarrier?.toFixed(2) ?? "—"}
+          </span>
         </div>
         <div className="flex items-center justify-between gap-2">
           <span className="text-[11px] text-bb-muted">TIME STOP</span>

@@ -123,9 +123,9 @@ export function EquityTicket() {
   const [error, setError] = useState<string | null>(null);
   const [placed, setPlaced] = useState<string | null>(null);
 
-  // The SHARE book: separate bankroll from the options book by design.
-  const books = account?.manual_book;
-  const book = books?.enabled ? books.equity : null;
+  // Sizing denominates in the SELECTED account's real equity — capital
+  // separation is done with real accounts (one per book), so a $11k share
+  // account makes every %-gate bind at $11k by construction.
   const quoteFresh = !!quote && quote.mid > 0 && !quoteIsStale(quote);
   // Marketable pricing: pay the ask long, hit the bid short; mid fallback.
   const rawPx = side > 0 ? quote?.ask : quote?.bid;
@@ -136,8 +136,12 @@ export function EquityTicket() {
       : null;
 
   const exits = equityExits(price, side, slPct / 100, tpOn ? tpPct / 100 : null);
-  const bookEquity = book ? book.equity_usd : account?.equity ?? 0;
-  const riskBudget = (bookEquity * riskPct) / 100;
+  const acctEquity = account?.equity ?? 0;
+  const maxLossCapUsd =
+    account && account.risk ? account.equity * account.risk.max_loss_pct : null;
+  const dailyCapUsd =
+    account && account.risk ? account.equity * account.risk.daily_loss_pct : null;
+  const riskBudget = (acctEquity * riskPct) / 100;
 
   // Vol-scaled stop intelligence off the symbol's own tape (chart bars).
   const bars = sharedBars.current;
@@ -155,7 +159,7 @@ export function EquityTicket() {
   const longOnly = account?.risk?.equity_long_only ?? true;
 
   const reasons = equityPreflight({
-    price, side, shares, exits, book,
+    price, side, shares, exits, maxLossCapUsd,
     equityLongOnly: longOnly,
     quoteFresh,
   });
@@ -216,12 +220,12 @@ export function EquityTicket() {
     <div className="panel relative flex min-w-0 flex-col">
       <div className="panel-title flex items-center justify-between">
         <span>EQUITY SWING TICKET</span>
-        {book && (
+        {acctEquity > 0 && (
           <span
             className="text-[10px] tracking-normal text-bb-muted sm:text-[9px]"
-            title="Manual book envelope: used / total. Sized to mirror the real account."
+            title="The SELECTED account's equity — every %-gate binds here. Switch accounts in the ⚙ SYSTEM drawer (restart applies)."
           >
-            BOOK ${Math.round(book.used_usd).toLocaleString()} / ${Math.round(book.equity_usd).toLocaleString()}
+            ACCT ${Math.round(acctEquity).toLocaleString()}
           </span>
         )}
       </div>
@@ -252,9 +256,9 @@ export function EquityTicket() {
         )}
 
         {/* The two numbers that ARE the trade plan. */}
-        <StepRow label="RISK (% OF BOOK)" value={riskPct} onChange={edit(setRiskPct)}
+        <StepRow label="RISK (% OF ACCT)" value={riskPct} onChange={edit(setRiskPct)}
           step={0.25} min={0.1} max={10} accent="text-bb-amber"
-          title={`Risk budget: $${riskBudget.toFixed(0)} of the $${bookEquity.toLocaleString()} book`} />
+          title={`Risk budget: $${riskBudget.toFixed(0)} of the $${acctEquity.toLocaleString()} account`} />
         <StepRow label="STOP DISTANCE" value={slPct} onChange={edit(setSlPct)}
           step={0.5} min={0.5} max={50} accent="text-bb-loss"
           title="Hard stop below entry. The enforcer executes it — entries without a stop are refused." />
@@ -373,11 +377,13 @@ export function EquityTicket() {
           <Row label="STOP / TARGET"
             value={price > 0 ? `${Math.abs(exits.sl).toFixed(2)} / ${exits.tp != null ? Math.abs(exits.tp).toFixed(2) : "run"}` : "—"} />
           <Row label="R / R" value={rrMult != null ? `${rrMult.toFixed(1)} : 1` : "open-ended"} />
-          <Row label="NOTIONAL · % OF BOOK"
-            value={notional > 0 ? `$${notional.toLocaleString("en-US", { maximumFractionDigits: 0 })}${side < 0 ? " (1.5×)" : ""} · ${bookEquity > 0 ? ((notional / bookEquity) * 100).toFixed(1) : "—"}%` : "—"} />
-          {book && (
-            <Row label="BOOK DAY P/L" value={`$${book.realized_today.toFixed(0)} / −$${book.daily_loss_usd.toFixed(0)}`}
-              cls={book.realized_today < 0 ? "text-bb-loss" : "text-bb-profit"} />
+          <Row label="NOTIONAL · % OF ACCT"
+            value={notional > 0 ? `$${notional.toLocaleString("en-US", { maximumFractionDigits: 0 })}${side < 0 ? " (1.5×)" : ""} · ${acctEquity > 0 ? ((notional / acctEquity) * 100).toFixed(1) : "—"}%` : "—"} />
+          {account && dailyCapUsd != null && (
+            <Row label="ACCT DAY P/L"
+              value={`$${account.day_realized_pnl.toFixed(0)} / −$${dailyCapUsd.toFixed(0)}`}
+              title="Realized today vs the account's daily circuit breaker (daily_loss_pct)"
+              cls={account.day_realized_pnl < 0 ? "text-bb-loss" : "text-bb-profit"} />
           )}
         </div>
 

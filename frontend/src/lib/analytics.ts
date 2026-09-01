@@ -11,6 +11,7 @@ import {
   payoffAtExpiry,
   positionEntryCost,
   positionIv,
+  positionValue,
   premiumBarrierUnderlying,
   probAboveAtExpiry,
   probTouch,
@@ -18,6 +19,39 @@ import {
   TRADING_HOURS_PER_YEAR,
   type Leg,
 } from "./optionsMath";
+
+/** Vol-scaled SL suggestion for an OPTIONS position, driven by the
+ * UNDERLYING's expected move (same idea as the equity ticket's SUGGEST):
+ * price the position — BSM at the position's own IV — at the underlying
+ * having moved 1.5× its 1σ expected move AGAINST the position by the end
+ * of the intended hold (time decay included), and express that premium as
+ * an SL %. A stop tighter than this mostly harvests underlying noise. */
+export function suggestSlPctFromUnderlying(
+  legs: Leg[],
+  entry: number,
+  spot: number,
+  hoursToExpiry: number,
+  holdHours: number,
+  k = 1.5,
+): { slPct: number; adverseSpot: number; movePct: number } | null {
+  const sigma = positionIv(legs);
+  if (!legs.length || spot <= 0 || sigma <= 0 || Math.abs(entry) < 0.01) return null;
+  const hold = Math.min(Math.max(holdHours, 0.25), Math.max(hoursToExpiry, 0.25));
+  const move = k * spot * sigma * Math.sqrt(hold / TRADING_HOURS_PER_YEAR);
+  // Adverse direction: the sign that lowers the position's value.
+  const tauNow = Math.max(hoursToExpiry, 0.05) / TRADING_HOURS_PER_YEAR;
+  const eps = spot * 0.001;
+  const slope =
+    positionValue(legs, spot + eps, tauNow) - positionValue(legs, spot - eps, tauNow);
+  const adverseSpot = slope >= 0 ? spot - move : spot + move;
+  // Value at the END of the hold (theta has run) at the adverse spot.
+  const tauEval = Math.max(hoursToExpiry - hold, 0.05) / TRADING_HOURS_PER_YEAR;
+  const premiumAtAdverse = positionValue(legs, adverseSpot, tauEval);
+  const slPctRaw = (entry - premiumAtAdverse) / Math.abs(entry);
+  if (!Number.isFinite(slPctRaw) || slPctRaw <= 0.02) return null;
+  const slPct = Math.min(0.95, Math.max(0.1, Math.round(slPctRaw * 20) / 20));
+  return { slPct, adverseSpot, movePct: (move / spot) * 100 };
+}
 
 export type ClientProbabilities = {
   pProfitExpiry: number;
