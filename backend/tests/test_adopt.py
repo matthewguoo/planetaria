@@ -236,6 +236,30 @@ async def test_adopt_stock_positions_as_single_leg_equity_plans(service, monkeyp
 
 
 @pytest.mark.asyncio
+async def test_adopt_shares_refuses_option_defaults(service, monkeypatch):
+    """A bare adopt call carries the OPTION defaults (50% stop, today's
+    cutoff): on shares that is a same-day forced sale. Refused unless the
+    caller set sl_pct and time_stop_utc explicitly."""
+    positions = [_stock("AAPX", 100, 38.60)]
+
+    async def fake_broker_positions(max_age_s=5.0):
+        return positions
+
+    monkeypatch.setattr(service, "broker_positions", fake_broker_positions)
+    with pytest.raises(ValueError, match="explicit sl_pct and time_stop_utc"):
+        await service.adopt_positions(
+            ["AAPX"], 1.0, 0.5, datetime.now(timezone.utc), explicit_exits=False
+        )
+    assert service.enforcer.armed == []
+    # Options with the defaults are still fine (that is what the defaults are for).
+    positions[:] = [_pos("SPY260731C00450000", 2, 3.0, "SPY", "2026-07-31", "C", 450.0)]
+    adopted = await service.adopt_positions(
+        ["SPY260731C00450000"], 1.0, 0.5, datetime.now(timezone.utc), explicit_exits=False
+    )
+    assert len(adopted) == 1
+
+
+@pytest.mark.asyncio
 async def test_adopt_rejects_unknown_symbols(service, monkeypatch):
     async def fake_broker_positions(max_age_s=5.0):
         return []

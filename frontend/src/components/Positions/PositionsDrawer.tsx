@@ -314,7 +314,12 @@ function UntrackedRow({ pos }: { pos: UntrackedPosition }) {
             {busy ? "…" : "ADOPT"}
           </button>
         ) : (
-          <span className="text-[9px] text-bb-muted">STOCK</span>
+          <span
+            className="text-[9px] text-bb-muted"
+            title="Shares adopt from the phone view (narrow the window under 640px or open on the phone): it asks for the stop %, target and time stop instead of applying option defaults"
+          >
+            ADOPT: PHONE VIEW
+          </span>
         )}
         {error && (
           <div className="max-w-[160px] truncate text-[9px] text-bb-loss" title={error}>

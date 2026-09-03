@@ -511,6 +511,14 @@ export function AccountPage({ onViewPlan }: { onViewPlan?: (plan: Plan) => void 
                   —
                 </td>
                 <td className="px-2 py-1 text-right">
+                  {!p.occ && (
+                    <span
+                      className="text-[9px] text-bb-muted"
+                      title="Shares adopt from the phone view (window under 640px, or the phone): it asks for stop %, target and time stop instead of applying option defaults"
+                    >
+                      ADOPT: PHONE VIEW
+                    </span>
+                  )}
                   {p.occ && (
                     <button
                       className="border border-bb-amber px-1.5 text-[10px] text-bb-amber hover:bg-bb-amber hover:text-black"

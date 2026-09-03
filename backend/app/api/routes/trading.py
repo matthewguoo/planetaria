@@ -195,7 +195,12 @@ async def adopt_positions(request: Request, body: AdoptIn) -> dict:
             timezone.utc
         )
     try:
-        adopted = await app.state.trade.adopt_positions(body.symbols, tp_pct, sl_pct, time_stop)
+        adopted = await app.state.trade.adopt_positions(
+            body.symbols, tp_pct, sl_pct, time_stop,
+            # Share adoption must say its stop and time stop out loud; the
+            # defaults filled in above are option-sized (see the service).
+            explicit_exits=body.sl_pct is not None and body.time_stop_utc is not None,
+        )
     except ValueError as exc:
         raise HTTPException(422, str(exc))
     except Exception as exc:

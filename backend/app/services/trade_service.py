@@ -280,6 +280,7 @@ class TradeService:
         tp_pct: float,
         sl_pct: float,
         time_stop_utc: datetime,
+        explicit_exits: bool = True,
     ) -> list[dict]:
         """Fold untracked broker positions into managed TradePlans so the
         enforcer runs TP/SL/time exits on them. Options adopt as one
@@ -297,6 +298,15 @@ class TradeService:
                   and untracked[s].get("asset_class") == "stock"]
         if not chosen and not stocks:
             raise ValueError("no adoptable untracked positions in selection")
+        if stocks and not explicit_exits:
+            # The route's defaults are OPTION defaults: a 50% premium stop and
+            # TODAY's session cutoff as the time stop. On shares that is a
+            # forced sale of the whole position at 15:50 — refuse rather than
+            # let a bare call adopt a share book into a same-day liquidation.
+            raise ValueError(
+                "adopting shares requires explicit sl_pct and time_stop_utc "
+                "(the option defaults - 50% stop, today's cutoff - are not "
+                "share-sized)")
 
         account_name = getattr(getattr(self.alpaca, "settings", None),
                                "alpaca_account_name", None)
