@@ -1,0 +1,9 @@
+# Files executed on the Linux live box must check out with LF regardless of
+# the committing machine's core.autocrlf — a CRLF shebang or unit file fails
+# silently there ("bad interpreter", unparseable EnvironmentFile).
+*.sh        text eol=lf
+*.service   text eol=lf
+*.env.example text eol=lf
+deploy/**   text eol=lf
+# Windows-side scripts stay native.
+*.ps1       text eol=crlf
