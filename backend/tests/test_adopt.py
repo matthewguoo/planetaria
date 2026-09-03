@@ -259,6 +259,56 @@ async def test_adopt_shares_refuses_option_defaults(service, monkeypatch):
     assert len(adopted) == 1
 
 
+@pytest.mark.asyncio
+async def test_adopt_long_option_with_intrinsic_cap(service, monkeypatch):
+    """sl_pct=0 on a long option: the premium is the stop. Time-stop-only
+    plan, time stop capped at the expiry-day cutoff so it never rides
+    into exercise; refused for short legs and shares."""
+    from zoneinfo import ZoneInfo
+
+    positions = [_pos("NVDA260904P00230000", 1, 2.07, "NVDA", "2026-09-04", "P", 230.0)]
+
+    async def fake_broker_positions(max_age_s=5.0):
+        return positions
+
+    monkeypatch.setattr(service, "broker_positions", fake_broker_positions)
+    far = datetime(2026, 10, 1, tzinfo=timezone.utc)
+    adopted = await service.adopt_positions(["NVDA260904P00230000"], 1.0, 0.0, far)
+    plan = adopted[0]
+    assert plan["tp_premium"] is None and plan["sl_premium"] is None
+    et = ZoneInfo("America/New_York")
+    stop = datetime.fromisoformat(plan["time_stop_utc"]).astimezone(et)
+    assert (stop.year, stop.month, stop.day, stop.hour, stop.minute) == (2026, 9, 4, 15, 50)
+    assert service.enforcer.armed == [plan["id"]]
+
+    # A short leg has no cap: refused before anything is written.
+    positions[:] = [_pos("SPY260731C00455000", -2, 1.5, "SPY", "2026-07-31", "C", 455.0)]
+    with pytest.raises(ValueError, match="short leg"):
+        await service.adopt_positions(["SPY260731C00455000"], 1.0, 0.0, far)
+    # Shares neither.
+    positions[:] = [_stock("AVGG", 100, 24.73)]
+    with pytest.raises(ValueError, match="shares"):
+        await service.adopt_positions(["AVGG"], 1.0, 0.0, far)
+
+
+@pytest.mark.asyncio
+async def test_adopted_option_time_stop_never_passes_expiry(service, monkeypatch):
+    positions = [
+        _pos("SPY260731C00450000", 2, 3.0, "SPY", "2026-07-31", "C", 450.0),
+        _pos("SPY260731C00455000", -2, 1.5, "SPY", "2026-07-31", "C", 455.0),
+    ]
+
+    async def fake_broker_positions(max_age_s=5.0):
+        return positions
+
+    monkeypatch.setattr(service, "broker_positions", fake_broker_positions)
+    adopted = await service.adopt_positions(
+        [p["symbol"] for p in positions], 1.0, 0.5, datetime(2026, 12, 1, tzinfo=timezone.utc)
+    )
+    stop = datetime.fromisoformat(adopted[0]["time_stop_utc"])
+    assert stop <= datetime(2026, 7, 31, 20, 0, tzinfo=timezone.utc)  # 15:50 ET or earlier
+
+
 def test_default_time_stop_rolls_to_next_session():
     """An after-hours adoption must never get a time stop in the past."""
     from zoneinfo import ZoneInfo

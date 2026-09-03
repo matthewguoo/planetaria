@@ -163,7 +163,10 @@ async def holdings(request: Request) -> dict:
 class AdoptIn(BaseModel):
     symbols: list[str] = Field(min_length=1, max_length=32)
     tp_pct: float | None = Field(default=None, gt=0, le=10)
-    sl_pct: float | None = Field(default=None, gt=0, le=0.95)
+    # 0 = INTRINSIC CAP: the premium paid is the stop (long-only option
+    # structures; refused for short legs and shares). The plan becomes
+    # time-stop-only, capped at the expiry-day cutoff.
+    sl_pct: float | None = Field(default=None, ge=0, le=0.95)
     time_stop_utc: str | None = None
 
 

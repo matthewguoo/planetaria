@@ -103,6 +103,20 @@ def staged_price_ok(entry_limit: float, live_mid: float, half_spread: float
     return drift <= tolerance, drift, tolerance
 
 
+def expiry_cutoff_utc(expiry: str, cutoff_hhmm: str) -> datetime:
+    """The last moment the engine will hold an option: the configured ET
+    cutoff on its expiry day. Every adopted option plan's time stop is
+    capped here so nothing rides into exercise/assignment — a long ITM
+    option auto-exercises at expiry, which in a cash IRA becomes a position
+    the account cannot hold."""
+    from zoneinfo import ZoneInfo
+
+    hh, mm = str(cutoff_hhmm).split(":")
+    y, m, d = (int(x) for x in expiry.split("-"))
+    return datetime(y, m, d, int(hh), int(mm), tzinfo=ZoneInfo("America/New_York")
+                    ).astimezone(timezone.utc)
+
+
 def parse_occ_symbol(symbol: str) -> dict | None:
     """OCC option symbol -> {underlying, expiry, right, strike}; None if not OCC."""
     try:
@@ -288,7 +302,13 @@ class TradeService:
         limit); stock positions adopt as single-leg equity plans — one per
         symbol, floor(qty) whole shares (TradePlan.qty is integral; any
         fractional residue stays visible as untracked and is closed by hand
-        at the broker). tp_pct/sl_pct are fractions of the entry basis."""
+        at the broker). tp_pct/sl_pct are fractions of the entry basis.
+
+        sl_pct == 0 means INTRINSIC CAP: the premium paid is the stop. Only
+        a structure with no short leg has that property, so it is refused
+        for short legs and for shares; the plan is time-stop-only (both
+        brackets null) and the enforcer's single job is the time stop, which
+        is always capped at the expiry-day cutoff so nothing is exercised."""
         from math import floor, gcd
 
         untracked = {p["symbol"]: p for p in await self.untracked_positions()}
@@ -307,6 +327,11 @@ class TradeService:
                 "adopting shares requires explicit sl_pct and time_stop_utc "
                 "(the option defaults - 50% stop, today's cutoff - are not "
                 "share-sized)")
+
+        intrinsic = sl_pct == 0
+        if stocks and intrinsic:
+            raise ValueError("shares have no intrinsic risk cap - adopt them with a stop")
+        cutoff_hhmm = str((await self.risk.get_settings())["time_stop_et"])
 
         account_name = getattr(getattr(self.alpaca, "settings", None),
                                "alpaca_account_name", None)
@@ -381,15 +406,25 @@ class TradeService:
                 if abs(entry) < TICK:
                     entry = TICK  # zero-cost basis: manage on absolute premium
 
+                if intrinsic and any(leg["side"] < 0 for leg in legs):
+                    raise ValueError(
+                        f"{underlying}: a short leg has no intrinsic risk cap - "
+                        "adopt this structure with a stop")
+                # Never hold past the earliest expiry's cutoff, whatever the
+                # caller asked for: exercise/assignment is not an exit plan.
+                chunk_stop = min(
+                    time_stop_utc,
+                    expiry_cutoff_utc(min(leg["expiry"] for leg in legs), cutoff_hhmm),
+                )
                 plan = TradePlan(
                     underlying=underlying[:12],
                     strategy="adopted",
                     legs=legs,
                     qty=sets,
                     entry_limit=round(entry, 4),
-                    tp_premium=round(entry + abs(entry) * tp_pct, 4),
-                    sl_premium=round(entry - abs(entry) * sl_pct, 4),
-                    time_stop_utc=time_stop_utc,
+                    tp_premium=None if intrinsic else round(entry + abs(entry) * tp_pct, 4),
+                    sl_premium=None if intrinsic else round(entry - abs(entry) * sl_pct, 4),
+                    time_stop_utc=chunk_stop,
                     status="filled",
                     filled_qty=sets,
                     fill_premium=round(entry, 4),

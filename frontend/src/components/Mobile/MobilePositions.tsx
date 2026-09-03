@@ -291,8 +291,14 @@ function UntrackedCard({ pos }: { pos: UntrackedPosition }) {
     : pos.symbol;
   const basis = pos.avg_entry_price;
   const mult = stock ? 1 : 100;
+  // Options may adopt with NO stop (0%): the premium paid is the risk cap
+  // and the enforcer's only job is the pre-expiry time stop. The server
+  // refuses that for short legs and for shares.
+  const intrinsic = !stock && slPct === 0;
   const stopPrice = basis * (1 - slPct / 100);
-  const lossAtStop = (basis - stopPrice) * mult * Math.floor(Math.abs(pos.qty));
+  const lossAtStop = intrinsic
+    ? basis * mult * Math.floor(Math.abs(pos.qty))
+    : (basis - stopPrice) * mult * Math.floor(Math.abs(pos.qty));
 
   const adopt = async () => {
     setBusy(true);
@@ -350,15 +356,29 @@ function UntrackedCard({ pos }: { pos: UntrackedPosition }) {
             Adopting puts this position under the exit enforcer: a hard stop, an optional target and a time stop, watched server-side.
             {stock && Math.abs(pos.qty) % 1 !== 0 && " Fractional residue stays untracked."}
           </div>
-          {stepper("STOP BELOW BASIS", slPct, setSlPct, stock ? 1 : 5, "%", 1)}
+          {stepper(stock ? "STOP BELOW BASIS" : "STOP BELOW BASIS (0 = premium is the stop)", slPct, setSlPct, stock ? 1 : 5, "%", stock ? 1 : 0)}
           {stock && stepper("TARGET (0 = run)", tpPct, setTpPct, 5, "%", 0)}
           {stock && stepper("TIME STOP", days, setDays, 5, "d", 5)}
           <div data-numeric className="text-[12px] text-bb-muted">
-            stop @ <span className="text-bb-loss">{stopPrice.toFixed(2)}</span> · loss at stop{" "}
-            <span className="text-bb-loss">-${lossAtStop.toFixed(0)}</span>
+            {intrinsic ? (
+              <>
+                no stop — max loss is the premium{" "}
+                <span className="text-bb-loss">-${lossAtStop.toFixed(0)}</span> · closed at the
+                expiry-day cutoff, never exercised
+              </>
+            ) : (
+              <>
+                stop @ <span className="text-bb-loss">{stopPrice.toFixed(2)}</span> · loss at stop{" "}
+                <span className="text-bb-loss">-${lossAtStop.toFixed(0)}</span>
+              </>
+            )}
           </div>
           <Btn kind={live ? "danger" : "primary"} disabled={busy} onClick={() => void adopt()}>
-            {busy ? "ADOPTING…" : `ADOPT WITH ${slPct}% STOP${live ? " (LIVE)" : ""}`}
+            {busy
+              ? "ADOPTING…"
+              : intrinsic
+                ? `ADOPT · PREMIUM IS THE STOP${live ? " (LIVE)" : ""}`
+                : `ADOPT WITH ${slPct}% STOP${live ? " (LIVE)" : ""}`}
           </Btn>
           {error && <div className="text-[11px] text-bb-loss">✗ {error}</div>}
         </div>
