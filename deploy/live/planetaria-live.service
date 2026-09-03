@@ -1,0 +1,44 @@
+# planetaria LIVE server — systemd unit for the always-on Linux box.
+#
+#   sudo cp deploy/live/planetaria-live.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now planetaria-live
+#
+# The isolation contract lives in /etc/planetaria/live.env (see
+# live.env.example): TRADING_MODE=live_manual, STRATEGIES_ENABLED=false,
+# LIVE_ACCOUNT_NAME, its own DATABASE_URL / REDIS_URL, and the live keys.
+# The app refuses to boot if any of it is missing.
+#
+# Bound to 127.0.0.1 on purpose: the API has no auth. Remote access is
+# `tailscale serve` in front of the loopback port (docs/live-server.md).
+# `setup-linux.sh` substitutes __USER__ and __REPO__.
+
+[Unit]
+Description=planetaria LIVE server (uvicorn 127.0.0.1:8001, manual entries only, real money)
+Documentation=file://__REPO__/docs/live-server.md
+After=network-online.target postgresql.service redis-server.service
+Wants=network-online.target
+Requires=postgresql.service redis-server.service
+
+[Service]
+Type=simple
+User=__USER__
+WorkingDirectory=__REPO__/backend
+EnvironmentFile=/etc/planetaria/live.env
+ExecStart=__REPO__/backend/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8001
+# Restarts are safe: reconcile rebuilds every monitor from the DB. A dead
+# enforcer is worse than a restarting one.
+Restart=always
+RestartSec=5
+# Give an in-flight exit ladder time to reach a terminal verdict on stop.
+TimeoutStopSec=45
+KillSignal=SIGINT
+# Logs: journalctl -u planetaria-live -f
+StandardOutput=journal
+StandardError=journal
+# Hardening that does not get in the engine's way.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target

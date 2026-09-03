@@ -15,6 +15,7 @@ from app.services.trade_service import TradeService, auction_submit_ok
 from app.strategies import REGISTRY
 from app.strategies.base import StrategyContext
 from app.strategies.gap_fail_fade import GapFailFade
+from tests.conftest import FakeRunner
 
 ET = ZoneInfo("America/New_York")
 
@@ -44,21 +45,6 @@ class FakeMarket:
             return {"bid": p, "ask": p, "ts": _time.time() * 1000,
                     "src": "yahoo"}
         return {"bid": p - 0.02, "ask": p + 0.02, "ts": _time.time() * 1000}
-
-
-class FakeRunner:
-    def __init__(self):
-        self.notes, self.intents = [], []
-
-    async def journal_note(self, _id, detail, signal_ids=()):
-        self.notes.append(detail)
-
-    async def execute_intent(self, _id, intent):
-        self.intents.append(intent)
-        return {"id": "plan-1"}
-
-    async def account(self, _id):
-        return {"equity": 10_000.0, "available": 10_000.0}
 
 
 def make(movers, px, params=None, prints=()):

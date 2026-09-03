@@ -2,21 +2,16 @@ import { useMemo, useState } from "react";
 import { suggestSlPctFromUnderlying } from "../../lib/analytics";
 import { apiError, postOrder } from "../../lib/api";
 import { playCue } from "../../lib/audio";
+import { etDateIso, etWallToUtcIso } from "../../lib/et";
 import { nakedShortUnits } from "../../lib/optionsMath";
 import type { Designer } from "../../lib/useDesigner";
-import { useAccountStore } from "../../store/accountStore";
+import { useAccountStore, useTradingMode } from "../../store/accountStore";
 import { useStrategyStore } from "../../store/strategyStore";
 import { useTradingStore } from "../../store/tradingStore";
 
+/** Today at HH:MM ET -> UTC ISO. */
 function etToUtcIso(timeEt: string): string {
-  // Today at HH:MM ET -> UTC ISO. Uses the ET offset implied by current date.
-  const now = new Date();
-  const etNow = new Date(now.toLocaleString("en-US", { timeZone: "America/New_York" }));
-  const offsetMs = now.getTime() - etNow.getTime();
-  const [h, m] = timeEt.split(":").map(Number);
-  const etTarget = new Date(etNow);
-  etTarget.setHours(h, m, 0, 0);
-  return new Date(etTarget.getTime() + offsetMs).toISOString();
+  return etWallToUtcIso(etDateIso(), timeEt);
 }
 
 /** What crossing the spread RIGHT NOW pays/receives: every leg filled at its
@@ -87,12 +82,24 @@ export function OrderPanel({ designer }: { designer: Designer }) {
   );
 
   const nakedCalls = designer.legs ? nakedShortUnits(designer.legs, "C") : 0;
+  // Which server this ticket submits to. Nothing may submit until the mode
+  // has actually loaded: an unloaded ticket on the live server would send a
+  // real order under a PAPER label.
+  const { live, loaded } = useTradingMode();
+  // The live account is options level 2: long single-leg only. The backend
+  // refuses the same shape; this pre-empts the 422 with the reason visible.
+  const l2Blocked =
+    live &&
+    !!designer.legs &&
+    (designer.legs.length !== 1 || designer.legs.some((leg) => leg.side < 0));
   const canTrade =
+    loaded &&
     designer.ready &&
     designer.qty > 0 &&
     !designer.demo &&
     designer.instantExit === null &&
-    nakedCalls === 0;
+    nakedCalls === 0 &&
+    !l2Blocked;
 
   const submit = async () => {
     if (!designer.legs) return;
@@ -239,27 +246,64 @@ export function OrderPanel({ designer }: { designer: Designer }) {
           <InstantFillRow designer={designer} />
         )}
 
+        {/* One of the two buttons is THE submit path for this server and the
+            other is locked: PAPER on the paper server, LIVE (red) on the
+            isolated live server. The same build serves both — the lock
+            follows Account.mode, never a compile-time flag. */}
         <div className="mt-auto flex gap-1">
-          <button
-            className="btn-primary flex-1 text-[12px]"
-            disabled={!canTrade || submitting}
-            onClick={() => {
-              setError(null);
-              setPlaced(null);
-              setConfirming(true);
-            }}
-            title={designer.demo ? "Demo chain - configure Alpaca keys to trade" : "Paper trade"}
-          >
-            PAPER
-          </button>
-          <button
-            className="flex-1 cursor-not-allowed border border-bb-border text-[12px] text-bb-muted"
-            disabled
-            title="Live trading is locked until the system is validated on paper"
-          >
-            LIVE 🔒
-          </button>
+          {live ? (
+            <button
+              className="flex-1 cursor-not-allowed border border-bb-border text-[12px] text-bb-muted"
+              disabled
+              title="This is the LIVE server — paper orders are placed from the paper server (:8000)"
+            >
+              PAPER 🔒
+            </button>
+          ) : (
+            <button
+              className="btn-primary flex-1 text-[12px]"
+              disabled={!canTrade || submitting}
+              onClick={() => {
+                setError(null);
+                setPlaced(null);
+                setConfirming(true);
+              }}
+              title={designer.demo ? "Demo chain - configure Alpaca keys to trade" : "Paper trade"}
+            >
+              PAPER
+            </button>
+          )}
+          {live ? (
+            <button
+              className="flex-1 bg-bb-loss text-[12px] font-semibold text-black disabled:cursor-not-allowed disabled:opacity-40"
+              disabled={!canTrade || submitting}
+              onClick={() => {
+                setError(null);
+                setPlaced(null);
+                setConfirming(true);
+              }}
+              title="LIVE order — real money. A confirm step follows."
+            >
+              LIVE
+            </button>
+          ) : (
+            <button
+              className="flex-1 cursor-not-allowed border border-bb-border text-[12px] text-bb-muted"
+              disabled
+              title="Live orders are placed from the isolated live server (:8001), never from the paper server"
+            >
+              LIVE 🔒
+            </button>
+          )}
         </div>
+        {l2Blocked && (
+          <div
+            className="text-[10px] leading-tight text-bb-loss"
+            title="The live account is options level 2: long single-leg calls/puts only. Spreads, flies and any short leg are refused by the live server before they reach the broker."
+          >
+            ⚠ live account is options level 2 — long single-leg only (no spreads, no short legs)
+          </div>
+        )}
         {designer.warnings.map((warning) => (
           <div key={warning} className="text-[9px] leading-tight text-bb-orange" title={warning}>
             ⚠ {warning}
@@ -294,8 +338,17 @@ export function OrderPanel({ designer }: { designer: Designer }) {
       </div>
 
       {confirming && designer.ready && (
-        <div className="absolute inset-0 z-30 flex flex-col gap-1 bg-black/95 p-2 text-[11px]">
-          <div className="text-bb-amber">CONFIRM PAPER ORDER</div>
+        <div
+          className={
+            "absolute inset-0 z-30 flex flex-col gap-1 bg-black/95 p-2 text-[11px]" +
+            (live ? " border-2 border-bb-loss" : "")
+          }
+        >
+          {live ? (
+            <div className="font-semibold text-bb-loss">CONFIRM LIVE ORDER — REAL MONEY</div>
+          ) : (
+            <div className="text-bb-amber">CONFIRM PAPER ORDER</div>
+          )}
           <div className="text-white">
             {symbol} {(modified ? "custom" : kind).replace("_", " ").toUpperCase()} × {designer.qty}
           </div>
@@ -314,8 +367,16 @@ export function OrderPanel({ designer }: { designer: Designer }) {
             <div className="max-h-16 overflow-y-auto text-[10px] leading-tight text-bb-loss">{error}</div>
           )}
           <div className="mt-auto flex gap-1">
-            <button className="btn-primary flex-1" disabled={submitting} onClick={submit}>
-              {submitting ? "SUBMITTING…" : "CONFIRM"}
+            <button
+              className={
+                live
+                  ? "flex-1 bg-bb-loss font-semibold text-black active:bg-bb-orange"
+                  : "btn-primary flex-1"
+              }
+              disabled={submitting}
+              onClick={submit}
+            >
+              {submitting ? "SUBMITTING…" : live ? "CONFIRM LIVE" : "CONFIRM"}
             </button>
             <button
               className="btn-ghost flex-1"

@@ -151,19 +151,6 @@ async def set_allocation(request: Request, row_id: str, body: AllocationIn) -> d
         raise HTTPException(422, str(exc))
 
 
-@router.get("/strategies/{row_id}/capital")
-async def capital(request: Request, row_id: str) -> dict:
-    """Allocated / deployed / available, plus the drawdown against this
-    strategy's circuit breaker."""
-    runner = request.app.state.strategy_runner
-    try:
-        await runner.get(row_id)
-    except ValueError as exc:
-        raise HTTPException(404, str(exc))
-    return {**await runner.allocation_state(row_id),
-            "breaker": await runner.breaker_state(row_id)}
-
-
 @router.put("/strategies/{row_id}/breaker")
 async def set_breaker(request: Request, row_id: str, body: BreakerIn) -> dict:
     """The drawdown that flattens this strategy's book and pauses it.

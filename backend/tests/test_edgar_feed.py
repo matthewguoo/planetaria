@@ -8,9 +8,7 @@ from types import SimpleNamespace
 
 import httpx
 import pytest
-import pytest_asyncio
 
-from app.db.session import Database
 from app.services.signals.edgar import (
     MAX_TEXT,
     EdgarFeed,
@@ -82,14 +80,6 @@ def client(atom_text, index_text=INDEX_HTML, exhibit_text=EXHIBIT_HTML,
         return httpx.Response(statuses.get("exhibit", 200), text=exhibit_text)
 
     return httpx.AsyncClient(transport=httpx.MockTransport(handler))
-
-
-@pytest_asyncio.fixture
-async def db(tmp_path):
-    database = Database()
-    await database.connect(f"sqlite+aiosqlite:///{tmp_path}/edgar.db")
-    yield database
-    await database.close()
 
 
 def make_feed(db) -> tuple[EdgarFeed, "object"]:

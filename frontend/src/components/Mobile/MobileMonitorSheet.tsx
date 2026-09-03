@@ -6,7 +6,7 @@
  * condensed call ticker (data/engine/broker).
  */
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import {
   getMonitorCalls,
   getStrategies,
@@ -15,7 +15,8 @@ import {
   type StrategyDecision,
   type StrategyInstance,
 } from "../../lib/api";
-import { useAccountStore } from "../../store/accountStore";
+import { usePoll } from "../../lib/usePoll";
+import { useAccountStore, useTradingMode } from "../../store/accountStore";
 import { decisionColor, decisionSummary } from "../../store/strategyRunnerStore";
 
 const POLL_MS = 4_000;
@@ -47,31 +48,26 @@ export function MobileMonitorSheet() {
   const [calls, setCalls] = useState<MonitorCall[]>([]);
   const [error, setError] = useState(false);
 
-  useEffect(() => {
-    let alive = true;
-    const load = async () => {
-      try {
-        const instances = await getStrategies();
-        // First enabled instance (any kind), else the first at all — the
-        // sheet is a heartbeat, not a per-strategy console.
-        const earn =
-          instances.find((i) => i.state === "enabled") ?? instances[0] ?? null;
-        if (!alive) return;
-        setInst(earn);
-        if (earn) setDecisions(await getStrategyDecisions(earn.id, 40));
-        setCalls((await getMonitorCalls(undefined, 12)).calls);
-        if (alive) setError(false);
-      } catch {
-        if (alive) setError(true);
-      }
-    };
-    void load();
-    const t = window.setInterval(() => void load(), POLL_MS);
-    return () => {
-      alive = false;
-      window.clearInterval(t);
-    };
-  }, []);
+  const { live } = useTradingMode();
+
+  usePoll(async (alive) => {
+    try {
+      // The live server has no strategy plane (409 on /api/strategies);
+      // the sheet degrades to the monitor heartbeat there.
+      const instances = live ? [] : await getStrategies();
+      // First enabled instance (any kind), else the first at all — the
+      // sheet is a heartbeat, not a per-strategy console.
+      const earn =
+        instances.find((i) => i.state === "enabled") ?? instances[0] ?? null;
+      if (!alive()) return;
+      setInst(earn);
+      if (earn) setDecisions(await getStrategyDecisions(earn.id, 40));
+      setCalls((await getMonitorCalls(undefined, 12)).calls);
+      if (alive()) setError(false);
+    } catch {
+      if (alive()) setError(true);
+    }
+  }, POLL_MS);
 
   const watch = watchlistFrom(decisions);
   const open = positions.filter((p) => !["closed", "cancelled", "rejected"].includes(p.status));

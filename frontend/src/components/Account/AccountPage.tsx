@@ -22,7 +22,7 @@ import {
 } from "../../lib/api";
 import { fmtUsd, pnlCls } from "../../lib/format";
 import { usePoll } from "../../lib/usePoll";
-import { useAccountStore } from "../../store/accountStore";
+import { useAccountStore, useTradingMode } from "../../store/accountStore";
 import { AccountsPanel } from "../System/SystemPanels";
 
 function StatCard({ label, value, cls }: { label: string; value: string; cls?: string }) {
@@ -288,6 +288,7 @@ function EquityCurve({ history }: { history: PortfolioHistory | null }) {
  * it; the ops console has no chart, so it passes nothing and the row simply
  * stops being clickable — the page itself stays shell-agnostic. */
 export function AccountPage({ onViewPlan }: { onViewPlan?: (plan: Plan) => void } = {}) {
+  const { live } = useTradingMode();
   const account = useAccountStore((s) => s.account);
   const positions = useAccountStore((s) => s.positions);
   const untracked = useAccountStore((s) => s.untracked);
@@ -638,7 +639,9 @@ export function AccountPage({ onViewPlan }: { onViewPlan?: (plan: Plan) => void 
           selection is refused while plans are open and applies at the next
           boot — both stated by the panel itself. */}
       <div className="panel flex shrink-0 flex-col">
-        <div className="panel-title">PAPER ACCOUNT (restart applies)</div>
+        <div className="panel-title">
+          {live ? "LIVE ACCOUNT (pinned by service env)" : "PAPER ACCOUNT (restart applies)"}
+        </div>
         <AccountsPanel />
       </div>
 

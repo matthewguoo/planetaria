@@ -27,8 +27,9 @@ DEFAULT_RISK = {
     "max_spread_pct": 0.15,      # per-leg half-spread / mid cap (illiquidity guard)
     "entry_ttl_min": 5,          # unfilled entries auto-cancel (no stale chasing)
     "max_trades_per_day": 20,    # overtrading breaker
-    # SL denoising: a breach must PERSIST this long before firing (median-
-    # filtered mids; deep breaches >=25% of the TP-SL span fire instantly).
+    # SL denoising: a fair-value breach (Kalman microprice stack, see
+    # fair_value.py) must PERSIST this long before firing (deep breaches
+    # >=25% of the TP-SL span fire instantly).
     # 0 disables the dwell — every breach fires immediately.
     "sl_confirm_s": 3.0,
     # Equity (shares) guards — notional-based, no margin formulas:

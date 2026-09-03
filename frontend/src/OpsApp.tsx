@@ -1,9 +1,10 @@
 /**
- * The ops console — the only app. A portal for running a book of
- * strategies, not a trading terminal.
+ * The ops console — a portal for running a book of strategies, not a
+ * trading terminal.
  *
- * Five destinations, and they are peers:
+ * Six destinations, and they are peers:
  *   FUND        the allocator's view — envelopes, exposure, the book rollup
+ *   PORTFOLIO   every registered account in one read-only view
  *   ACCOUNT     the money — balances, exposure, open and closed P&L
  *   STRATEGIES  the book — instances, params, journals, performance
  *   MARKET      what the engine can see — clock, majors, calendar, tape
@@ -19,11 +20,13 @@
  * entry point hardcoded to one kind. A new strategy appears here by being
  * registered in app/strategies/__init__.py and needs no frontend change.
  *
- * The discretionary options cockpit was retired on 2026-08-07; it lives in
- * git history, not in the tree.
+ * The discretionary trading cockpit is the second entry point
+ * (/terminal.html, terminal/TerminalApp.tsx) — a separate bundle this
+ * console never loads.
  */
 
 import { useEffect, useState } from "react";
+import { getFeedSettings } from "./lib/api";
 import { AccountPage } from "./components/Account/AccountPage";
 import { EnforcementBanner } from "./components/EnforcementBanner";
 import FundPage from "./components/Fund/FundPage";
@@ -43,16 +46,14 @@ function useDataPumps() {
   const [cadence, setCadence] = useState({ account: 30_000, positions: 5_000 });
 
   useEffect(() => {
-    import("./lib/api").then(({ getFeedSettings }) =>
-      getFeedSettings()
-        .then((cfg) =>
-          setCadence({
-            account: cfg.account_poll_s * 1000,
-            positions: cfg.positions_poll_s * 1000,
-          }),
-        )
-        .catch(() => {}),
-    );
+    getFeedSettings()
+      .then((cfg) =>
+        setCadence({
+          account: cfg.account_poll_s * 1000,
+          positions: cfg.positions_poll_s * 1000,
+        }),
+      )
+      .catch(() => {});
   }, []);
 
   useEffect(() => {

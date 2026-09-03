@@ -4,8 +4,6 @@ Client -> server:
     {"op": "subscribe",   "channel": "bars",    "symbol": "SPY", "tf": "1m"}
     {"op": "unsubscribe", "channel": "bars",    "symbol": "SPY", "tf": "1m"}
     {"op": "subscribe",   "channel": "quote",   "symbol": "SPY"}
-    {"op": "subscribe",   "channel": "oquotes", "symbols": ["SPY260729C00450000", ...]}
-    {"op": "unsubscribe", "channel": "oquotes", "symbols": [...]}
 
 Server -> client: on subscribe, the full current state (snapshot), then deltas.
 Reconnect is therefore always safe — no client-side gap logic needed.
@@ -34,7 +32,6 @@ async def ws_stream(ws: WebSocket) -> None:
     queue: asyncio.Queue = asyncio.Queue(maxsize=QUEUE_SIZE)
     topics: set[str] = set()
     stock_subs: set[str] = set()
-    option_subs: set[str] = set()
 
     async def pump() -> None:
         while True:
@@ -108,27 +105,6 @@ async def ws_stream(ws: WebSocket) -> None:
             elif op == "unsubscribe":
                 leave("plans")
 
-        elif channel == "oquotes":
-            symbols = [s for s in (msg.get("symbols") or []) if s]
-            if not symbols:
-                return
-            if op == "subscribe":
-                fresh = [s for s in symbols if s not in option_subs]
-                option_subs.update(fresh)
-                for sym in fresh:
-                    join(f"oquote:{sym}")
-                await market.subscribe_options(fresh)
-                for sym in fresh:
-                    cached = market.latest_quote(sym)
-                    if cached:
-                        await ws.send_json(cached)
-            elif op == "unsubscribe":
-                stale = [s for s in symbols if s in option_subs]
-                option_subs.difference_update(stale)
-                for sym in stale:
-                    leave(f"oquote:{sym}")
-                await market.unsubscribe_options(stale)
-
     try:
         while True:
             # One malformed frame must not kill the connection — the client
@@ -159,5 +135,3 @@ async def ws_stream(ws: WebSocket) -> None:
             broadcaster.unsubscribe(topic, queue)
         for symbol in stock_subs:
             await market.unsubscribe_stock(symbol)
-        if option_subs:
-            await market.unsubscribe_options(sorted(option_subs))

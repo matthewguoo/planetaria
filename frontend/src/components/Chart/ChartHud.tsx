@@ -337,16 +337,16 @@ export function ThetaBlock({ designer }: { designer: Designer }) {
 export function ChartHud({
   designer,
   barsRef,
-  variant = "full",
+  variant,
 }: {
   designer: Designer;
   barsRef: React.RefObject<Bars>;
   /** "chips": toggles + one legend line only — the phone layout hosts the
    * MC/theta data in tabs below the chart instead of floating over it.
-   * "sidebar": same content as "full" but rendered as a permanent static
-   * column (desktop hosts it left of the chart so it never occludes the
-   * canvas or its drag handles). */
-  variant?: "full" | "chips" | "sidebar";
+   * "sidebar": the full stat column rendered as a permanent static column
+   * (desktop hosts it left of the chart so it never occludes the canvas or
+   * its drag handles). */
+  variant: "chips" | "sidebar";
 }) {
   const indicators = useTradingStore((s) => s.indicators);
   const toggleIndicator = useTradingStore((s) => s.toggleIndicator);

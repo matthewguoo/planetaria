@@ -10,7 +10,7 @@
  * with it.
  */
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import {
   getMarketClock,
   getQuote,
@@ -20,6 +20,7 @@ import {
   type SignalRecord,
 } from "../../lib/api";
 import { etDateTime, hhmmss } from "../../lib/format";
+import { usePoll } from "../../lib/usePoll";
 import { useSystemState } from "../System/SystemPanels";
 
 // Each quote is a broker REST call and shows up in SYSTEM's call flow, so
@@ -32,23 +33,20 @@ function MajorTile({ symbol }: { symbol: string }) {
   const [quote, setQuote] = useState<Quote | null>(null);
   const [dead, setDead] = useState(false);
 
-  useEffect(() => {
-    let alive = true;
-    const load = () =>
+  usePoll(
+    (alive) =>
       getQuote(symbol)
         .then((q) => {
-          if (!alive) return;
+          if (!alive()) return;
           setQuote(q);
           setDead(false);
         })
-        .catch(() => alive && setDead(true));
-    void load();
-    const id = window.setInterval(load, QUOTE_POLL_MS);
-    return () => {
-      alive = false;
-      window.clearInterval(id);
-    };
-  }, [symbol]);
+        .catch(() => {
+          if (alive()) setDead(true);
+        }),
+    QUOTE_POLL_MS,
+    [symbol],
+  );
 
   const mid = quote?.mid ?? null;
   // A book is only two-sided when both legs are positive AND differ. A tape
@@ -102,19 +100,16 @@ function MajorTile({ symbol }: { symbol: string }) {
 
 function useSignals(type: string, limit: number): SignalRecord[] {
   const [rows, setRows] = useState<SignalRecord[]>([]);
-  useEffect(() => {
-    let alive = true;
-    const load = () =>
+  usePoll(
+    (alive) =>
       getSignals({ type, limit })
-        .then((s) => alive && setRows(s))
-        .catch(() => {});
-    void load();
-    const id = window.setInterval(load, SIGNAL_POLL_MS);
-    return () => {
-      alive = false;
-      window.clearInterval(id);
-    };
-  }, [type, limit]);
+        .then((s) => {
+          if (alive()) setRows(s);
+        })
+        .catch(() => {}),
+    SIGNAL_POLL_MS,
+    [type, limit],
+  );
   return rows;
 }
 
@@ -122,21 +117,17 @@ function ClockBar() {
   const state = useSystemState();
   const [clock, setClock] = useState<MarketClock | null>(null);
 
-  useEffect(() => {
-    let alive = true;
-    const load = () =>
+  // The snapshot covers a whole session regime, so this only costs a broker
+  // call when the regime actually turns over.
+  usePoll(
+    (alive) =>
       getMarketClock()
-        .then((c) => alive && setClock(c))
-        .catch(() => {});
-    void load();
-    // The snapshot covers a whole session regime, so this only costs a broker
-    // call when the regime actually turns over.
-    const id = window.setInterval(load, 60_000);
-    return () => {
-      alive = false;
-      window.clearInterval(id);
-    };
-  }, []);
+        .then((c) => {
+          if (alive()) setClock(c);
+        })
+        .catch(() => {}),
+    60_000,
+  );
 
   // `known: false` is not "closed" — it is "the broker calendar could not be
   // read". Saying CLOSED there would be a guess presented as a fact.

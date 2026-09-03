@@ -24,6 +24,18 @@ class Settings(BaseSettings):
     # the field declared for that assignment to exist.
     alpaca_account_name: str = "default"
 
+    # TRADING_MODE=live_manual boots the ISOLATED LIVE SERVER: real-money
+    # endpoint, manual UI entries only. The strategy plane (runner, feeds,
+    # breaker loop) is never constructed in that process — a live order can
+    # only originate from a human ticket, while the exit enforcer still runs
+    # protective TP/SL/time stops. validate_paper_lock() holds the boot
+    # invariants for both modes.
+    trading_mode: Literal["paper", "live_manual"] = "paper"
+    # The one env-pinned live account (e.g. live_roth). No DB selection and
+    # no fallback in live mode: if these keys are missing, boot dies rather
+    # than proceeding on whatever keys are lying around in settings.
+    live_account_name: str = ""
+
     alpaca_stock_feed: Literal["iex", "sip"] = "iex"
     alpaca_option_feed: Literal["indicative", "opra"] = "indicative"
 
@@ -63,12 +75,39 @@ class Settings(BaseSettings):
     finnhub_api_key: str = ""
 
     def validate_paper_lock(self) -> None:
-        # v1 is hard-locked to paper trading. Refuse to boot otherwise.
-        if not self.alpaca_paper:
+        if self.trading_mode == "paper":
+            # The paper server is hard-locked to paper trading, exactly as
+            # v1 always was. Refuse to boot otherwise.
+            if not self.alpaca_paper:
+                raise RuntimeError(
+                    "ALPACA_PAPER=false is not supported on the paper server. "
+                    "Live trading runs only as the isolated TRADING_MODE="
+                    "live_manual instance (see live.ps1)."
+                )
+            return
+        # live_manual: the isolated manual-only live server. Every invariant
+        # here is a boot refusal, not a warning — a misconfigured live
+        # process must die, never degrade.
+        if self.strategies_enabled:
             raise RuntimeError(
-                "ALPACA_PAPER=false is not supported in this build. "
-                "Live trading is disabled until the system is validated on paper."
+                "live_manual requires STRATEGIES_ENABLED=false — automation "
+                "never runs in the live process."
             )
+        if not self.live_account_name.startswith("live_"):
+            raise RuntimeError(
+                "live_manual requires LIVE_ACCOUNT_NAME=live_<name> matching "
+                "an ALPACA_ACCOUNT_LIVE_<NAME>_API_KEY pair in .env."
+            )
+        for field in ("database_url", "redis_url"):
+            if getattr(self, field) == Settings.model_fields[field].default:
+                raise RuntimeError(
+                    f"live_manual requires an explicit {field.upper()} distinct "
+                    "from the paper server's default — the two enforcers must "
+                    "never share state."
+                )
+        # Derived, never trusted from env: the live server talks to the live
+        # endpoint by construction, and ALPACA_PAPER is ignored entirely.
+        self.alpaca_paper = False
 
 
 @lru_cache

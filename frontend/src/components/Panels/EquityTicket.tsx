@@ -16,6 +16,7 @@ import { useState } from "react";
 import { apiError, postOrder } from "../../lib/api";
 import { playCue } from "../../lib/audio";
 import { sharedBars } from "../../lib/chartShared";
+import { etWallToUtcIso } from "../../lib/et";
 import {
   capitalUsd,
   dailySigmaPct,
@@ -29,19 +30,12 @@ import {
   swingBackstopUtc,
 } from "../../lib/equityMath";
 import { realizedVolAnnualized } from "../../lib/indicators";
-import { useAccountStore } from "../../store/accountStore";
+import { useAccountStore, useTradingMode } from "../../store/accountStore";
 import { freshSpot, quoteIsStale, TF_MS, useTradingStore } from "../../store/tradingStore";
 
-/** ET 15:55 on a calendar date -> UTC ISO (same offset trick as OrderPanel). */
+/** ET 15:55 on a calendar date -> UTC ISO. */
 function etCloseToUtcIso(dateStr: string): string {
-  const now = new Date();
-  const etNow = new Date(now.toLocaleString("en-US", { timeZone: "America/New_York" }));
-  const offsetMs = now.getTime() - etNow.getTime();
-  const [y, m, d] = dateStr.split("-").map(Number);
-  const etTarget = new Date(etNow);
-  etTarget.setFullYear(y, m - 1, d);
-  etTarget.setHours(15, 55, 0, 0);
-  return new Date(etTarget.getTime() + offsetMs).toISOString();
+  return etWallToUtcIso(dateStr, "15:55");
 }
 
 function Row({ label, value, cls, title, big }: {
@@ -163,8 +157,12 @@ export function EquityTicket() {
     equityLongOnly: longOnly,
     quoteFresh,
   });
-  const canTrade = reasons.length === 0 && shares > 0 && !submitting;
+  // Nothing submits until the server mode has loaded — an unloaded ticket
+  // on the live server would send a real order under a PAPER label.
+  const { live, loaded } = useTradingMode();
+  const canTrade = loaded && reasons.length === 0 && shares > 0 && !submitting;
   const sideWord = side > 0 ? "BUY" : "SHORT";
+  const modeWord = live ? "LIVE" : "PAPER";
 
   const edit = <T,>(setter: (v: T) => void) => (v: T) => {
     // Any edit invalidates a pending confirm and clears stale feedback —
@@ -414,19 +412,28 @@ export function EquityTicket() {
             className={
               "mt-auto h-12 text-[13px] tracking-widest sm:h-8 sm:text-[11px] " +
               (canTrade
-                ? "bg-bb-amber font-semibold text-black active:bg-bb-orange"
+                ? live
+                  ? "bg-bb-loss font-semibold text-black active:bg-bb-orange"
+                  : "bg-bb-amber font-semibold text-black active:bg-bb-orange"
                 : "border border-bb-border text-bb-muted")
             }
           >
             {canTrade
-              ? `${sideWord} ${shares} ${symbol} (PAPER)`
+              ? `${sideWord} ${shares} ${symbol} (${modeWord})`
               : reasons.length
                 ? `BLOCKED — ${reasons.length} ${reasons.length === 1 ? "REASON" : "REASONS"} ABOVE`
                 : `${sideWord} ${symbol}`}
           </button>
         ) : (
           <div className="mt-auto flex flex-col gap-1">
-            <div className="border border-bb-amber/60 bg-bb-amber/10 p-1.5 text-[11px] text-bb-amber sm:text-[10px]">
+            <div
+              className={
+                live
+                  ? "border border-bb-loss bg-bb-loss/10 p-1.5 text-[11px] text-bb-loss sm:text-[10px]"
+                  : "border border-bb-amber/60 bg-bb-amber/10 p-1.5 text-[11px] text-bb-amber sm:text-[10px]"
+              }
+            >
+              {live && <span className="font-semibold">LIVE ORDER — REAL MONEY · </span>}
               {sideWord} {shares} {symbol} @ ≤{price.toFixed(2)} · stop {Math.abs(exits.sl).toFixed(2)} (−${maxLoss.toFixed(0)})
               {exits.tp != null ? ` · target ${Math.abs(exits.tp).toFixed(2)}` : " · no target (run)"}
               {timeStopDate ? ` · exit ${timeStopDate}` : " · 30d backstop"}

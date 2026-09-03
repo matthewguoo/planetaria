@@ -152,7 +152,7 @@ export function HealthPanel({ state }: { state: SystemState | null }) {
         label="BROKER"
         ok={state.broker.configured && !state.broker.account_status.startsWith("UNREACHABLE")}
         warn={!state.broker.configured}
-        value={`${state.broker.account_status} · PAPER`}
+        value={`${state.broker.account_status} · ${state.broker.mode === "live_manual" ? "LIVE (manual only)" : "PAPER"}`}
       />
       <Row
         label="TRADING STREAM"
@@ -253,6 +253,7 @@ export function AccountsPanel() {
             type="radio"
             name="paper-account"
             checked={a.selected}
+            disabled={!accounts.paper_only}
             onChange={() => void pick(a.name)}
             aria-label={`Use account ${a.name}`}
           />
@@ -271,8 +272,9 @@ export function AccountsPanel() {
         </div>
       )}
       <div className="px-2 py-1 text-[9px] leading-tight text-bb-muted">
-        paper keys only (PK…) from .env: ALPACA_ACCOUNT_&lt;NAME&gt;_API_KEY + _SECRET_KEY.
-        Switching is refused while plans are open.
+        {accounts.paper_only
+          ? "paper keys only (PK…) from .env: ALPACA_ACCOUNT_<NAME>_API_KEY + _SECRET_KEY. Switching is refused while plans are open."
+          : "LIVE server: the account is pinned by LIVE_ACCOUNT_NAME in the service environment (live_* names with AK… keys only). Switching is not a runtime operation here."}
       </div>
       {msg && <div className="px-2 pb-1 text-[10px] text-bb-profit">{msg}</div>}
       {error && <div className="px-2 pb-1 text-[10px] text-bb-loss">{error}</div>}

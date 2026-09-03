@@ -23,7 +23,6 @@ DEFAULT_FEED: dict = {
     "chain_refresh_s": 10,     # frontend options-chain reload cadence
     "positions_poll_s": 5,     # frontend positions poll
     "account_poll_s": 30,      # frontend account poll
-    "public_poll_s": 5,        # keyless public feed quote poll (live-applied)
     "stock_feed": "iex",       # iex | sip (needs Alpaca data sub; restart)
     "option_feed": "indicative",  # indicative | opra (restart)
 }
@@ -35,7 +34,6 @@ _RANGES = {
     "chain_refresh_s": (2, 120),
     "positions_poll_s": (2, 60),
     "account_poll_s": (5, 300),
-    "public_poll_s": (2, 60),
 }
 _ENUMS = {
     "stock_feed": {"iex", "sip"},
@@ -103,7 +101,12 @@ class AccountService:
     switch would strand the old account's plans outside enforcement).
     Selection persists in app_settings and applies at BOOT (streams and
     clients are constructed once); the UI shows restart_required until
-    the restart happens."""
+    the restart happens.
+
+    TRADING_MODE=live_manual inverts the pool gate: ONLY live_*-named
+    AK-key pairs are admitted, the account is pinned by LIVE_ACCOUNT_NAME
+    (no DB selection, no fallback — a miss kills the boot), and select()
+    is refused at runtime."""
 
     def __init__(self, db, settings):
         self.db = db
@@ -157,6 +160,22 @@ class AccountService:
                 log.error("account %r has an API key but no secret - skipped", name)
                 continue
             out[name] = {"api_key": value, "secret_key": secret}
+        if getattr(self.settings, "trading_mode", "paper") == "live_manual":
+            # The live server's inverse gate: ONLY live_-named accounts with
+            # AK-prefixed (live) keys. 'default' and every paper pair are
+            # dropped, so the live process can never quietly run on paper
+            # keys and fake confidence — nor can a PK pair reach the live
+            # endpoint (Alpaca would 401 it anyway).
+            for name in list(out):
+                if not name.startswith("live_") or \
+                        not out[name]["api_key"].startswith("AK"):
+                    # Expected on the live server (the shared .env carries
+                    # paper pairs); not an error, so debug — the ERROR level
+                    # is reserved for the paper gate catching a live key.
+                    log.debug("account %r not admitted to the LIVE pool "
+                              "(need live_* name + AK... key)", name)
+                    del out[name]
+            return out
         # The paper gate: PK-prefixed keys only, no exceptions.
         for name in list(out):
             if not out[name]["api_key"].startswith("PK"):
@@ -172,7 +191,24 @@ class AccountService:
 
     async def apply(self) -> str:
         """Boot-time: point settings at the selected account's keys BEFORE
-        any client is constructed. Falls back loudly to 'default'."""
+        any client is constructed. Falls back loudly to 'default' — except
+        in live_manual mode, where the account is env-pinned and a miss is
+        fatal (a fallback would leave paper keys active with paper=False)."""
+        if getattr(self.settings, "trading_mode", "paper") == "live_manual":
+            name = self.settings.live_account_name
+            reg = self.registry()
+            if name not in reg:
+                raise RuntimeError(
+                    f"live account {name!r} has no live keys in .env "
+                    f"(need ALPACA_ACCOUNT_{name.upper()}_API_KEY=AK... "
+                    "+ _SECRET_KEY) - refusing to boot the live server")
+            self.settings.alpaca_api_key = reg[name]["api_key"]
+            self.settings.alpaca_secret_key = reg[name]["secret_key"]
+            self.applied_name = name
+            self.settings.alpaca_account_name = name
+            log.info("LIVE alpaca account %r pinned by env (key ...%s)",
+                     name, reg[name]["api_key"][-4:])
+            return name
         name = await self.selected_name()
         reg = self.registry()
         if name not in reg:
@@ -192,7 +228,11 @@ class AccountService:
         return name
 
     async def list_accounts(self) -> dict:
-        selected = await self.selected_name()
+        if getattr(self.settings, "trading_mode", "paper") == "live_manual":
+            # Env-pinned: the DB selection does not exist on the live server.
+            selected = self.applied_name or self.settings.live_account_name
+        else:
+            selected = await self.selected_name()
         return {
             "accounts": [
                 {"name": name, "key_masked": f"...{cfg['api_key'][-4:]}",
@@ -203,10 +243,17 @@ class AccountService:
             "selected": selected,
             "applied": self.applied_name,
             "restart_required": selected != self.applied_name,
-            "paper_only": True,
+            "mode": getattr(self.settings, "trading_mode", "paper"),
+            "paper_only": getattr(self.settings, "trading_mode",
+                                  "paper") == "paper",
         }
 
     async def select(self, name: str, open_plans: int) -> dict:
+        if getattr(self.settings, "trading_mode", "paper") == "live_manual":
+            raise ValueError(
+                "the live server's account is pinned by LIVE_ACCOUNT_NAME "
+                "in its service environment - switching is not a runtime "
+                "operation on live")
         if name not in self.registry():
             raise ValueError(f"no keys for account {name!r} in .env "
                              f"(add ALPACA_ACCOUNT_{name.upper()}_API_KEY/"
@@ -285,7 +332,8 @@ async def system_state(app_state) -> dict:
         },
         "broker": {
             "configured": alpaca.configured,
-            "paper": True,
+            "paper": bool(getattr(alpaca.settings, "alpaca_paper", True)),
+            "mode": getattr(alpaca.settings, "trading_mode", "paper"),
             "account_status": account_status,
             # Broker market clock as the enforcer sees it (cached snapshot;
             # {"known": False} until the first successful fetch).

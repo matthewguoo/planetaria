@@ -4,9 +4,7 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
-import pytest_asyncio
 
-from app.db.session import Database
 from app.services.signals.events import Event, EventBus
 from app.services.signals.feeds import AlpacaNewsFeed, et_session
 from app.services.signals.store import SignalStore
@@ -19,14 +17,6 @@ def make_event(**overrides) -> Event:
     )
     base.update(overrides)
     return Event(**base)
-
-
-@pytest_asyncio.fixture
-async def db(tmp_path):
-    database = Database()
-    await database.connect(f"sqlite+aiosqlite:///{tmp_path}/signals.db")
-    yield database
-    await database.close()
 
 
 class TestEventBus:

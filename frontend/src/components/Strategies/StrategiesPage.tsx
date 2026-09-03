@@ -26,6 +26,8 @@ import {
   type StrategyTwin,
 } from "../../lib/api";
 import { dateTimeShort, fmtUsd, hhmmss, pnlCls } from "../../lib/format";
+import { usePoll } from "../../lib/usePoll";
+import { useTradingMode } from "../../store/accountStore";
 import {
   actions,
   decisionColor,
@@ -80,7 +82,35 @@ function RequirementBadges({
   );
 }
 
+/**
+ * On the LIVE server the strategy plane is never constructed and every
+ * /api/strategies call answers 409 — so the page renders a lock instead of
+ * mounting the control surface (which would otherwise poll into 409s and
+ * paint them as errors). The lock reads Account.mode; the fail-safe
+ * default ("paper" until loaded) means a slow first poll shows the normal
+ * page briefly, which is harmless: the server refuses everything anyway.
+ */
 export default function StrategiesPage() {
+  const { live } = useTradingMode();
+  if (live) {
+    return (
+      <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center">
+        <div className="border border-bb-loss px-3 py-1 text-[12px] font-semibold tracking-widest text-bb-loss">
+          LIVE SERVER
+        </div>
+        <div className="text-[12px] text-bb-amber">STRATEGIES ARE NOT AVAILABLE HERE</div>
+        <div className="max-w-md text-[11px] leading-snug text-bb-muted">
+          This process accepts manual entries and enforces protective exits only. The
+          strategy runtime, signal feeds and circuit breakers do not exist in it — by
+          construction, not by setting. Automation runs on the paper server (:8000).
+        </div>
+      </div>
+    );
+  }
+  return <StrategiesConsole />;
+}
+
+function StrategiesConsole() {
   const instances = useStrategyRunnerStore((s) => s.instances);
   const decisions = useStrategyRunnerStore((s) => s.decisions);
   const signals = useStrategyRunnerStore((s) => s.signals);
@@ -90,18 +120,18 @@ export default function StrategiesPage() {
   const select = useStrategyRunnerStore((s) => s.select);
   const [error, setError] = useState<string | null>(null);
   const [capabilities, setCapabilities] = useState<Capabilities | null>(null);
+  const [kinds, setKinds] = useState<StrategyKind[]>([]);
 
-  useEffect(() => {
-    void refresh();
-    const t = window.setInterval(() => void refresh(), POLL_MS);
-    return () => window.clearInterval(t);
-  }, [refresh]);
+  usePoll(() => void refresh(), POLL_MS, [refresh]);
 
-  // Capabilities move only on a restart or a settings change, so they are
-  // fetched once rather than on the instance poll.
+  // The catalog (capabilities + kinds) moves only on a restart or a settings
+  // change, so it is fetched once rather than on the instance poll.
   useEffect(() => {
     getStrategyCatalog()
-      .then((c) => setCapabilities(c.capabilities))
+      .then((c) => {
+        setCapabilities(c.capabilities);
+        setKinds(c.kinds);
+      })
       .catch(() => setCapabilities(null));
   }, []);
 
@@ -205,7 +235,7 @@ export default function StrategiesPage() {
       {selected && <DecisionsPanel inst={selected} decisions={decisions} />}
       {selected && <SourcePanel key={`src-${selected.kind}`} kind={selected.kind} />}
 
-      <CreatePanel onAction={run} />
+      <CreatePanel kinds={kinds} onAction={run} />
       <SignalsPanel signals={signals} />
     </div>
   );
@@ -578,19 +608,18 @@ function PerformancePanel({ inst }: { inst: StrategyInstance }) {
   const [perf, setPerf] = useState<StrategyPerformance | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    let alive = true;
-    const load = () =>
+  usePoll(
+    (alive) =>
       getStrategyPerformance(inst.id)
-        .then((p) => alive && setPerf(p))
-        .catch((err) => alive && setError(apiError(err)));
-    load();
-    const t = window.setInterval(load, POLL_MS);
-    return () => {
-      alive = false;
-      window.clearInterval(t);
-    };
-  }, [inst.id]);
+        .then((p) => {
+          if (alive()) setPerf(p);
+        })
+        .catch((err) => {
+          if (alive()) setError(apiError(err));
+        }),
+    POLL_MS,
+    [inst.id],
+  );
 
   return (
     <>
@@ -912,19 +941,18 @@ function TwinPanel({ inst }: { inst: StrategyInstance }) {
   const [twin, setTwin] = useState<StrategyTwin | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    let alive = true;
-    const load = () =>
+  usePoll(
+    (alive) =>
       getStrategyTwin(inst.id)
-        .then((t) => alive && setTwin(t))
-        .catch((err) => alive && setError(apiError(err)));
-    void load();
-    const t = window.setInterval(load, POLL_MS * 4);
-    return () => {
-      alive = false;
-      window.clearInterval(t);
-    };
-  }, [inst.id]);
+        .then((t) => {
+          if (alive()) setTwin(t);
+        })
+        .catch((err) => {
+          if (alive()) setError(apiError(err));
+        }),
+    POLL_MS * 4,
+    [inst.id],
+  );
 
   return (
     <div className="panel flex shrink-0 flex-col">
@@ -1025,22 +1053,19 @@ function SourcePanel({ kind }: { kind: string }) {
   );
 }
 
-function CreatePanel({ onAction }: { onAction: (p: Promise<string | null>) => void }) {
-  const [kinds, setKinds] = useState<StrategyKind[]>([]);
-  const [kind, setKind] = useState("");
+function CreatePanel({
+  kinds,
+  onAction,
+}: {
+  kinds: StrategyKind[];
+  onAction: (p: Promise<string | null>) => void;
+}) {
+  const [kindChoice, setKindChoice] = useState("");
   const [name, setName] = useState("");
   const refresh = useStrategyRunnerStore((s) => s.refresh);
 
-  useEffect(() => {
-    getStrategyCatalog()
-      .then(({ kinds: ks }) => {
-        setKinds(ks);
-        if (ks.length && !kind) setKind(ks[0].kind);
-      })
-      .catch(() => setKinds([]));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
+  // Derived default: first catalog kind until the user picks one.
+  const kind = kindChoice || (kinds[0]?.kind ?? "");
   const selected = kinds.find((k) => k.kind === kind);
   return (
     <div className="panel flex shrink-0 flex-col">
@@ -1049,7 +1074,7 @@ function CreatePanel({ onAction }: { onAction: (p: Promise<string | null>) => vo
         <select
           className="border border-bb-border bg-black px-1 py-0.5 text-bb-amber outline-none focus:border-bb-amber"
           value={kind}
-          onChange={(e) => setKind(e.target.value)}
+          onChange={(e) => setKindChoice(e.target.value)}
         >
           {kinds.map((k) => (
             <option key={k.kind} value={k.kind}>

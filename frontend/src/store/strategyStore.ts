@@ -10,6 +10,7 @@
 
 import { create } from "zustand";
 import { api } from "../lib/api";
+import { etMinutes } from "../lib/et";
 import { exitPositionViewOnAction } from "./uiStore";
 import {
   bsDelta,
@@ -685,17 +686,7 @@ export const useStrategyStore = create<StrategyState>((set, get) => ({
 
 /** Trading hours from now until today's HH:MM ET (clamped to [0, 6.5]). */
 export function timeStopHoursFromEt(timeStopEt: string): number {
-  const parts = Object.fromEntries(
-    new Intl.DateTimeFormat("en-US", {
-      timeZone: "America/New_York",
-      hour: "2-digit",
-      minute: "2-digit",
-      hour12: false,
-    })
-      .formatToParts(new Date())
-      .map((p) => [p.type, p.value]),
-  );
-  const nowMin = Number(parts.hour === "24" ? 0 : parts.hour) * 60 + Number(parts.minute);
+  const nowMin = etMinutes();
   const [h, m] = timeStopEt.split(":").map(Number);
   return Math.max(0, Math.min((h * 60 + m - nowMin) / 60, 6.5));
 }

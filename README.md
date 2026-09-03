@@ -4,12 +4,13 @@ A FastAPI backend against Alpaca (paper) with a React ops console over its
 API. The core design rule: **every position has a server-enforced exit
 plan** that survives restarts.
 
-`/` is the **ops console** — a portal for running a book of strategies. Five
+`/` is the **ops console** — a portal for running a book of strategies. Six
 destinations, and they are peers:
 
 | page | what it answers |
 |---|---|
 | FUND | the allocator's view — allocation envelopes per strategy, what each one holds, and the account-level exposure and correlation rollup |
+| PORTFOLIO | every registered paper account in one read-only view — equity, day P/L, positions, curve per account, with the ACTIVE badge on the one the engine trades |
 | ACCOUNT | the money — balances, exposure, equity curve, open and closed P&L, and which paper account the engine trades |
 | STRATEGIES | the book — instances, their capital, decision journals, performance, and the paper twin for strategies that place nothing yet |
 | MARKET | what the engine can see — session clock, the majors, the earnings calendar, the news tape |
@@ -45,10 +46,11 @@ hard time stop is one. A stop bounds one trade and costs edge on every trade;
 a breaker bounds the strategy and costs nothing until it fires.
 
 The discretionary options terminal — the chart, the payoff designer, the
-chain, the mobile shell — was retired on 2026-08-07 and lives in git history.
-Its backend survives where the engine still needs it: the FSM, the exit
-enforcer, and the options math that prices collateral and model-value stops.
-`docs/screenshots/` is that UI's historical walkthrough.
+chain, the mobile shell — was retired on 2026-08-07 and resurrected on
+2026-08-31 as a second Vite entry at `/terminal.html`, now with an equity
+swing ticket beside the options flow. The two bundles stay separate on
+purpose: the ops console never loads the chart, the chain, or the
+Monte-Carlo workers. `docs/screenshots/` is the terminal's walkthrough.
 
 `research/` holds studies — code that produces evidence, kept out of
 `backend/` so the dependency runs one way: research reads the app, the app
@@ -57,8 +59,9 @@ never reads research. See [research/README.md](research/README.md).
 ## Architecture
 
 ```
-frontend (Vite/React — the ops console; polls REST, no WebSocket)
-   │  REST /api/*
+frontend (Vite/React, two entries — `/` ops console polls REST;
+   │      `/terminal.html` terminal adds the /ws/stream WebSocket)
+   │  REST /api/*  +  WS /ws/stream
 backend (FastAPI, single process)
    ├─ MarketDataService   one stock + one option stream, ref-counted subs,
    │                      background REST backfill, reconnect gap-fill,
@@ -104,6 +107,12 @@ applied under a per-plan asyncio lock with an atomic compare-and-set UPDATE
 lifecycle. The full state × event matrix is exhaustively unit-tested.
 Partial fills are first-class: a partially filled entry that gets cancelled
 shrinks the plan to the filled quantity and keeps managing it.
+
+Equity swing plans (2026-08-31) ride the same rails: one `TradePlan` row
+with `asset_class="equity"`, the same FSM, enforcer, and risk gates.
+Options require TP and SL both-or-neither; equity additionally allows
+SL-only, an optional market-on-open entry (refused past 09:28 ET), and no
+time stop (held until TP/SL or manual close).
 
 A multi-leg structure is ONE `TradePlan` row: legs (with per-leg ratio),
 contract sets, signed net premium (positive = debit, negative = credit), TP/SL
@@ -188,8 +197,35 @@ today; strategies reach the market through `ctx.submit()` and the same
 TradeService. This is the future split seam: run the engine supervised on
 an always-on host (systemd/docker restart-always — restarts are safe, the
 reconcile machinery rebuilds all monitors from the DB) and keep the UI
-wherever you like. Until real capital or multi-user needs force a true
-two-process split, one supervised process is the more reliable shape.
+wherever you like. `backend/scripts/install-engine-service.ps1` installs
+exactly that shape as a Windows service (NSSM, boot-start,
+restart-on-crash, LAN-only).
+
+### The live server (real money, manual entries only)
+
+Live trading is not a flag on the paper server — it is a **second,
+isolated process** of the same engine, `TRADING_MODE=live_manual`, with
+its own database, redis namespace and port. The gate shifted rather than
+disappeared: the paper server still refuses `ALPACA_PAPER=false` and
+drops every live (`AK…`) key from its account pool; the live server
+**never constructs the strategy plane** (no bus, feeds, runner or
+breakers — `bootstrap.strategy_plane_enabled`), answers `/api/strategies`
+with a 409 stub, refuses any `strategy_id` on an entry, and refuses
+anything the level-2 options account cannot hold. The only way an order
+enters that process is a human ticket with its red CONFIRM LIVE step.
+The exit enforcer runs in full there — protective TP/SL/time stops on
+live positions are the point.
+
+- Boot side by side on Windows: `.\live.ps1` (:8001, loopback only) next
+  to `.\dev.ps1`; `backend/scripts/install-live-service.ps1` makes it a
+  separate NSSM service.
+- The intended home is an always-on Linux box reached over Tailscale —
+  see [`docs/live-server.md`](docs/live-server.md) for the setup, the
+  systemd unit in `deploy/live/`, the verification tests, and the
+  regular-hours smoke checklist.
+- **Exactly one live process per account, ever.** Two enforcers on the
+  same account (say the Windows service and the Linux box both up) would
+  each try to close the same position.
 
 ### Exit trigger hierarchy (how fast is the bracket?)
 

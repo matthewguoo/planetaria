@@ -79,3 +79,12 @@ stage consistent with the registered expectation band.
 - Breaker fires → stays paused until a written post-mortem exists.
 - Any structural change (strike granularity, expiry schedule, venue
   behaviour at 14:00) → re-register before resuming.
+
+---
+
+*Correction (2026-09-01): the evidence note cited above,
+`flies_0dte_20260810_0214.md`, was superseded the same night by
+`research/0dte-vrp/notes/flies_0dte_20260810_0306.md` (an ROC-column fix,
+commit 845565b); the cited 14:00 / 1.0%-width numbers are unchanged and
+appear verbatim in the successor note. The registered hypothesis and
+thresholds above are untouched.*

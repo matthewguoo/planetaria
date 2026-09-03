@@ -97,9 +97,7 @@ async def positions(request: Request) -> dict:
     app = request.app
     plans = await app.state.risk.open_plans()
     out = []
-    covered: set[str] = set()
     for plan in plans:
-        covered.update(leg["symbol"] for leg in plan.legs)
         quotes = {leg["symbol"]: app.state.market.latest_quote(leg["symbol"]) for leg in plan.legs}
         mid = position_mid_from_quotes(plan.legs, quotes)
         row = plan.to_dict()
@@ -110,11 +108,8 @@ async def positions(request: Request) -> dict:
 
     # Live broker positions with no managing plan — surfaced so nothing in
     # the account can be invisible to the UI (and adoptable into management).
-    untracked: list[dict] = []
     try:
-        untracked = [
-            p for p in await app.state.trade.broker_positions() if p["symbol"] not in covered
-        ]
+        untracked = await app.state.trade.untracked_positions(plans)
     except Exception as exc:  # broker down != positions page down
         return {"positions": out, "untracked": [], "untracked_error": str(exc)}
     return {"positions": out, "untracked": untracked}
@@ -129,8 +124,13 @@ class AdoptIn(BaseModel):
 
 @router.post("/positions/adopt")
 async def adopt_positions(request: Request, body: AdoptIn) -> dict:
-    """Group untracked broker option positions into managed multi-leg plans
-    (one trade object per underlying) with TP/SL/time-stop enforcement."""
+    """Fold untracked broker positions into managed plans with TP/SL/
+    time-stop enforcement. Options group into multi-leg plans (one per
+    underlying); stock positions adopt one single-leg equity plan per
+    symbol at floor(qty) whole shares — a fractional residue stays
+    untracked (close it by hand at the broker). NOTE: tp_pct/sl_pct are
+    fractions of the ENTRY BASIS — for equity pass explicit values (the
+    option defaults, e.g. a 50% stop, are not share-sized)."""
     app = request.app
     risk = await app.state.risk.get_settings()
     tp_pct = body.tp_pct if body.tp_pct is not None else risk["default_tp_pct"]

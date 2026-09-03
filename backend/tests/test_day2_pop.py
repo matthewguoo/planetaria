@@ -12,6 +12,7 @@ import pytest
 from app.strategies import REGISTRY
 from app.strategies.base import StrategyContext
 from app.strategies.day2_pop import Day2Pop
+from tests.conftest import FakeRunner
 
 ET = ZoneInfo("America/New_York")
 TODAY = datetime.now(ET).date()
@@ -38,25 +39,6 @@ class FakeMarket:
     async def fetch_latest_stock_quote(self, symbol):
         p = self.px[symbol]
         return {"bid": p - 0.02, "ask": p + 0.02, "ts": _time.time() * 1000}
-
-
-class FakeRunner:
-    def __init__(self, reporters):
-        self.reporters = reporters      # date -> [payload dicts]
-        self.notes, self.intents = [], []
-
-    async def journal_note(self, _id, detail, signal_ids=()):
-        self.notes.append(detail)
-
-    async def execute_intent(self, _id, intent):
-        self.intents.append(intent)
-        return {"id": "plan-1"}
-
-    async def account(self, _id):
-        return {"equity": 10_000.0, "available": 10_000.0}
-
-    async def reporters_for(self, date):
-        return self.reporters.get(date, [])
 
 
 def make(reporters, closes, px, params=None, dv=None):

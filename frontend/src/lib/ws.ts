@@ -15,8 +15,7 @@ type Handler = (msg: WsMessage) => void;
 type SubSpec =
   | { channel: "bars"; symbol: string; tf: string }
   | { channel: "quote"; symbol: string }
-  | { channel: "plans" }
-  | { channel: "oquotes"; symbols: string[] };
+  | { channel: "plans" };
 
 // Same-origin by default (dev/preview server proxies /ws), matching api.ts —
 // works from any host including phones and tunnels.
@@ -28,8 +27,7 @@ const WS_URL =
 function subKey(spec: SubSpec): string {
   if (spec.channel === "bars") return `bars:${spec.symbol}:${spec.tf}`;
   if (spec.channel === "quote") return `quote:${spec.symbol}`;
-  if (spec.channel === "plans") return "plans";
-  return `oquotes:${spec.symbols.slice().sort().join(",")}`;
+  return "plans";
 }
 
 class TerminalSocket {

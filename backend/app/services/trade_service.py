@@ -1,10 +1,14 @@
-"""Trade lifecycle: validated placement -> DB-persisted plan -> Alpaca paper
+"""Trade lifecycle: validated placement -> DB-persisted plan -> Alpaca
 order -> fill tracking -> exit handoff to the enforcer.
 
 Discipline invariants enforced here, not in the UI:
 - No order without TP, SL, and time stop.
 - Plan row committed BEFORE the order hits Alpaca.
-- Paper-only (AlpacaService is constructed paper=True; config refuses live).
+- Which broker environment this process talks to is fixed at boot by
+  TRADING_MODE (config.validate_paper_lock): the paper server refuses
+  live outright; the isolated live_manual server accepts entries only
+  from the human ticket (strategy_id refused in place_trade) with the
+  strategy plane never constructed.
 """
 
 import asyncio
@@ -135,9 +139,13 @@ class TradeService:
     async def get_account(self) -> dict:
         if self._account_cache and time.monotonic() - self._account_cache[0] < 10:
             return self._account_cache[1]
+        cfg = getattr(self.alpaca, "settings", None)
+        paper = bool(getattr(cfg, "alpaca_paper", True))
+        mode = getattr(cfg, "trading_mode", "paper")
         if not self.alpaca.configured:
             return {"equity": 0.0, "cash": 0.0, "buying_power": 0.0,
-                    "daytrade_count": 0, "status": "NO_KEYS", "paper": True}
+                    "daytrade_count": 0, "status": "NO_KEYS",
+                    "paper": paper, "mode": mode}
         acct = await self.alpaca.call(self.alpaca.trading.get_account, retries=1)
         out = {
             "equity": float(acct.equity),
@@ -145,7 +153,8 @@ class TradeService:
             "buying_power": float(acct.buying_power),
             "daytrade_count": int(acct.daytrade_count or 0),
             "status": str(acct.status.value if hasattr(acct.status, "value") else acct.status),
-            "paper": True,
+            "paper": paper,
+            "mode": mode,
         }
         self._account_cache = (time.monotonic(), out)
         return out
@@ -189,9 +198,11 @@ class TradeService:
         self._positions_cache = (time.monotonic(), out)
         return out
 
-    async def untracked_positions(self) -> list[dict]:
-        """Broker positions not covered by any open plan's legs."""
-        plans = await self.risk.open_plans()
+    async def untracked_positions(self, plans: list | None = None) -> list[dict]:
+        """Broker positions not covered by any open plan's legs. Callers that
+        already hold the open plans pass them to skip the second query."""
+        if plans is None:
+            plans = await self.risk.open_plans()
         covered = {leg["symbol"] for plan in plans for leg in plan.legs}
         return [p for p in await self.broker_positions() if p["symbol"] not in covered]
 
@@ -202,25 +213,67 @@ class TradeService:
         sl_pct: float,
         time_stop_utc: datetime,
     ) -> list[dict]:
-        """Fold untracked broker option positions into managed TradePlans —
-        one multi-leg plan per underlying (chunked at 4 legs, the MLEG close
-        limit) — so the enforcer runs TP/SL/time exits on them.
-
-        OPTIONS ONLY by design (the occ filter below): equity positions are
-        created through plans from the start; adopting stray shares is a
-        non-goal until something actually produces stray shares."""
-        from math import gcd
+        """Fold untracked broker positions into managed TradePlans so the
+        enforcer runs TP/SL/time exits on them. Options adopt as one
+        multi-leg plan per underlying (chunked at 4 legs, the MLEG close
+        limit); stock positions adopt as single-leg equity plans — one per
+        symbol, floor(qty) whole shares (TradePlan.qty is integral; any
+        fractional residue stays visible as untracked and is closed by hand
+        at the broker). tp_pct/sl_pct are fractions of the entry basis."""
+        from math import floor, gcd
 
         untracked = {p["symbol"]: p for p in await self.untracked_positions()}
         chosen = [untracked[s] for s in symbols if s in untracked and untracked[s]["occ"]]
-        if not chosen:
-            raise ValueError("no adoptable untracked option positions in selection")
+        stocks = [untracked[s] for s in symbols
+                  if s in untracked and not untracked[s]["occ"]
+                  and untracked[s].get("asset_class") == "stock"]
+        if not chosen and not stocks:
+            raise ValueError("no adoptable untracked positions in selection")
 
+        account_name = getattr(getattr(self.alpaca, "settings", None),
+                               "alpaca_account_name", None)
         by_underlying: dict[str, list[dict]] = {}
         for p in chosen:
             by_underlying.setdefault(p["occ"]["underlying"], []).append(p)
 
         adopted: list[dict] = []
+        for p in sorted(stocks, key=lambda x: x["symbol"]):
+            shares = floor(abs(p["qty"]))
+            if shares < 1:
+                log.warning("skipping %s: %.4f shares is under one whole "
+                            "share (fractional adoption unsupported)",
+                            p["symbol"], abs(p["qty"]))
+                continue
+            entry = p["side"] * p["avg_entry_price"]
+            if abs(entry) < TICK:
+                entry = TICK  # zero-cost basis: manage on absolute price
+            plan = TradePlan(
+                underlying=p["symbol"][:12],
+                strategy="adopted",
+                asset_class="equity",
+                legs=[{"symbol": p["symbol"], "side": p["side"], "ratio": 1,
+                       "entry": p["avg_entry_price"]}],
+                qty=shares,
+                entry_limit=round(entry, 4),
+                tp_premium=round(entry + abs(entry) * tp_pct, 4),
+                sl_premium=round(entry - abs(entry) * sl_pct, 4),
+                time_stop_utc=time_stop_utc,
+                status="filled",
+                filled_qty=shares,
+                fill_premium=round(entry, 4),
+                account=account_name,
+                notes="adopted from broker positions",
+            )
+            async with self.db.session() as session:
+                session.add(plan)
+                await session.commit()
+                await session.refresh(plan)
+            self.market.broadcast.publish("plans", {"t": "plan", "plan": plan.to_dict()})
+            if self.enforcer:
+                await self.enforcer.arm(plan.id)
+            log.info("adopted %d shares of %s into plan %s",
+                     shares, p["symbol"], plan.id)
+            adopted.append(plan.to_dict())
         for underlying, group in sorted(by_underlying.items()):
             group.sort(key=lambda p: (p["occ"]["expiry"], p["occ"]["strike"]))
             for chunk_start in range(0, len(group), 4):
@@ -262,6 +315,7 @@ class TradeService:
                     status="filled",
                     filled_qty=sets,
                     fill_premium=round(entry, 4),
+                    account=account_name,
                     notes="adopted from broker positions",
                 )
                 async with self.db.session() as session:
@@ -287,6 +341,27 @@ class TradeService:
         book (verified 2026-08-04: fills premarket/postmarket/overnight)."""
         if not self.alpaca.configured:
             raise ValueError("Alpaca keys not configured - trading unavailable")
+
+        if getattr(getattr(self.alpaca, "settings", None),
+                   "trading_mode", "paper") == "live_manual":
+            # LIVE ENTRY GATES. Entries on the live server are discretionary
+            # by definition (the strategy plane does not exist in this
+            # process); refusing strategy_id closes the spoofable payload
+            # field and keeps every live plan under the manual risk rules.
+            if payload.get("strategy_id") is not None:
+                raise ValueError(
+                    "automation ids are not accepted on the live server - "
+                    "manual entries only")
+            # The live account is options level 2: long single-leg only.
+            # Refuse here with a clear message instead of letting the broker
+            # reject the MLEG/short leg downstream.
+            if (payload.get("asset_class") or "option") == "option":
+                option_legs = payload.get("legs") or []
+                if len(option_legs) != 1 or any(
+                        int(leg.get("side", 0)) < 0 for leg in option_legs):
+                    raise ValueError(
+                        "live account is options level 2 - long single-leg "
+                        "calls/puts only (no spreads, no short legs)")
 
         legs = payload["legs"]
         qty = int(payload["qty"])

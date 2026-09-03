@@ -2,10 +2,15 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
 // Backend proxy: the app talks same-origin (/api, /ws) so it works from any
-// host — localhost, a phone on the LAN (`--host`), or a tunnel.
+// host — localhost, a phone on the LAN (`--host`), or a tunnel. BACKEND_URL
+// points a dev server at the isolated LIVE backend instead (:8001) — e.g.
+// `$env:BACKEND_URL="http://localhost:8001"; $env:PORT=5174; npm run dev`.
+// The UI itself is mode-aware at runtime (Account.mode), so one build
+// serves both servers.
+const backend = process.env.BACKEND_URL || "http://localhost:8000";
 const proxy = {
-  "/api": { target: "http://localhost:8000", changeOrigin: true },
-  "/ws": { target: "ws://localhost:8000", ws: true },
+  "/api": { target: backend, changeOrigin: true },
+  "/ws": { target: backend.replace(/^http/, "ws"), ws: true },
 };
 
 // Two apps, one dev server and one build: `/` is the ops console (broker

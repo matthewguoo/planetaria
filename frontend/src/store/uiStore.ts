@@ -4,7 +4,7 @@
  * designer.
  *
  * `terminal` exists only in the trading cockpit (/terminal.html); the ops
- * console renders the other five. Both shells share this store because they
+ * console renders the other six. Both shells share this store because they
  * are separate bundles with separate state — the union is a superset, not a
  * coupling. Each entry point sets its own boot view.
  */

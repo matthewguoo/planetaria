@@ -1,6 +1,6 @@
 /**
  * Header for the trading terminal shell (/terminal.html). The ops console
- * has its own Header.tsx (engine-health StatusPill, five tabs); this one
+ * has its own Header.tsx (engine-health StatusPill, six tabs); this one
  * carries the cockpit concerns — symbol + live price, the WS feed status,
  * audio cues, and the ⚙ system drawer (the console has a whole SYSTEM page;
  * the drawer is the cockpit's version of it).
@@ -8,6 +8,7 @@
 
 import { useEffect, useState } from "react";
 import { cycleAudioMode, getAudioMode, onAudioModeChange } from "../lib/audio";
+import { ModeBadge } from "./ModeBadge";
 import { SystemMenu } from "./System/SystemMenu";
 import { useTradingStore } from "../store/tradingStore";
 import { PriceReadout } from "./PriceReadout";
@@ -124,7 +125,7 @@ export function TerminalHeader() {
         <AudioToggle />
         <SystemButton />
         <StatusPill />
-        <span className="border border-bb-border px-2 py-0.5 text-bb-orange">PAPER</span>
+        <ModeBadge />
       </div>
     </header>
   );

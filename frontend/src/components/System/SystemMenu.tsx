@@ -7,6 +7,7 @@
  * SystemPanels.tsx.
  */
 
+import { useTradingMode } from "../../store/accountStore";
 import { AccountsPanel, FeedSettingsPanel, HealthPanel, useSystemState } from "./SystemPanels";
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
@@ -22,6 +23,7 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 
 export function SystemMenu({ onClose }: { onClose: () => void }) {
   const state = useSystemState();
+  const { live } = useTradingMode();
 
   return (
     <>
@@ -42,7 +44,7 @@ export function SystemMenu({ onClose }: { onClose: () => void }) {
           <Section title="STATE">
             <HealthPanel state={state} />
           </Section>
-          <Section title="PAPER ACCOUNT (restart applies)">
+          <Section title={live ? "LIVE ACCOUNT (pinned by service env)" : "PAPER ACCOUNT (restart applies)"}>
             <AccountsPanel />
           </Section>
           <Section title="FEED / API SETTINGS">

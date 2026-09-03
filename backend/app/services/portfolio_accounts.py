@@ -29,7 +29,10 @@ def _fetch_account_sync(name: str, api_key: str, secret_key: str,
     from alpaca.trading.client import TradingClient
     from alpaca.trading.requests import GetPortfolioHistoryRequest
 
-    client = TradingClient(api_key, secret_key, paper=True)
+    # paper vs live is derived from the key itself (PK=paper, AK=live) so
+    # the read hits the environment the key actually belongs to — the
+    # registry gate upstream decides which keys exist in this process.
+    client = TradingClient(api_key, secret_key, paper=api_key.startswith("PK"))
     acct = client.get_account()
     positions = client.get_all_positions()
     try:

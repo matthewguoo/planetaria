@@ -11,9 +11,7 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
-import pytest_asyncio
 
-from app.db.session import Database
 from app.services.llm import (
     HARDENED_SYSTEM,
     AnalysisError,
@@ -61,14 +59,6 @@ SCHEMA = {"type": "object", "properties": {"direction": {"type": "string"}},
 
 SETTINGS = SimpleNamespace(anthropic_api_key="k", llm_model="claude-opus-5",
                            llm_effort="low")
-
-
-@pytest_asyncio.fixture
-async def db(tmp_path):
-    database = Database()
-    await database.connect(f"sqlite+aiosqlite:///{tmp_path}/t.db")
-    yield database
-    await database.close()
 
 
 def analyst(db, client) -> LLMAnalyst:

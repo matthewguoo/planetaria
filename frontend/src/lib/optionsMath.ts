@@ -7,6 +7,8 @@
  * - prices per share; position P/L multiplies by 100 * qty
  */
 
+import { etDateIso, etParts } from "./et";
+
 export const TRADING_HOURS_PER_YEAR = 252 * 6.5;
 export const RISK_FREE = 0.05;
 
@@ -599,23 +601,12 @@ export function positionIv(legs: Leg[]): number {
 
 /** Trading hours from now (ms) to expiry-day 16:00 ET — mirrors Python. */
 export function tradingHoursToExpiry(expiryIso: string, nowUtcMs: number): number {
-  const et = new Intl.DateTimeFormat("en-US", {
-    timeZone: "America/New_York",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: false,
-  });
-  const parts = Object.fromEntries(et.formatToParts(new Date(nowUtcMs)).map((p) => [p.type, p.value]));
-  const hour = Number(parts.hour === "24" ? "0" : parts.hour);
-  const nowMinutes = hour * 60 + Number(parts.minute) + Number(parts.second) / 60;
+  const parts = etParts(nowUtcMs);
+  const nowMinutes = parts.hour * 60 + parts.minute + parts.second / 60;
   const closeMinutes = 16 * 60;
   const hoursToday = Math.max(0, Math.min((closeMinutes - nowMinutes) / 60, 6.5));
 
-  const todayIso = `${parts.year}-${parts.month}-${parts.day}`;
+  const todayIso = etDateIso(nowUtcMs);
   if (expiryIso === todayIso) return hoursToday;
 
   // Count weekdays strictly after today, up to and including expiry.

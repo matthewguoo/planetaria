@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { getFeedSettings } from "../lib/api";
 import { AccountPage } from "../components/Account/AccountPage";
 import { EnforcementBanner } from "../components/EnforcementBanner";
 import { TerminalHeader } from "../components/TerminalHeader";
@@ -46,17 +47,15 @@ function useDataPumps() {
   const [cadence, setCadence] = useState({ chain: 10_000, account: 30_000, positions: 5_000 });
 
   useEffect(() => {
-    import("../lib/api").then(({ getFeedSettings }) =>
-      getFeedSettings()
-        .then((cfg) =>
-          setCadence({
-            chain: cfg.chain_refresh_s * 1000,
-            account: cfg.account_poll_s * 1000,
-            positions: cfg.positions_poll_s * 1000,
-          }),
-        )
-        .catch(() => {}),
-    );
+    getFeedSettings()
+      .then((cfg) =>
+        setCadence({
+          chain: cfg.chain_refresh_s * 1000,
+          account: cfg.account_poll_s * 1000,
+          positions: cfg.positions_poll_s * 1000,
+        }),
+      )
+      .catch(() => {});
   }, []);
 
   useEffect(() => {

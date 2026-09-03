@@ -13,6 +13,7 @@ import pytest
 from app.services.signals.events import Event
 from app.strategies.afternoon_fly import AfternoonFly, occ_symbol
 from app.strategies.base import StrategyContext
+from tests.conftest import FakeRunner
 
 ET = ZoneInfo("America/New_York")
 MONDAY_2PM = datetime(2026, 8, 10, 14, 0, tzinfo=ET)
@@ -37,23 +38,6 @@ class FakeMarket:
 
     def latest_quote(self, symbol):
         return self.quotes.get(symbol)
-
-
-class FakeRunner:
-    def __init__(self):
-        self.notes: list[dict] = []
-        self.intents: list = []
-        self.book = {"equity": 10_000.0, "available": 10_000.0}
-
-    async def journal_note(self, _id, detail, signal_ids=()):
-        self.notes.append(detail)
-
-    async def execute_intent(self, _id, intent):
-        self.intents.append(intent)
-        return {"id": "plan-1"}
-
-    async def account(self, _id):
-        return self.book
 
 
 def default_quotes(day):

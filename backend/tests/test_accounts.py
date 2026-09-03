@@ -4,9 +4,7 @@ import os
 from types import SimpleNamespace
 
 import pytest
-import pytest_asyncio
 
-from app.db.session import Database
 from app.services.system_state import AccountService
 
 
@@ -18,14 +16,6 @@ def hermetic_env(monkeypatch):
                         lambda self: dict(os.environ))
     for var in [v for v in os.environ if v.startswith("ALPACA")]:
         monkeypatch.delenv(var, raising=False)
-
-
-@pytest_asyncio.fixture
-async def db(tmp_path):
-    database = Database()
-    await database.connect(f"sqlite+aiosqlite:///{tmp_path}/acct.db")
-    yield database
-    await database.close()
 
 
 def settings(**over):
@@ -101,3 +91,82 @@ class TestSelection:
         s2 = settings()
         assert await AccountService(db, s2).apply() == "default"
         assert s2.alpaca_api_key == "PKDEFAULT000"
+
+
+def live_settings(**over):
+    """The isolated live server's settings shape: the paper 'default' pair
+    is still present in .env (shared file) and must be dropped."""
+    return settings(trading_mode="live_manual", live_account_name="live_roth",
+                    **over)
+
+
+def _live_env(monkeypatch):
+    monkeypatch.setenv("ALPACA_ACCOUNT_LIVE_ROTH_API_KEY", "AKROTH111")
+    monkeypatch.setenv("ALPACA_ACCOUNT_LIVE_ROTH_SECRET_KEY", "s-roth")
+    monkeypatch.setenv("ALPACA_ACCOUNT_PLANETARIA1_API_KEY", "PKNEW111")
+    monkeypatch.setenv("ALPACA_ACCOUNT_PLANETARIA1_SECRET_KEY", "s-new")
+    # A live key under a name without the live_ prefix: refused too — the
+    # name is part of the contract, so a paper-book name can never carry
+    # real money by accident.
+    monkeypatch.setenv("ALPACA_ACCOUNT_SNEAKY_API_KEY", "AKSNEAK999")
+    monkeypatch.setenv("ALPACA_ACCOUNT_SNEAKY_SECRET_KEY", "s-sneak")
+    # And a live_-named PAPER key: refused (wrong environment for the name).
+    monkeypatch.setenv("ALPACA_ACCOUNT_LIVE_FAKE_API_KEY", "PKFAKE000")
+    monkeypatch.setenv("ALPACA_ACCOUNT_LIVE_FAKE_SECRET_KEY", "s-fake")
+
+
+class TestLiveRegistry:
+    def test_live_pool_admits_only_live_named_ak_keys(self, db, monkeypatch):
+        _live_env(monkeypatch)
+        reg = AccountService(db, live_settings()).registry()
+        assert set(reg) == {"live_roth"}
+        assert reg["live_roth"] == {"api_key": "AKROTH111", "secret_key": "s-roth"}
+
+    def test_paper_pool_still_drops_live_keys(self, db, monkeypatch):
+        # The paper server's gate is untouched by the live mode's existence.
+        _live_env(monkeypatch)
+        reg = AccountService(db, settings()).registry()
+        assert "live_roth" not in reg and "sneaky" not in reg
+        assert set(reg) == {"default", "planetaria1", "live_fake"}
+
+
+@pytest.mark.asyncio
+class TestLiveApply:
+    async def test_apply_pins_env_account_and_ignores_db_selection(self, db, monkeypatch):
+        _live_env(monkeypatch)
+        # A stale paper selection in the (separate) live DB must not matter.
+        s = live_settings()
+        svc = AccountService(db, s)
+        assert await svc.apply() == "live_roth"
+        assert s.alpaca_api_key == "AKROTH111"
+        assert s.alpaca_secret_key == "s-roth"
+        assert s.alpaca_account_name == "live_roth"
+        out = await svc.list_accounts()
+        assert out["paper_only"] is False
+        assert out["mode"] == "live_manual"
+        assert out["selected"] == out["applied"] == "live_roth"
+        assert out["restart_required"] is False
+
+    async def test_apply_dies_without_live_keys(self, db, monkeypatch):
+        # NO fallback to 'default': that would leave paper keys active on a
+        # process whose client is constructed paper=False.
+        monkeypatch.setenv("ALPACA_ACCOUNT_PLANETARIA1_API_KEY", "PKNEW111")
+        monkeypatch.setenv("ALPACA_ACCOUNT_PLANETARIA1_SECRET_KEY", "s-new")
+        s = live_settings()
+        with pytest.raises(RuntimeError, match="refusing to boot"):
+            await AccountService(db, s).apply()
+        assert s.alpaca_api_key == "PKDEFAULT000"  # untouched, never applied
+
+    async def test_select_refused_on_live(self, db, monkeypatch):
+        _live_env(monkeypatch)
+        svc = AccountService(db, live_settings())
+        await svc.apply()
+        with pytest.raises(ValueError, match="pinned"):
+            await svc.select("live_roth", open_plans=0)
+
+    async def test_paper_apply_unchanged(self, db, monkeypatch):
+        _live_env(monkeypatch)
+        s = settings()
+        assert await AccountService(db, s).apply() == "default"
+        assert s.alpaca_api_key == "PKDEFAULT000"
+        assert (await AccountService(db, s).list_accounts())["paper_only"] is True

@@ -60,8 +60,6 @@ async def update_feed_settings(request: Request, patch: dict) -> dict:
         updated = await request.app.state.feed_settings.update(patch)
     except ValueError as exc:
         raise HTTPException(422, str(exc))
-    # (public_poll_s is stored but applies to nothing since the keyless demo
-    # feed was removed 2026-08-05; field kept for settings-schema stability.)
     return updated
 
 

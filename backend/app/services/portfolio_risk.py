@@ -24,6 +24,12 @@ import time
 import httpx
 
 from app.models.trade import TradePlan
+
+# Daily-history source for beta/correlation: Yahoo's public chart API (no
+# key). Kept independent of Alpaca so risk math works even when the broker
+# data plane is degraded. Endpoint constants live with the other Yahoo
+# client in ah_quotes.
+from app.services.ah_quotes import YAHOO_CHART_URL, YAHOO_HEADERS
 from app.services.options_math import (
     TRADING_HOURS_PER_YEAR,
     bs_greeks,
@@ -31,12 +37,6 @@ from app.services.options_math import (
 )
 
 log = logging.getLogger("app.prisk")
-
-# Daily-history source for beta/correlation: Yahoo's public chart API (no
-# key). Kept independent of Alpaca so risk math works even when the broker
-# data plane is degraded. (Constants lived in the deleted demo feed before.)
-YAHOO_CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
-YAHOO_HEADERS = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) planetaria/1.0"}
 
 HIST_TTL_S = 900.0
 SNAPSHOT_TTL_S = 20.0
@@ -139,7 +139,11 @@ class PortfolioRisk:
 
     def _client(self) -> httpx.AsyncClient:
         if self._http is None:
-            self._http = httpx.AsyncClient(headers=YAHOO_HEADERS, timeout=8.0)
+            from app.services.call_log import http_hooks
+
+            self._http = httpx.AsyncClient(
+                headers=YAHOO_HEADERS, timeout=8.0,
+                event_hooks=http_hooks("data"))
         return self._http
 
     async def close(self) -> None:

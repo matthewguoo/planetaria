@@ -178,6 +178,63 @@ async def test_broker_positions_normalizes_and_caches(service):
     assert service.alpaca.get_all_calls == 1
 
 
+def _stock(symbol, qty, avg):
+    return {
+        "symbol": symbol,
+        "qty": qty,
+        "side": 1 if qty > 0 else -1,
+        "asset_class": "stock",
+        "avg_entry_price": avg,
+        "current_price": None,
+        "market_value": None,
+        "unrealized_pl": None,
+        "occ": None,
+    }
+
+
+@pytest.mark.asyncio
+async def test_adopt_stock_positions_as_single_leg_equity_plans(service, monkeypatch):
+    """The live Roth's leveraged ETFs: whole shares adopt, fractional residue
+    stays untracked, stops are % of the share basis (multiplier 1)."""
+    positions = [
+        _stock("AAPX", 100, 38.60),
+        _stock("AVGG", 12.48, 24.73),   # fractional: adopts floor = 12
+        _stock("DUST", 0.4, 10.0),      # under one share: skipped
+        _pos("SPY260731C00450000", 2, 3.0, "SPY", "2026-07-31", "C", 450.0),
+    ]
+
+    async def fake_broker_positions(max_age_s=5.0):
+        return positions
+
+    monkeypatch.setattr(service, "broker_positions", fake_broker_positions)
+    service.alpaca = SimpleNamespace(
+        configured=True, settings=SimpleNamespace(alpaca_account_name="live_roth"))
+    time_stop = datetime.now(timezone.utc) + timedelta(days=30)
+
+    adopted = await service.adopt_positions(
+        [p["symbol"] for p in positions], tp_pct=0.20, sl_pct=0.10, time_stop_utc=time_stop
+    )
+
+    by_sym = {p["underlying"]: p for p in adopted}
+    assert set(by_sym) == {"AAPX", "AVGG", "SPY"}  # DUST skipped, SPY still options
+    aapx = by_sym["AAPX"]
+    assert aapx["asset_class"] == "equity"
+    assert aapx["qty"] == 100 and aapx["filled_qty"] == 100
+    assert aapx["legs"] == [{"symbol": "AAPX", "side": 1, "ratio": 1, "entry": 38.60}]
+    assert aapx["entry_limit"] == pytest.approx(38.60)
+    assert aapx["tp_premium"] == pytest.approx(38.60 * 1.20)
+    assert aapx["sl_premium"] == pytest.approx(38.60 * 0.90)
+    assert aapx["status"] == "filled"
+    assert aapx["account"] == "live_roth"
+    assert by_sym["AVGG"]["qty"] == 12
+    assert by_sym["SPY"]["asset_class"] == "option"
+    assert by_sym["SPY"]["account"] == "live_roth"  # options branch stamps too now
+    assert set(service.enforcer.armed) == {p["id"] for p in adopted}
+    # The equity legs are covered; the fractional residue of AVGG is not a
+    # separate broker position, so nothing stays untracked but DUST.
+    assert [p["symbol"] for p in await service.untracked_positions()] == ["DUST"]
+
+
 @pytest.mark.asyncio
 async def test_adopt_rejects_unknown_symbols(service, monkeypatch):
     async def fake_broker_positions(max_age_s=5.0):

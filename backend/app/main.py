@@ -30,7 +30,8 @@ log = logging.getLogger("app")
 async def lifespan(app: FastAPI):
     settings = get_settings()
     log.info(
-        "starting (paper=%s, stock_feed=%s, option_feed=%s)",
+        "starting (mode=%s, paper=%s, stock_feed=%s, option_feed=%s)",
+        settings.trading_mode,
         settings.alpaca_paper,
         settings.alpaca_stock_feed,
         settings.alpaca_option_feed,
@@ -53,10 +54,17 @@ app.add_middleware(
 # The ENGINE API (trading commands + system ops) is always mounted; the
 # UI-serving surface (chain, bars REST, browser WebSocket fanout, and the
 # built frontend itself) is skipped in HEADLESS mode — engine-only
-# deployments for reliability.
+# deployments for reliability. On the LIVE server the strategies surface
+# is replaced by a 409 stub: the runner is never constructed there, and
+# the real router would 500 against the missing app.state.
 app.include_router(trading_router)
 app.include_router(system_router)
-app.include_router(strategies_router)
+if get_settings().trading_mode == "paper":
+    app.include_router(strategies_router)
+else:
+    from app.api.routes.live_stubs import router as live_stubs_router
+
+    app.include_router(live_stubs_router)
 app.include_router(monitor_router)
 if not get_settings().headless:
     app.include_router(market_router)
@@ -71,6 +79,7 @@ async def health(request: Request) -> dict:
     return {
         "status": "ok",
         "paper": s.alpaca_paper,
+        "mode": s.trading_mode,
         "stock_feed": s.alpaca_stock_feed,
         "option_feed": s.alpaca_option_feed,
         "alpaca_keys_configured": bool(s.alpaca_api_key and s.alpaca_secret_key),

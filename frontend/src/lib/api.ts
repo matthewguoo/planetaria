@@ -42,6 +42,8 @@ export type RiskSettings = {
   manual_equity_require_stop: boolean;
 };
 
+export type TradingMode = "paper" | "live_manual";
+
 export type Account = {
   equity: number;
   cash: number;
@@ -49,6 +51,9 @@ export type Account = {
   daytrade_count: number;
   status: string;
   paper: boolean;
+  /** Which server this UI is talking to. The live server accepts manual
+   * entries only (strategy plane never constructed there). */
+  mode: TradingMode;
   risk: RiskSettings;
   day_realized_pnl: number;
 };
@@ -222,6 +227,7 @@ export type SystemState = {
   broker: {
     configured: boolean;
     paper: boolean;
+    mode: TradingMode;
     account_status: string;
     /** Broker calendar as the enforcer caches it. `known: false` until the
      * first successful fetch — absent is not the same as closed. */
@@ -283,7 +289,6 @@ export type FeedSettings = {
   chain_refresh_s: number;
   positions_poll_s: number;
   account_poll_s: number;
-  public_poll_s: number;
   stock_feed: "iex" | "sip";
   option_feed: "indicative" | "opra";
   restart_required_keys: string[];
@@ -613,6 +618,7 @@ export type AccountList = {
   applied: string | null;
   restart_required: boolean;
   paper_only: boolean;
+  mode: TradingMode;
 };
 
 export const getAccounts = () =>

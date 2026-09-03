@@ -8,7 +8,6 @@ from datetime import datetime, timedelta, timezone
 import pytest
 import pytest_asyncio
 
-from app.db.session import Database
 from app.models.trade import OPEN_STATUSES, TERMINAL_STATUSES, TradePlan
 from app.services.plan_fsm import (
     MONITOR_STATES,
@@ -28,14 +27,6 @@ class _Broadcast:
 
     def publish(self, topic, msg):
         self.published.append((topic, msg))
-
-
-@pytest_asyncio.fixture
-async def db(tmp_path):
-    database = Database()
-    await database.connect(f"sqlite+aiosqlite:///{tmp_path}/fsm.db")
-    yield database
-    await database.close()
 
 
 @pytest_asyncio.fixture

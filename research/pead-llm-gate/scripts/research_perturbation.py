@@ -66,7 +66,7 @@ GEN_MODEL = MODEL          # the editor and the scorer are the same model; a
 # the dose rung — a small miss where `reverse` is a large one. A reader's
 # confidence should track the dose; a rememberer's output cannot, because it is
 # not consuming the input.
-VARIANTS = ("reverse", "placebo", "mild")
+VARIANTS = ("reverse", "placebo", "mild", "rescale")
 
 EDIT_SCHEMA = {
     "type": "object",
@@ -134,6 +134,37 @@ INSTRUCTION = {
         "relations phone number, street addresses. Do NOT touch revenue, "
         "EPS, margins, guidance, segment results, cash flow, or any figure a "
         "reader would use to judge the quarter."
+    ),
+    # THE ARM THE STUDY'S OWN SCRUB SHOULD HAVE BEEN. Section 5.7 removed
+    # names and dates and the model still identified the issuer with HIGH
+    # confidence on 436 of 437 releases, because it never touched the
+    # magnitudes — and $94.9bn of quarterly revenue is an identity as surely
+    # as a ticker is. Consistent rescaling destroys that fingerprint while
+    # preserving every quantity a judgement actually rests on: margins,
+    # growth rates, beat size, segment mix, the ratio of guidance to the
+    # quarter just reported are all invariant under a single multiplier.
+    "rescale": (
+        "ANONYMISE this release so its issuer cannot be identified, while "
+        "preserving everything a reader needs to judge the quarter.\n"
+        "1. RESCALE every currency amount in the document — revenue, EPS, "
+        "segment results, cash, guidance, prior-year comparatives, every one "
+        "— by the SAME multiplier {k}. Round naturally. Because the "
+        "multiplier is common to all of them, margins, growth rates, beat "
+        "sizes and every ratio survive unchanged; only the absolute scale "
+        "moves, and the absolute scale is the fingerprint.\n"
+        "2. Replace the company name, ticker, brand names, product and "
+        "segment names, executive names and headquarters city with neutral "
+        "equivalents ('the Company', 'the flagship hardware line', 'the "
+        "Chief Executive Officer'). Keep segment structure and relative size "
+        "intact.\n"
+        "3. Remove or generalise every date, quarter label and fiscal-year "
+        "reference.\n"
+        "4. Do NOT change unit COUNTS that are not currency (subscribers, "
+        "shipments) unless they are distinctive enough to name the issuer, "
+        "in which case rescale them by {k} as well.\n"
+        "Percentages, margins and growth rates must be left exactly as they "
+        "are — rescaling them would destroy the economics rather than the "
+        "identity."
     ),
 }
 
@@ -247,6 +278,20 @@ def _wait(api, batch_id: str, label: str) -> None:
         time.sleep(30)
 
 
+def _instruction(variant: str, row) -> str:
+    """The edit instruction, with the rescale multiplier bound per event.
+
+    Deterministic in (symbol, date) so a re-run reproduces the same document,
+    and drawn across a wide range so no single scale becomes the new
+    fingerprint.
+    """
+    if variant != "rescale":
+        return INSTRUCTION[variant]
+    rng = random.Random(f"{row['symbol']}_{row['date']}")
+    k = round(rng.choice([0.11, 0.17, 0.23, 0.31, 0.43, 2.7, 3.9, 5.3, 7.1, 9.4]), 2)
+    return INSTRUCTION["rescale"].replace("{k}", f"x{k}")
+
+
 def _variants_for(args) -> list[tuple[str, pd.Series]]:
     """(variant, event) pairs to build. `mild` runs on a prefix of the sample
     so the dose rung is a strict subset — the same events carry both rungs,
@@ -256,6 +301,7 @@ def _variants_for(args) -> list[tuple[str, pd.Series]]:
     for i, (_, row) in enumerate(sample.iterrows()):
         jobs.append(("reverse", row))
         jobs.append(("placebo", row))
+        jobs.append(("rescale", row))
         if args.dose and i < args.dose:
             jobs.append(("mild", row))
     return jobs
@@ -268,6 +314,8 @@ def stage_generate(args) -> None:
 
     OUT.mkdir(parents=True, exist_ok=True)
     jobs = _variants_for(args)
+    if args.only:
+        jobs = [(v, r) for v, r in jobs if v == args.only]
     reqs = []
     for variant, row in jobs:
         path = TEXTS / f"{row['symbol']}_{str(row['date'])[:10]}.txt"
@@ -284,8 +332,8 @@ def stage_generate(args) -> None:
                                              "schema": EDIT_SCHEMA},
                                   "effort": "medium"},
                 "messages": [{"role": "user", "content":
-                              f"{INSTRUCTION[variant]}\n\n<release>\n{text}\n"
-                              f"</release>"}],
+                              f"{_instruction(variant, row)}\n\n<release>\n"
+                              f"{text}\n</release>"}],
             },
         })
     print(f"generate: {len(reqs)} edit lists")
@@ -349,9 +397,27 @@ def stage_submit(args) -> None:
             (OUT / "variants.jsonl").read_text(encoding="utf-8").splitlines()]
     reqs = []
     for r in rows:
-        req = build_request({"symbol": r["symbol"], "date": r["date"],
-                             "run5d": None},
-                            "named", r["text"], r["symbol"], "medium")
+        arm = "blind" if r["variant"] == "rescale" else "named"
+        if arm == "blind":
+            # build_request's blind path re-anonymises and would reject text
+            # that is already scrubbed, so the request is assembled directly
+            # with the same system and schema it would have used.
+            from research_llm_contamination import (
+                BLIND_SCHEMA, BLIND_SYSTEM, task_blind,
+            )
+            req = {"custom_id": r["custom_id"], "params": {
+                "model": MODEL, "max_tokens": 4096, "system": BLIND_SYSTEM,
+                "thinking": {"type": "adaptive"},
+                "output_config": {"format": {"type": "json_schema",
+                                             "schema": BLIND_SCHEMA},
+                                  "effort": "medium"},
+                "messages": [{"role": "user", "content":
+                              task_blind(None) + "\n\n<data>\n"
+                              + r["text"] + "\n</data>"}]}}
+        else:
+            req = build_request({"symbol": r["symbol"], "date": r["date"],
+                                 "run5d": None},
+                                "named", r["text"], r["symbol"], "medium")
         if req is None:
             continue
         # Same system, same schema, same task text, same model, same effort —
@@ -556,6 +622,7 @@ def main() -> None:
     ap.add_argument("--seed", type=int, default=20260807)
     ap.add_argument("--budget", type=float, default=25.0)
     ap.add_argument("--dry-run", dest="dry_run", action="store_true")
+    ap.add_argument("--only", default="", help="restrict to one variant")
     a = ap.parse_args()
     {"plan": stage_plan, "generate": stage_generate,
      "submit": stage_submit, "report": stage_report}[a.stage](a)

@@ -1,3 +1,4 @@
+import { ModeBadge } from "./ModeBadge";
 import { useSystemState } from "./System/SystemPanels";
 import { useUiStore, type View } from "../store/uiStore";
 
@@ -68,7 +69,7 @@ export function Header() {
           </button>
         ))}
         <StatusPill />
-        <span className="border border-bb-border px-2 py-0.5 text-bb-orange">PAPER</span>
+        <ModeBadge />
       </div>
     </header>
   );

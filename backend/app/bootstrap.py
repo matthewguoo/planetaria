@@ -25,6 +25,14 @@ from app.services.trade_service import TradeService
 log = logging.getLogger("app.bootstrap")
 
 
+def strategy_plane_enabled(settings: Settings) -> bool:
+    """The strategy plane — bus, feeds, signal store, runner, breakers —
+    exists only on the paper server. In live_manual mode NONE of it is
+    constructed (not merely disabled): the only order-entry path in the
+    live process is the human ticket, structurally."""
+    return getattr(settings, "trading_mode", "paper") == "paper"
+
+
 async def startup(app: FastAPI, settings: Settings) -> None:
     redis = RedisFacade(settings.redis_url)
     await redis.connect()
@@ -51,6 +59,11 @@ async def startup(app: FastAPI, settings: Settings) -> None:
     try:
         await accounts.apply()
     except Exception:
+        if settings.trading_mode == "live_manual":
+            # A live boot without its pinned account must die here — the
+            # fallback below would leave paper keys in settings with the
+            # client about to be constructed paper=False.
+            raise
         log.exception("account selection failed - using default keys")
     app.state.accounts = accounts
 
@@ -123,6 +136,14 @@ async def startup(app: FastAPI, settings: Settings) -> None:
         name="wake-watchdog",
     )
 
+    if not strategy_plane_enabled(settings):
+        # LIVE SERVER: everything below this line is automation that can
+        # originate orders. It is never constructed here — the enforcer,
+        # streams, and reconcile loops above are the whole live runtime.
+        log.info("live_manual: strategy plane NOT constructed "
+                 "(no bus, no feeds, no runner, no breakers)")
+        return
+
     # Strategy data plane: DataFeed adapters normalize external sources into
     # journaled events on the in-process bus; strategies subscribe by type.
     # Each feed is one supervised connection — a feed crash restarts with
@@ -151,6 +172,18 @@ async def startup(app: FastAPI, settings: Settings) -> None:
                             name=f"feed-{feed.name}")
         for feed in feeds
     ]
+
+    # Signal retention: EDGAR journals up to 20k chars of press-release text
+    # per 8-K, so the table grows without bound unless pruned. plan_events —
+    # the trade audit trail — is a different table and is never pruned.
+    async def signal_prune_loop() -> None:
+        while True:
+            await signal_store.prune()
+            await asyncio.sleep(24 * 3600)
+
+    app.state.signal_prune_task = asyncio.create_task(
+        supervise("signal-prune", signal_prune_loop), name="signal-prune"
+    )
 
     # Strategy runtime: one supervised task per enabled instance, intents
     # funneled through the SAME place_trade path human clicks use. State
@@ -196,6 +229,8 @@ async def shutdown(app: FastAPI) -> None:
         await state.strategy_runner.shutdown()
     for task in getattr(state, "feed_tasks", ()):
         task.cancel()
+    if getattr(state, "signal_prune_task", None):
+        state.signal_prune_task.cancel()
     if getattr(state, "reconcile_task", None):
         state.reconcile_task.cancel()
     if getattr(state, "reconcile_loop_task", None):

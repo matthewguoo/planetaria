@@ -114,8 +114,11 @@ class AhQuoteFeed:
 
     def _client(self) -> httpx.AsyncClient:
         if self._http is None:
+            from app.services.call_log import http_hooks
+
             self._http = httpx.AsyncClient(
-                headers=YAHOO_HEADERS, timeout=6.0, transport=self._transport)
+                headers=YAHOO_HEADERS, timeout=6.0, transport=self._transport,
+                event_hooks=http_hooks("data"))
         return self._http
 
     async def close(self) -> None:

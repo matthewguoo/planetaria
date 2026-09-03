@@ -7,9 +7,7 @@ from types import SimpleNamespace
 
 import httpx
 import pytest
-import pytest_asyncio
 
-from app.db.session import Database
 from app.services.signals.earnings_calendar import (
     EarningsCalendarFeed,
     seconds_until_next_fetch,
@@ -34,14 +32,6 @@ def client(payload=None, status=200) -> httpx.AsyncClient:
         return httpx.Response(status, json=payload if payload is not None else CALENDAR)
 
     return httpx.AsyncClient(transport=httpx.MockTransport(handler))
-
-
-@pytest_asyncio.fixture
-async def db(tmp_path):
-    database = Database()
-    await database.connect(f"sqlite+aiosqlite:///{tmp_path}/cal.db")
-    yield database
-    await database.close()
 
 
 def make_feed(db):

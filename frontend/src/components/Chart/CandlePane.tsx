@@ -18,6 +18,7 @@ import {
   type ScenarioModel,
   type Smiles,
 } from "../../lib/optionsMath";
+import { etMinutes, etOffsetMinutes } from "../../lib/et";
 import { computeBollinger, computeEma, computeVwap } from "../../lib/indicators";
 import { buildPositionView } from "../../lib/positionView";
 import type { Designer } from "../../lib/useDesigner";
@@ -158,20 +159,6 @@ type DragTarget =
   | { kind: "sl" }
   | { kind: "timestop" };
 
-function currentEtMinutes(): number {
-  const parts = Object.fromEntries(
-    new Intl.DateTimeFormat("en-US", {
-      timeZone: "America/New_York",
-      hour: "2-digit",
-      minute: "2-digit",
-      hour12: false,
-    })
-      .formatToParts(new Date())
-      .map((p) => [p.type, p.value]),
-  );
-  return Number(parts.hour === "24" ? 0 : parts.hour) * 60 + Number(parts.minute);
-}
-
 type ChipRect = { i: number; x: number; y: number; w: number; label: string };
 
 function chipLabel(overlay: StrategyOverlay, i: number): string {
@@ -209,7 +196,7 @@ export function CandlePane({
 }: {
   designer: Designer;
   /** "none": the host renders ChartHud itself (desktop left sidebar). */
-  hudVariant?: "full" | "chips" | "none";
+  hudVariant: "chips" | "none";
 }) {
   const symbol = useTradingStore((s) => s.symbol);
   const tf = useTradingStore((s) => s.tf);
@@ -805,7 +792,7 @@ export function CandlePane({
             const tfMinutes = TF_MS[useTradingStore.getState().tf] / 60000;
             const idx = xToIndex(x, viewRef.current, layout);
             const hours = ((idx - anchorIdx) * tfMinutes) / 60;
-            const nowMin = currentEtMinutes();
+            const nowMin = etMinutes();
             const maxMin = Math.min(15 * 60 + 55, nowMin + overlayNow.hoursToExpiry * 60);
             const targetMin = Math.max(
               nowMin + 5,
@@ -1751,26 +1738,6 @@ function drawVolume(
     ctx.fillStyle = bars.c[i] >= bars.o[i] ? COLORS.volUp : COLORS.volDown;
     ctx.fillRect(x - bodyW / 2, layout.plotH - h, bodyW, h);
   }
-}
-
-/** ET wall-clock offset (minutes to add to UTC epoch-minutes), one Intl call.
- * Cached per render; constant across a chart window except across a DST
- * transition mid-window, where being an hour off on shading is cosmetic. */
-function etOffsetMinutes(ms: number): number {
-  const parts = Object.fromEntries(
-    new Intl.DateTimeFormat("en-US", {
-      timeZone: "America/New_York",
-      year: "numeric", month: "2-digit", day: "2-digit",
-      hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
-    })
-      .formatToParts(new Date(ms))
-      .map((p) => [p.type, p.value]),
-  );
-  const wall = Date.UTC(
-    Number(parts.year), Number(parts.month) - 1, Number(parts.day),
-    Number(parts.hour === "24" ? 0 : parts.hour), Number(parts.minute), Number(parts.second),
-  );
-  return Math.round((wall - ms) / 60_000);
 }
 
 const RTH_START_MIN = 9 * 60 + 30; // 09:30 ET

@@ -6,8 +6,9 @@
  */
 
 import { clockHms } from "../../lib/format";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { getMonitorCalls, type MonitorCall, type MonitorSnapshot } from "../../lib/api";
+import { usePoll } from "../../lib/usePoll";
 
 const POLL_MS = 2_000;
 
@@ -55,24 +56,21 @@ function CallColumn({
   const [snap, setSnap] = useState<MonitorSnapshot | null>(null);
   const [error, setError] = useState(false);
 
-  useEffect(() => {
-    let alive = true;
-    const load = () =>
+  usePoll(
+    (alive) =>
       getMonitorCalls(category)
         .then((s) => {
-          if (alive) {
+          if (alive()) {
             setSnap(s);
             setError(false);
           }
         })
-        .catch(() => alive && setError(true));
-    load();
-    const t = window.setInterval(load, POLL_MS);
-    return () => {
-      alive = false;
-      window.clearInterval(t);
-    };
-  }, [category]);
+        .catch(() => {
+          if (alive()) setError(true);
+        }),
+    POLL_MS,
+    [category],
+  );
 
   const count = snap?.status.counts[category] ?? 0;
   const errors = snap?.status.errors[category] ?? 0;

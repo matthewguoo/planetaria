@@ -4,9 +4,7 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 
 import pytest
-import pytest_asyncio
 
-from app.db.session import Database
 from app.models.trade import TradePlan
 from app.services.plan_fsm import PlanEvent, PlanStateMachine
 from app.services.system_state import DEFAULT_FEED, FeedSettingsService
@@ -15,14 +13,6 @@ from app.services.system_state import DEFAULT_FEED, FeedSettingsService
 class _Broadcast:
     def publish(self, topic, msg):
         pass
-
-
-@pytest_asyncio.fixture
-async def db(tmp_path):
-    database = Database()
-    await database.connect(f"sqlite+aiosqlite:///{tmp_path}/sys.db")
-    yield database
-    await database.close()
 
 
 async def make_plan(db, status="planned") -> str:
@@ -79,14 +69,14 @@ class TestFeedSettings:
         cfg = await svc.get()
         for key in DEFAULT_FEED:
             assert key in cfg
-        updated = await svc.update({"public_poll_s": 10, "option_feed": "opra"})
-        assert updated["public_poll_s"] == 10
+        updated = await svc.update({"positions_poll_s": 10, "option_feed": "opra"})
+        assert updated["positions_poll_s"] == 10
         assert updated["option_feed"] == "opra"
         # Persisted:
         again = await svc.get()
-        assert again["public_poll_s"] == 10
+        assert again["positions_poll_s"] == 10
         with pytest.raises(ValueError):
-            await svc.update({"public_poll_s": 0.1})  # below range
+            await svc.update({"positions_poll_s": 0.1})  # below range
         with pytest.raises(ValueError):
             await svc.update({"stock_feed": "bloomberg"})  # not an option
         with pytest.raises(ValueError):

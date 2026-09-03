@@ -1,5 +1,5 @@
 #!/bin/sh
-# Fast gate before every commit: ruff + frontend typecheck (~15s).
+# Fast gate before every commit: ruff + frontend typecheck + lint (~15s).
 # Full suite stays manual: .\check.ps1
 # Bypass in an emergency with: git commit --no-verify
 # Enabled via: git config core.hooksPath .githooks

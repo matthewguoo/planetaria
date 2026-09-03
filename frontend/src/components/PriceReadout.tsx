@@ -7,6 +7,7 @@
  */
 
 import { useEffect, useState } from "react";
+import { etParts } from "../lib/et";
 import { freshSpot, quoteIsStale, useTradingStore } from "../store/tradingStore";
 import { useStrategyStore } from "../store/strategyStore";
 import { fmtTimeET as fmtEt } from "./Chart/scales";
@@ -16,18 +17,8 @@ import { fmtTimeET as fmtEt } from "./Chart/scales";
  * Sun 20:00 → Fri 04:00) — the app polls its last trade so the chart keeps
  * moving. Only Sat and most of Sunday are truly CLOSED. */
 export function sessionPhase(nowMs: number = Date.now()): "PRE" | "RTH" | "AH" | "O/N" | "CLOSED" {
-  const parts = Object.fromEntries(
-    new Intl.DateTimeFormat("en-US", {
-      timeZone: "America/New_York",
-      weekday: "short",
-      hour: "2-digit",
-      minute: "2-digit",
-      hour12: false,
-    })
-      .formatToParts(new Date(nowMs))
-      .map((p) => [p.type, p.value]),
-  );
-  const minute = Number(parts.hour === "24" ? 0 : parts.hour) * 60 + Number(parts.minute);
+  const parts = etParts(nowMs);
+  const minute = parts.hour * 60 + parts.minute;
   const day = parts.weekday;
   if (day === "Sat") return "CLOSED";
   if (day === "Sun") return minute >= 20 * 60 ? "O/N" : "CLOSED";
