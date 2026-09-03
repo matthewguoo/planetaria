@@ -14,6 +14,7 @@ import logging
 import time
 from functools import partial
 
+import websockets
 from alpaca.data.enums import DataFeed, OptionsFeed
 from alpaca.data.historical.option import OptionHistoricalDataClient
 from alpaca.data.historical.stock import StockHistoricalDataClient
@@ -67,6 +68,81 @@ def is_transient(exc: BaseException) -> bool:
     return status is not None and (status == 429 or status >= 500)
 
 
+IDLE_POLL_S = 0.5          # how often an unsubscribed stream checks for handlers
+REFUSAL_BACKOFF_MAX_S = 60.0
+
+
+class _PatientStreamMixin:
+    """alpaca-py's DataStream._run_forever burns a core in two places, both
+    measured on the live box 2026-09-03 (100% CPU for ten hours): it
+    busy-waits with sleep(0) until the first subscription, and it retries a
+    REFUSED connection — an auth-time ValueError such as "connection limit
+    exceeded", which is what the free data plan returns when another
+    process already holds the account's one websocket — with no delay at
+    all. This override keeps the SDK loop's exact semantics (stop queue,
+    subscribe-on-connect, the 'insufficient subscription' bail-out) and adds
+    the two missing sleeps. While refused, quotes come from REST polling
+    (the enforcer's own path); the stream is retried once a minute and
+    picked up the moment it is free."""
+
+    async def _run_forever(self) -> None:
+        self._loop = asyncio.get_running_loop()
+        while not any(
+            v for k, v in self._handlers.items()
+            if k not in ("cancelErrors", "corrections")
+        ):
+            if not self._stop_stream_queue.empty():
+                self._stop_stream_queue.get(timeout=1)
+                return
+            await asyncio.sleep(IDLE_POLL_S)
+        log.info("started %s stream", self._name)
+        self._should_run = True
+        self._running = False
+        refusals = 0
+        while True:
+            try:
+                if not self._should_run:
+                    log.info("%s stream stopped", self._name)
+                    return
+                if not self._running:
+                    log.info("starting %s websocket connection", self._name)
+                    await self._start_ws()
+                    await self._send_subscribe_msg()
+                    self._running = True
+                    refusals = 0
+                await self._consume()
+            except websockets.WebSocketException as wse:
+                await self.close()
+                self._running = False
+                log.warning("data websocket error, restarting connection: %s", wse)
+            except ValueError as ve:
+                if "insufficient subscription" in str(ve):
+                    await self.close()
+                    self._running = False
+                    log.exception("error during websocket communication: %s", ve)
+                    return
+                refusals += 1
+                delay = min(REFUSAL_BACKOFF_MAX_S, 2.0 ** refusals)
+                log.error("%s stream refused (%s) - retrying in %.0fs "
+                          "(quotes fall back to REST polling meanwhile)",
+                          self._name, ve, delay)
+                await self.close()
+                self._running = False
+                await asyncio.sleep(delay)
+            except Exception as e:
+                log.exception("error during websocket communication: %s", e)
+            finally:
+                await asyncio.sleep(0)
+
+
+class PatientStockDataStream(_PatientStreamMixin, StockDataStream):
+    pass
+
+
+class PatientOptionDataStream(_PatientStreamMixin, OptionDataStream):
+    pass
+
+
 class AlpacaService:
     def __init__(self, settings: Settings):
         self.settings = settings
@@ -89,11 +165,13 @@ class AlpacaService:
 
     def make_stock_stream(self) -> StockDataStream:
         s = self.settings
-        return StockDataStream(s.alpaca_api_key, s.alpaca_secret_key, feed=self.stock_feed)
+        return PatientStockDataStream(s.alpaca_api_key, s.alpaca_secret_key,
+                                      feed=self.stock_feed)
 
     def make_option_stream(self) -> OptionDataStream:
         s = self.settings
-        return OptionDataStream(s.alpaca_api_key, s.alpaca_secret_key, feed=self.option_feed)
+        return PatientOptionDataStream(s.alpaca_api_key, s.alpaca_secret_key,
+                                       feed=self.option_feed)
 
     def make_trading_stream(self) -> TradingStream:
         s = self.settings
