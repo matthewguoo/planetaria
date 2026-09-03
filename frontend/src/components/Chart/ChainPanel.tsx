@@ -7,6 +7,7 @@
  */
 
 import { useEffect, useRef } from "react";
+import { useCapabilities } from "../../lib/capabilities";
 import { nearestStrike, useStrategyStore } from "../../store/strategyStore";
 import { useTradingStore } from "../../store/tradingStore";
 
@@ -21,6 +22,8 @@ export function ChainPanel() {
   const quote = useTradingStore((s) => s.quote);
   const atmRef = useRef<HTMLTableRowElement>(null);
   const scrolledRef = useRef<string | null>(null);
+  // Account capability: no S below level 3 (short legs), no B/S below 2.
+  const caps = useCapabilities();
 
   const spot = quote?.mid || chain?.spot || 0;
   const rows = (() => {
@@ -52,7 +55,8 @@ export function ChainPanel() {
     return i >= 0 ? { side: sides[i], ratio: ratios[i] ?? 1 } : null;
   };
 
-  const bs = (right: "C" | "P", strike: number, disabled: boolean) => (
+  const bs = (right: "C" | "P", strike: number, disabled: boolean) =>
+    caps.optionsAllowed ? (
     <span className="inline-flex gap-px">
       <button
         className="border border-bb-border px-1 text-[9px] text-bb-profit hover:bg-bb-profit hover:text-black disabled:opacity-30"
@@ -62,6 +66,7 @@ export function ChainPanel() {
       >
         B
       </button>
+      {caps.spreadsAllowed && (
       <button
         className="border border-bb-border px-1 text-[9px] text-bb-loss hover:bg-bb-loss hover:text-black disabled:opacity-30"
         disabled={disabled}
@@ -70,8 +75,9 @@ export function ChainPanel() {
       >
         S
       </button>
+      )}
     </span>
-  );
+    ) : null;
 
   if (!chain || !expiry) {
     return (
@@ -160,7 +166,9 @@ export function ChainPanel() {
         </table>
       </div>
       <div className="shrink-0 border-t border-bb-border px-2 py-0.5 text-[9px] text-bb-muted">
-        B/S adds a leg to the working position · max 4 legs
+        {caps.spreadsAllowed
+          ? "B/S adds a leg to the working position · max 4 legs"
+          : `level ${caps.optionsLevel}: long single-leg only — B replaces the working leg`}
       </div>
     </div>
   );

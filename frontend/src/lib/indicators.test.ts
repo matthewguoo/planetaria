@@ -4,6 +4,9 @@ import {
   computeAtr,
   computeBollinger,
   computeEma,
+  computeMacd,
+  computeRsi,
+  computeSma,
   computeVwap,
   realizedVolAnnualized,
   sessionStarts,
@@ -94,5 +97,34 @@ describe("breakevensForBasis", () => {
     expect(bes).toHaveLength(2);
     expect(bes[0]).toBeCloseTo(443.6, 2);
     expect(bes[1]).toBeCloseTo(461.4, 2);
+  });
+});
+
+describe("SMA / RSI / MACD", () => {
+  it("SMA averages the trailing window, partial at the start", () => {
+    const c = Float64Array.from([1, 2, 3, 4, 5]);
+    expect(Array.from(computeSma(c, 5, 3))).toEqual([1, 1.5, 2, 3, 4]);
+  });
+
+  it("RSI reads 50 on a flat tape, 100 on pure gains, and stays in [0,100]", () => {
+    const flat = new Float64Array(30).fill(100);
+    expect(computeRsi(flat, 30)[29]).toBe(50);
+    const up = Float64Array.from({ length: 30 }, (_, i) => 100 + i);
+    expect(computeRsi(up, 30)[29]).toBe(100);
+    const wiggle = Float64Array.from({ length: 60 }, (_, i) => 100 + Math.sin(i / 3) * 5);
+    for (const v of computeRsi(wiggle, 60)) {
+      expect(v).toBeGreaterThanOrEqual(0);
+      expect(v).toBeLessThanOrEqual(100);
+    }
+  });
+
+  it("MACD is fast EMA minus slow EMA with a signal EMA and histogram", () => {
+    const c = Float64Array.from({ length: 80 }, (_, i) => 100 + i * 0.5);
+    const { macd, signal, hist } = computeMacd(c, 80);
+    const f = computeEma(c, 80, 12);
+    const sl = computeEma(c, 80, 26);
+    expect(macd[79]).toBeCloseTo(f[79] - sl[79], 9);
+    expect(hist[79]).toBeCloseTo(macd[79] - signal[79], 9);
+    expect(macd[79]).toBeGreaterThan(0);
   });
 });

@@ -1,3 +1,4 @@
+import { presetAllowed, useCapabilities } from "../../lib/capabilities";
 import type { Designer } from "../../lib/useDesigner";
 import {
   availableStrikes,
@@ -36,11 +37,16 @@ export function StrategyPanel({ designer }: { designer: Designer }) {
   const removeLeg = useStrategyStore((s) => s.removeLeg);
 
   const snaps = availableStrikes(chain, expiry);
+  // Account capability: presets the level cannot place are not offered.
+  const caps = useCapabilities();
 
   return (
     <div className="panel flex min-w-0 flex-col">
       <div className="panel-title">
         STRATEGY{modified ? " · CUSTOM" : ""}{designer.demo ? " · DEMO CHAIN" : ""}
+        {!caps.spreadsAllowed && caps.loaded && (
+          <span className="ml-2 text-[9px] text-bb-orange" title="Account capability (ACCOUNT page): long single-leg only">· L{caps.optionsLevel}</span>
+        )}
       </div>
       <div className="flex min-h-0 flex-1 flex-col">
         <div className="flex items-center gap-1 border-b border-bb-border p-1">
@@ -50,7 +56,7 @@ export function StrategyPanel({ designer }: { designer: Designer }) {
               picked option equals its current value — so without this,
               re-selecting the displayed preset to reset it did nothing. */}
           <select
-            className="min-w-0 flex-1 border border-bb-border bg-black px-1 py-0.5 text-[11px] text-bb-amber outline-none"
+            className="fld-i is-select min-w-0 flex-1"
             value={modified || edited ? "__edited__" : kind}
             onChange={(e) => setKind(e.target.value as StrategyKind)}
             aria-label="Strategy preset"
@@ -63,7 +69,7 @@ export function StrategyPanel({ designer }: { designer: Designer }) {
             {GROUPS.map((group) => (
               <optgroup key={group} label={group}>
                 {(Object.keys(STRATEGIES) as StrategyKind[])
-                  .filter((k) => STRATEGIES[k].group === group)
+                  .filter((k) => STRATEGIES[k].group === group && presetAllowed(k, caps.optionsLevel))
                   .map((k) => (
                     <option key={k} value={k}>
                       {STRATEGIES[k].label + PLACABILITY_BADGE[strategyPlacability(k)]}
@@ -73,7 +79,7 @@ export function StrategyPanel({ designer }: { designer: Designer }) {
             ))}
           </select>
           <select
-            className="w-32 border border-bb-border bg-black px-1 py-0.5 text-[11px] text-bb-amber outline-none"
+            className="fld-i is-select w-md"
             value={expiry ?? ""}
             onChange={(e) => setExpiry(e.target.value)}
             aria-label="Expiration"
@@ -121,7 +127,7 @@ export function StrategyPanel({ designer }: { designer: Designer }) {
                   : "—"}
               </span>
               <select
-                className="min-w-0 flex-1 border border-bb-border bg-black px-1 py-0.5 text-right text-[11px] text-white outline-none"
+                className="fld-i is-select is-white min-w-0 flex-1"
                 value={strikes[i] ?? ""}
                 onChange={(e) => setStrike(i, Number(e.target.value))}
                 aria-label={`Leg ${i + 1} strike`}
@@ -134,7 +140,7 @@ export function StrategyPanel({ designer }: { designer: Designer }) {
               </select>
               <span className="flex shrink-0 gap-px">
                 <button
-                  className="border border-bb-border px-1.5 text-[11px] text-bb-muted hover:text-bb-amber"
+                  className="fld-b"
                   onClick={() => decRatio(i)}
                   title="Fewer contracts — removes the leg at ×1"
                   aria-label={`Leg ${i + 1} fewer contracts`}
@@ -142,14 +148,14 @@ export function StrategyPanel({ designer }: { designer: Designer }) {
                   −
                 </button>
                 <button
-                  className="border border-bb-border px-1.5 text-[11px] text-bb-muted hover:text-bb-amber"
+                  className="fld-b"
                   onClick={() => setRatio(i, (ratios[i] ?? 1) + 1)}
                   aria-label={`Leg ${i + 1} more contracts`}
                 >
                   +
                 </button>
                 <button
-                  className="border border-bb-border px-1.5 text-[11px] text-bb-muted hover:text-bb-loss disabled:opacity-30"
+                  className="fld-b hover:!border-bb-loss hover:!text-bb-loss"
                   disabled={strikes.length <= 1}
                   onClick={() => removeLeg(i)}
                   aria-label={`Remove leg ${i + 1}`}

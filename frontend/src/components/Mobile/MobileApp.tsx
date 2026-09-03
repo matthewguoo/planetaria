@@ -1,87 +1,39 @@
 /**
- * Phone layout (< 640px): the candle chart IS the screen. A slim header,
- * a timeframe/overlay strip, zoom buttons, and a bottom nav whose sheets
- * reuse the desktop panels unchanged (Strategy/Sizing/Order, chain,
- * positions drawer, account page). No desktop file grows for this — the
- * mobile shell lives entirely under components/Mobile/.
+ * Phone shell (< 640px or a touch device on its short side). The pattern
+ * is the one every phone brokerage converged on: a bottom tab bar
+ * (CHART · POSITIONS · ACCOUNT · MORE), the chart as the home screen with
+ * the live book docked under it, and one big TRADE button that opens the
+ * ticket as a sheet over the still-live chart. The chart itself stays
+ * mounted across tabs (feed subscriptions survive), it is only hidden.
+ *
+ * No desktop file grows for this — the phone lives under components/Mobile/
+ * and reuses the stores, the designer and the order payload unchanged.
  */
 
-import { useEffect, useRef, useState } from "react";
-import { cycleAudioMode, getAudioMode, onAudioModeChange } from "../../lib/audio";
+import { useRef, useState } from "react";
 import { useDesigner } from "../../lib/useDesigner";
-import { useAccountStore } from "../../store/accountStore";
+import { useAccountStore, useTradingMode } from "../../store/accountStore";
 import { useStrategyStore } from "../../store/strategyStore";
-import { TIMEFRAMES, useTradingStore, type Timeframe } from "../../store/tradingStore";
-import { EnforcementBanner } from "../EnforcementBanner";
-import { PriceReadout } from "../PriceReadout";
+import { useTradingStore } from "../../store/tradingStore";
 import { useUiStore } from "../../store/uiStore";
-import { AccountPage } from "../Account/AccountPage";
+import { EnforcementBanner } from "../EnforcementBanner";
 import { CandlePane } from "../Chart/CandlePane";
+import { ChainPanel } from "../Chart/ChainPanel";
+import { LegRail } from "../Chart/LegRail";
 import { EquityTicket } from "../Panels/EquityTicket";
-import { OrderPanel } from "../Panels/OrderPanel";
-import { SizingPanel } from "../Panels/SizingPanel";
-import { StrategyPanel } from "../Panels/StrategyPanel";
-import { SymbolSearch } from "../SymbolSearch";
-import { SystemMenu } from "../System/SystemMenu";
-import { MobileDataTabs } from "./MobileDataTabs";
-import { MobileMonitorSheet } from "./MobileMonitorSheet";
+import { MobileAccount } from "./MobileAccount";
+import { MobileChartBar } from "./MobileChartBar";
+import { MobileHeader } from "./MobileHeader";
+import { MobileMore } from "./MobileMore";
+import { MobileOpenOrders } from "./MobileOrders";
+import { MobileOptionsTicket } from "./MobileOptionsTicket";
+import { MobilePositions } from "./MobilePositions";
 import { Sheet } from "./Sheet";
 
-type SheetTab = null | "trade" | "account" | "bot";
+type Tab = "chart" | "positions" | "account" | "more";
+type Dock = "positions" | "orders" | "chain";
 
-function statusColor(status: {
-  connection: string;
-  demo: boolean;
-  configured: boolean;
-  sources: Record<string, string>;
-}, symbol: string): { cls: string; label: string } {
-  if (status.connection !== "open") return { cls: "bg-bb-loss", label: "feed disconnected" };
-  if (status.demo) {
-    return status.sources[symbol] === "public"
-      ? { cls: "bg-bb-amber", label: "public data (real prices, keyless)" }
-      : { cls: "bg-bb-muted", label: "synthetic demo data" };
-  }
-  if (!status.configured) return { cls: "bg-bb-loss", label: "no keys" };
-  return { cls: "bg-bb-profit", label: "live" };
-}
-
-function MobileHeader() {
-  const symbol = useTradingStore((s) => s.symbol);
-  const status = useTradingStore((s) => s.status);
-  const [audio, setAudio] = useState(getAudioMode());
-  const [systemOpen, setSystemOpen] = useState(false);
-  useEffect(() => onAudioModeChange(setAudio), []);
-  const pill = statusColor(status, symbol);
-
-  return (
-    <header className="flex h-9 shrink-0 items-center gap-2 border-b border-bb-border bg-bb-panel px-2">
-      <SymbolSearch />
-      <PriceReadout compact />
-      <span className="ml-auto flex items-center gap-2">
-        <button
-          className={"text-[11px] " + (audio === "off" ? "text-bb-muted" : "text-bb-amber")}
-          onClick={() => cycleAudioMode()}
-          aria-label="Cycle audio mode"
-        >
-          {audio === "off" ? "🔇" : audio === "fx" ? "🔊" : "🗣"}
-        </button>
-        <button
-          className="text-[13px] text-bb-muted active:text-bb-amber"
-          onClick={() => setSystemOpen(true)}
-          aria-label="System menu"
-        >
-          ⚙
-        </button>
-        <span className={`h-2 w-2 rounded-full ${pill.cls}`} title={pill.label} />
-      </span>
-      {systemOpen && <SystemMenu onClose={() => setSystemOpen(false)} />}
-    </header>
-  );
-}
-
-/** Read-only position-view banner (desktop's lives in ChartControls).
- * Resolves CLOSED trades from the history snapshot too — the ✕ must always
- * be reachable from a position view. */
+/** Read-only position-view banner: which plan the chart is inspecting. */
 function MobilePositionBanner() {
   const viewingPlanId = useUiStore((s) => s.viewingPlanId);
   const viewedHistorical = useUiStore((s) => s.viewedHistorical);
@@ -98,7 +50,7 @@ function MobilePositionBanner() {
   return (
     <div
       className={
-        "flex items-center gap-2 border-b px-2 py-1 text-[10px] " +
+        "flex h-10 items-center gap-2 border-b px-3 text-[12px] " +
         (closed ? "border-bb-border bg-bb-hover/40" : "border-bb-amber/60 bg-bb-amber/10")
       }
     >
@@ -109,188 +61,221 @@ function MobilePositionBanner() {
         {plan.underlying} ×{plan.filled_qty || plan.qty}
       </span>
       {closed && plan.realized_pnl != null && (
-        <span
-          data-numeric
-          className={plan.realized_pnl >= 0 ? "text-bb-profit" : "text-bb-loss"}
-        >
+        <span data-numeric className={plan.realized_pnl >= 0 ? "text-bb-profit" : "text-bb-loss"}>
           {plan.realized_pnl >= 0 ? "+" : "−"}${Math.abs(plan.realized_pnl).toFixed(0)}
         </span>
       )}
-      {!closed && (
-        <>
-          <button
-            className={"px-1 " + (pnlMode === "entry" ? "bg-bb-amber text-black" : "text-bb-muted")}
-            onClick={() => setPnlMode("entry")}
-          >
-            ENTRY
-          </button>
-          <button
-            className={"px-1 " + (pnlMode === "live" ? "bg-bb-amber text-black" : "text-bb-muted")}
-            onClick={() => setPnlMode("live")}
-          >
-            LIVE
-          </button>
-        </>
+      {!closed && plan.asset_class !== "equity" && (
+        <span className="flex gap-px">
+          {(["entry", "live"] as const).map((m) => (
+            <button
+              key={m}
+              className={"h-8 px-2 text-[11px] " + (pnlMode === m ? "bg-bb-amber text-black" : "text-bb-muted")}
+              onClick={() => setPnlMode(m)}
+            >
+              {m.toUpperCase()}
+            </button>
+          ))}
+        </span>
       )}
-      <button className="ml-auto px-1 text-bb-muted" onClick={closePositionView}>
+      <button className="ml-auto h-10 w-10 text-[16px] text-bb-muted" onClick={closePositionView} aria-label="Back to designer">
         ✕
       </button>
     </div>
   );
 }
 
+/** One-line book summary between the chart and the dock. */
+function AccountStrip() {
+  const account = useAccountStore((s) => s.account);
+  const positions = useAccountStore((s) => s.positions);
+  const unrealized = positions.reduce((a, p) => a + (p.unrealized_pnl ?? 0), 0);
+  const day = (account?.day_realized_pnl ?? 0) + unrealized;
+  const cls = day >= 0 ? "text-bb-profit" : "text-bb-loss";
+  return (
+    <div className="flex h-8 shrink-0 items-center gap-4 border-b border-bb-border bg-bb-panel px-3 text-[11px]">
+      <span className="text-bb-muted">
+        EQUITY <span data-numeric className="text-white">{account ? `$${Math.round(account.equity).toLocaleString()}` : "—"}</span>
+      </span>
+      <span className="text-bb-muted">
+        TODAY{" "}
+        <span data-numeric className={cls}>
+          {account ? `${day >= 0 ? "+" : "−"}$${Math.abs(day).toFixed(0)}` : "—"}
+          {account && account.equity > 0 ? ` (${day >= 0 ? "+" : "−"}${Math.abs((day / account.equity) * 100).toFixed(2)}%)` : ""}
+        </span>
+      </span>
+      <span className="ml-auto text-bb-muted">
+        CASH <span data-numeric className="text-white">{account ? `$${Math.round(account.cash).toLocaleString()}` : "—"}</span>
+      </span>
+    </div>
+  );
+}
+
 export function MobileApp() {
   const designer = useDesigner();
-  const tf = useTradingStore((s) => s.tf);
-  const setTf = useTradingStore((s) => s.setTf);
   const assetMode = useTradingStore((s) => s.assetMode);
   const setAssetMode = useTradingStore((s) => s.setAssetMode);
   const positions = useAccountStore((s) => s.positions);
+  const untracked = useAccountStore((s) => s.untracked);
   const modified = useStrategyStore((s) => s.modified);
-  const [sheet, setSheet] = useState<SheetTab>(null);
+  const viewingPlanId = useUiStore((s) => s.viewingPlanId);
+  const { live } = useTradingMode();
+  const [tab, setTab] = useState<Tab>("chart");
+  const [dock, setDock] = useState<Dock>("positions");
+  const [dockOpen, setDockOpen] = useState(true);
+  const [ticket, setTicket] = useState(false);
   const chartWrapRef = useRef<HTMLDivElement>(null);
+  const optionsMode = assetMode === "options";
 
-  // Zoom buttons drive the SAME wheel/dblclick paths the desktop uses, via
+  // Zoom/fit drive the SAME wheel/dblclick paths the desktop uses, via
   // synthetic events at the chart centre — no chart-code fork for mobile.
   const chartCanvas = () => chartWrapRef.current?.querySelector("canvas") ?? null;
   const zoom = (dir: 1 | -1) => {
     const canvas = chartCanvas();
     if (!canvas) return;
     const r = canvas.getBoundingClientRect();
-    canvas.dispatchEvent(
-      new WheelEvent("wheel", {
-        deltaY: dir * 240,
-        clientX: r.left + r.width * 0.55,
-        clientY: r.top + r.height * 0.5,
-        bubbles: true,
-        cancelable: true,
-      }),
-    );
+    canvas.dispatchEvent(new WheelEvent("wheel", {
+      deltaY: dir * 240, clientX: r.left + r.width * 0.55, clientY: r.top + r.height * 0.5, bubbles: true, cancelable: true,
+    }));
   };
-  const resetView = () => {
+  const fit = () => {
     const canvas = chartCanvas();
     if (!canvas) return;
     const r = canvas.getBoundingClientRect();
-    canvas.dispatchEvent(
-      new MouseEvent("dblclick", {
-        clientX: r.left + r.width / 2,
-        clientY: r.top + r.height / 2,
-        bubbles: true,
-        cancelable: true,
-      }),
-    );
+    canvas.dispatchEvent(new MouseEvent("dblclick", {
+      clientX: r.left + r.width / 2, clientY: r.top + r.height / 2, bubbles: true, cancelable: true,
+    }));
   };
+
+  const openCount = positions.length + untracked.length;
+  const dockTabs: { id: Dock; label: string }[] = [
+    { id: "positions", label: `POSITIONS${openCount ? ` ${openCount}` : ""}` },
+    { id: "orders", label: "ORDERS" },
+    ...(optionsMode ? [{ id: "chain" as Dock, label: "CHAIN" }] : []),
+  ];
+  const activeDock = dockTabs.some((d) => d.id === dock) ? dock : "positions";
+
+  const navBtn = (id: Tab, label: string, badge?: number) => (
+    <button
+      onClick={() => setTab(id)}
+      className={
+        "flex h-full flex-1 flex-col items-center justify-center gap-0.5 text-[11px] tracking-widest " +
+        (tab === id ? "text-bb-amber" : "text-bb-muted active:text-bb-amber")
+      }
+      aria-current={tab === id ? "page" : undefined}
+    >
+      <span>{label}</span>
+      {badge ? <span data-numeric className="text-[9px] text-bb-muted">{badge}</span> : <span className="h-3" />}
+    </button>
+  );
 
   return (
     <div className="flex h-[100dvh] flex-col bg-bb-black">
       <MobileHeader />
       <EnforcementBanner />
-      <MobilePositionBanner />
 
-      <div className="flex shrink-0 items-center gap-1 border-b border-bb-border bg-bb-panel px-1 py-0.5">
-        {TIMEFRAMES.map((option) => (
-          <button
-            key={option}
-            onClick={() => setTf(option as Timeframe)}
-            className={
-              "px-2 py-0.5 text-[11px] " +
-              (tf === option ? "bg-bb-amber font-semibold text-black" : "text-bb-muted")
-            }
-          >
-            {option.toUpperCase()}
-          </button>
-        ))}
-        <span className="ml-auto flex gap-1">
-          <button className="border border-bb-border px-2.5 py-0.5 text-[13px] text-bb-muted active:text-bb-amber" onClick={() => zoom(-1)} aria-label="Zoom in">
-            +
-          </button>
-          <button className="border border-bb-border px-2.5 py-0.5 text-[13px] text-bb-muted active:text-bb-amber" onClick={() => zoom(1)} aria-label="Zoom out">
-            −
-          </button>
-          <button className="border border-bb-border px-2 py-0.5 text-[10px] text-bb-muted active:text-bb-amber" onClick={resetView} aria-label="Reset view">
-            FIT
-          </button>
-        </span>
-      </div>
-
-      {/* The chart is the hero: chips-only HUD, all dense data lives in
-          the exchange-style tab strip below. Equity mode drops the options
-          analytics strip entirely — the ticket holds its own numbers, the
-          chart gets the pixels back. */}
-      <div ref={chartWrapRef} className="relative min-h-0 flex-1">
-        <CandlePane designer={designer} hudVariant="chips" />
-      </div>
-
-      {assetMode === "options" && <MobileDataTabs designer={designer} />}
-
-      <nav className="flex h-12 shrink-0 items-stretch gap-px border-t border-bb-border bg-bb-panel pb-[env(safe-area-inset-bottom)]">
-        <button
-          onClick={() => setSheet(sheet === "trade" ? null : "trade")}
-          className={
-            "flex-[2] text-[12px] font-semibold tracking-widest " +
-            (sheet === "trade" ? "bg-bb-hover text-bb-amber" : "bg-bb-amber text-black")
-          }
-        >
-          {assetMode === "equity" ? "TRADE · SHARES" : modified ? "TRADE · CUSTOM" : "TRADE · OPTIONS"}
-        </button>
-        <button
-          onClick={() => setSheet(sheet === "bot" ? null : "bot")}
-          className={
-            "flex-1 text-[11px] tracking-widest " +
-            (sheet === "bot" ? "bg-bb-hover text-bb-amber" : "text-bb-muted")
-          }
-        >
-          BOT
-        </button>
-        <button
-          onClick={() => setSheet(sheet === "account" ? null : "account")}
-          className={
-            "flex-1 text-[11px] tracking-widest " +
-            (sheet === "account" ? "bg-bb-hover text-bb-amber" : "text-bb-muted")
-          }
-        >
-          ACCOUNT{positions.length ? ` · ${positions.length}` : ""}
-        </button>
-      </nav>
-
-      {sheet === "trade" && (
-        <Sheet title="TRADE TICKET" onClose={() => setSheet(null)} tall={assetMode === "equity"}>
-          {/* One decision at the top of the sheet: which book am I trading. */}
-          <div className="sticky top-0 z-10 flex gap-px border-b border-bb-border bg-bb-panel p-1">
-            {(["options", "equity"] as const).map((m) => (
+      {/* HOME: chart + dock. Kept mounted (hidden) under the other tabs. */}
+      <div className={"flex min-h-0 flex-1 flex-col" + (tab === "chart" ? "" : " hidden")}>
+        <MobilePositionBanner />
+        <MobileChartBar onZoom={zoom} onFit={fit} />
+        <div ref={chartWrapRef} className="relative min-h-0 flex-1">
+          <CandlePane designer={designer} hudVariant="readout" />
+          {optionsMode && <LegRail designer={designer} />}
+        </div>
+        <AccountStrip />
+        <div className="flex shrink-0 flex-col border-t border-bb-border bg-bb-panel">
+          <div className="flex h-10 items-center">
+            {dockTabs.map(({ id, label }) => (
               <button
-                key={m}
-                onClick={() => setAssetMode(m)}
+                key={id}
+                onClick={() => { setDock(id); setDockOpen(activeDock === id ? !dockOpen : true); }}
                 className={
-                  "h-9 flex-1 text-[11px] tracking-widest " +
-                  (assetMode === m
-                    ? "bg-bb-amber font-semibold text-black"
-                    : "border border-bb-border text-bb-muted active:text-bb-amber")
+                  "h-full flex-1 text-[11px] tracking-widest " +
+                  (dockOpen && activeDock === id ? "border-b-2 border-bb-amber font-semibold text-bb-amber" : "text-bb-muted")
                 }
               >
-                {m === "options" ? "OPTIONS" : "SHARES / ETF"}
+                {label}
               </button>
             ))}
+            <button className="h-full px-4 text-[12px] text-bb-muted" onClick={() => setDockOpen(!dockOpen)} aria-label={dockOpen ? "Collapse" : "Expand"}>
+              {dockOpen ? "▾" : "▴"}
+            </button>
           </div>
-          {assetMode === "equity" ? (
-            <div className="flex min-h-[60dvh] flex-col"><EquityTicket /></div>
-          ) : (
-            <div className="flex flex-col gap-px">
-              <div className="h-56"><StrategyPanel designer={designer} /></div>
-              <div className="h-64"><SizingPanel designer={designer} /></div>
-              <div className="h-72"><OrderPanel designer={designer} /></div>
+          {dockOpen && (
+            <div className="flex h-[26dvh] min-h-36 flex-col border-t border-bb-border/60 bg-black">
+              {activeDock === "positions" && <MobilePositions compact />}
+              {activeDock === "orders" && <MobileOpenOrders />}
+              {activeDock === "chain" && <div className="min-h-0 flex-1"><ChainPanel /></div>}
             </div>
           )}
-        </Sheet>
+        </div>
+        <div className="shrink-0 border-t border-bb-border bg-bb-panel p-2">
+          <button
+            onClick={() => setTicket(true)}
+            className={
+              "h-12 w-full text-[13px] font-semibold tracking-widest text-black " +
+              (live ? "bg-bb-loss active:bg-bb-orange" : "bg-bb-amber active:bg-bb-orange")
+            }
+          >
+            TRADE · {assetMode === "equity" ? "SHARES" : modified ? "CUSTOM OPTIONS" : "OPTIONS"}
+            {live ? " · LIVE" : ""}
+          </button>
+        </div>
+      </div>
+
+      {tab === "positions" && (
+        <div className="flex min-h-0 flex-1 flex-col">
+          <div className="flex h-10 items-center px-3 text-[12px] tracking-widest text-bb-amber">POSITIONS</div>
+          <MobilePositions />
+        </div>
       )}
-      {sheet === "bot" && (
-        <Sheet title="BOT — LIVE MONITOR" onClose={() => setSheet(null)} tall>
-          <MobileMonitorSheet />
-        </Sheet>
+      {tab === "account" && (
+        <div className="flex min-h-0 flex-1 flex-col">
+          <div className="flex h-10 items-center px-3 text-[12px] tracking-widest text-bb-amber">ACCOUNT</div>
+          <MobileAccount />
+        </div>
       )}
-      {sheet === "account" && (
-        <Sheet title="ACCOUNT" onClose={() => setSheet(null)} tall>
-          <AccountPage />
+      {tab === "more" && (
+        <div className="flex min-h-0 flex-1 flex-col">
+          <div className="flex h-10 items-center px-3 text-[12px] tracking-widest text-bb-amber">SYSTEM</div>
+          <MobileMore />
+        </div>
+      )}
+
+      <nav className="flex h-14 shrink-0 items-stretch border-t border-bb-border bg-bb-panel pb-[env(safe-area-inset-bottom)]">
+        {navBtn("chart", "CHART")}
+        {navBtn("positions", "POSITIONS", openCount)}
+        {navBtn("account", "ACCOUNT")}
+        {navBtn("more", "MORE")}
+      </nav>
+
+      {ticket && (
+        <Sheet
+          title={viewingPlanId ? "TRADE TICKET · position view exits on any edit" : "TRADE TICKET"}
+          onClose={() => setTicket(false)}
+          tall
+          right={
+            <span className="flex gap-px pr-1">
+              {(["options", "equity"] as const).map((m) => (
+                <button
+                  key={m}
+                  onClick={() => setAssetMode(m)}
+                  className={
+                    "h-9 px-3 text-[11px] tracking-widest " +
+                    (assetMode === m ? "bg-bb-amber font-semibold text-black" : "border border-bb-border text-bb-muted")
+                  }
+                >
+                  {m === "options" ? "OPTIONS" : "SHARES"}
+                </button>
+              ))}
+            </span>
+          }
+        >
+          {assetMode === "equity" ? (
+            <div className="flex min-h-full flex-col"><EquityTicket /></div>
+          ) : (
+            <MobileOptionsTicket designer={designer} />
+          )}
         </Sheet>
       )}
     </div>

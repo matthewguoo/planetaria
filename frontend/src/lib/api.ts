@@ -8,7 +8,20 @@ export const api = axios.create({
   timeout: 10_000,
 });
 
-export type SymbolHit = { symbol: string; name: string };
+/** One picker row. The flags are the BROKER's (null = not verified yet:
+ * curated name before the asset universe loaded). */
+export type SymbolHit = {
+  symbol: string;
+  name: string;
+  exchange: string | null;
+  tradable: boolean | null;
+  fractionable: boolean | null;
+  shortable: boolean | null;
+  options: boolean | null;
+};
+
+export const getSymbolInfo = (symbol: string) =>
+  api.get<SymbolHit>(`/api/symbols/${encodeURIComponent(symbol.toUpperCase())}`).then((r) => r.data);
 
 export async function searchSymbols(q: string): Promise<SymbolHit[]> {
   const { data } = await api.get<{ results: SymbolHit[] }>("/api/symbols/search", {
@@ -40,6 +53,8 @@ export type RiskSettings = {
    * Capital separation is done with REAL accounts (one per book), so the
    * %-of-equity gates bind at the right dollars by construction. */
   manual_equity_require_stop: boolean;
+  /** Account capability: 0/1 none, 2 long single-leg, 3 spreads. */
+  options_level: number;
 };
 
 export type TradingMode = "paper" | "live_manual";
@@ -139,8 +154,17 @@ export const putRisk = (patch: Partial<RiskSettings>) =>
   api.put<RiskSettings>("/api/settings/risk", patch).then((r) => r.data);
 export const getPositions = () =>
   api.get<PositionsPayload>("/api/positions").then((r) => r.data);
-export const adoptPositions = (symbols: string[]) =>
-  api.post<{ adopted: Plan[] }>("/api/positions/adopt", { symbols }).then((r) => r.data.adopted);
+/** Adopt untracked broker positions into enforced plans. `sl_pct`/`tp_pct`
+ * are fractions of the entry basis (server defaults are option-sized —
+ * shares should always pass explicit values); `time_stop_utc` defaults to
+ * today's configured cutoff. */
+export const adoptPositions = (
+  symbols: string[],
+  opts: { sl_pct?: number; tp_pct?: number; time_stop_utc?: string } = {},
+) =>
+  api
+    .post<{ adopted: Plan[] }>("/api/positions/adopt", { symbols, ...opts })
+    .then((r) => r.data.adopted);
 export const getHistory = () =>
   api.get<{ trades: Plan[] }>("/api/history").then((r) => r.data.trades);
 export const postOrder = (payload: object) =>

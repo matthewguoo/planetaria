@@ -35,7 +35,15 @@ export type Layout = {
   height: number;
   plotW: number; // width minus price axis
   plotH: number; // height minus time axis
-  volTop: number; // y where volume subpane starts
+  /** Bottom of the PRICE pane (price->y maps into [0, volTop]). Historical
+   * name: with no oscillator panes it is also where the volume strip starts. */
+  volTop: number;
+  /** Oscillator panes (RSI, MACD) stack between the price pane and volume. */
+  oscTop: number;
+  oscH: number; // height of ONE oscillator pane
+  oscCount: number;
+  /** Where the volume strip starts. */
+  volStart: number;
   axisW: number;
   axisH: number;
 };
@@ -43,16 +51,24 @@ export type Layout = {
 export const AXIS_W = 64;
 export const AXIS_H = 22;
 export const VOL_FRAC = 0.14;
+export const OSC_FRAC = 0.16;
 
-export function computeLayout(width: number, height: number): Layout {
+export function computeLayout(width: number, height: number, oscCount = 0): Layout {
   const plotW = Math.max(50, width - AXIS_W);
   const plotH = Math.max(50, height - AXIS_H);
+  const volStart = plotH * (1 - VOL_FRAC);
+  const oscH = oscCount ? plotH * OSC_FRAC : 0;
+  const volTop = volStart - oscH * oscCount;
   return {
     width,
     height,
     plotW,
     plotH,
-    volTop: plotH * (1 - VOL_FRAC),
+    volTop,
+    oscTop: volTop,
+    oscH,
+    oscCount,
+    volStart,
     axisW: AXIS_W,
     axisH: AXIS_H,
   };
@@ -78,6 +94,37 @@ export function yToPrice(y: number, domain: [number, number], layout: Layout): n
   return hi - (y / layout.volTop) * (hi - lo);
 }
 
+export const MIN_BARS_VISIBLE = 20;
+export const MAX_BARS_VISIBLE = 3000;
+
+/** Horizontal zoom in place: scale the visible bar count by `factor`
+ * (>1 zooms out) keeping the bar under plot-x `x` fixed. Shared by the
+ * wheel, the phone's +/− buttons and the pinch gesture, so all three agree
+ * on limits and anchoring. */
+export function zoomX(view: ViewState, layout: Layout, x: number, factor: number): void {
+  const anchor = xToIndex(x, view, layout);
+  const next = Math.max(MIN_BARS_VISIBLE, Math.min(MAX_BARS_VISIBLE, view.barsVisible * factor));
+  const frac = (view.rightIndex - anchor) / view.barsVisible;
+  view.barsVisible = next;
+  view.rightIndex = anchor + frac * next;
+  view.follow = false;
+}
+
+/** Vertical zoom in place: stretch the price scale by `factor` (>1 widens)
+ * keeping the price under plot-y `y` fixed. Makes the scale manual. */
+export function zoomY(
+  view: ViewState,
+  domain: [number, number],
+  layout: Layout,
+  y: number,
+  factor: number,
+): void {
+  const anchor = yToPrice(y, domain, layout);
+  const lo = anchor - (anchor - domain[0]) * factor;
+  const hi = anchor + (domain[1] - anchor) * factor;
+  if (hi - lo > 1e-9) view.yDomain = [lo, hi];
+}
+
 /** Visible [firstIndex, lastIndex] clamped to data, given the view. */
 export function visibleRange(bars: Bars, view: ViewState): [number, number] {
   const last = Math.min(bars.n - 1, Math.ceil(view.rightIndex));
@@ -99,16 +146,28 @@ export function priceDomain(bars: Bars, view: ViewState): [number, number] {
   return [lo - pad, hi + pad];
 }
 
-/** Extend a price domain to include extra levels (strikes, breakevens). */
-export function extendDomain(domain: [number, number], levels: number[]): [number, number] {
+/** Extend a price domain to include extra levels (strikes, TP/SL, breakevens),
+ * but only up to `maxGrow` × the candle span on either side. Beyond that the
+ * candles would flatten into a line to make room for a far-off level — the
+ * level shows as an axis-edge arrow instead (TradingView's auto-scale fits the
+ * bars; drawings do not stretch it). At the default the bars always keep at
+ * least half of the pane. */
+export function extendDomain(
+  domain: [number, number],
+  levels: number[],
+  maxGrow = 0.5,
+): [number, number] {
   let [lo, hi] = domain;
+  const span = domain[1] - domain[0] || 1;
+  const floor = domain[0] - span * maxGrow;
+  const ceil = domain[1] + span * maxGrow;
   for (const level of levels) {
     if (!isFinite(level)) continue;
-    if (level < lo) lo = level;
-    if (level > hi) hi = level;
+    if (level < lo) lo = Math.max(level, floor);
+    if (level > hi) hi = Math.min(level, ceil);
   }
   const pad = (hi - lo) * 0.03;
-  return [lo === domain[0] ? lo : lo - pad, hi === domain[1] ? hi : hi + pad];
+  return [lo === domain[0] ? lo : Math.max(lo - pad, floor), hi === domain[1] ? hi : Math.min(hi + pad, ceil)];
 }
 
 const ET_TIME = new Intl.DateTimeFormat("en-US", {

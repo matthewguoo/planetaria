@@ -24,6 +24,7 @@ import { fmtUsd, pnlCls } from "../../lib/format";
 import { usePoll } from "../../lib/usePoll";
 import { useAccountStore, useTradingMode } from "../../store/accountStore";
 import { AccountsPanel } from "../System/SystemPanels";
+import { CapabilitiesPanel } from "./CapabilitiesPanel";
 
 function StatCard({ label, value, cls }: { label: string; value: string; cls?: string }) {
   return (
@@ -214,7 +215,7 @@ function ExitQualityPanel({ closed }: { closed: Plan[] | null }) {
   );
 }
 
-function EquityCurve({ history }: { history: PortfolioHistory | null }) {
+export function EquityCurve({ history }: { history: PortfolioHistory | null }) {
   const ref = useRef<HTMLCanvasElement>(null);
 
   useEffect(() => {
@@ -235,13 +236,20 @@ function EquityCurve({ history }: { history: PortfolioHistory | null }) {
       .map((v, i) => ({ v, t: history!.timestamps[i] }))
       .filter((p): p is { v: number; t: number } => p.v !== null && p.v > 0);
     if (points.length < 2) {
+      // Alpaca pads a young account's history with zero-equity days before
+      // funding; those are filtered above. One real point = the account is
+      // one session old, not a broken broker.
       ctx.fillStyle = "#666666";
       ctx.textAlign = "center";
-      ctx.fillText(
-        history === null ? "loading…" : "no portfolio history (broker not configured?)",
-        w / 2,
-        h / 2,
-      );
+      const msg =
+        history === null
+          ? "loading…"
+          : points.length === 1
+            ? `history starts ${new Date(points[0].t * 1000).toLocaleDateString("en-US", { month: "short", day: "numeric" })} · $${Math.round(points[0].v).toLocaleString()} — one session so far`
+            : (history.equity ?? []).length
+              ? "no equity history yet (account not funded for this period)"
+              : "no portfolio history (broker unreachable?)";
+      ctx.fillText(msg, w / 2, h / 2);
       return;
     }
     let lo = Infinity;
@@ -304,7 +312,7 @@ export function AccountPage({ onViewPlan }: { onViewPlan?: (plan: Plan) => void 
   const refresh = useCallback(async (alive: () => boolean = () => true) => {
     setError(null);
     const results = await Promise.allSettled([
-      getAccountHistory(period, period === "1D" ? "15Min" : "1D"),
+      getAccountHistory(period, period === "1D" ? "15Min" : period === "1W" ? "1H" : "1D"),
       getOpenOrders(),
       getHistory(),
       refreshPositions(),
@@ -631,6 +639,15 @@ export function AccountPage({ onViewPlan }: { onViewPlan?: (plan: Plan) => void 
               ))}
             </tbody>
           </table>
+        </div>
+      </div>
+
+      {/* What this account is APPROVED for — declared once, hidden everywhere
+          it doesn't apply, enforced at entry. */}
+      <div className="panel flex shrink-0 flex-col">
+        <div className="panel-title">ACCOUNT CAPABILITIES</div>
+        <div className="max-w-xl">
+          <CapabilitiesPanel />
         </div>
       </div>
 

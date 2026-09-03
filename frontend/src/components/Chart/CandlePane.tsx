@@ -19,13 +19,16 @@ import {
   type Smiles,
 } from "../../lib/optionsMath";
 import { etMinutes, etOffsetMinutes } from "../../lib/et";
-import { computeBollinger, computeEma, computeVwap } from "../../lib/indicators";
+import { computeBollinger, computeEma, computeMacd, computeRsi, computeSma, computeVwap } from "../../lib/indicators";
 import { buildPositionView } from "../../lib/positionView";
 import type { Designer } from "../../lib/useDesigner";
 import { ChartHud } from "./ChartHud";
 import { publishScale, sharedBars } from "../../lib/chartShared";
 import { useHeatmap } from "../../lib/useHeatmap";
+import { tradingDateAhead } from "../../lib/equityMath";
+import { deriveEquityPlan, type EquityPlan } from "../../lib/equityPlan";
 import { useAccountStore } from "../../store/accountStore";
+import { useEquityTicketStore } from "../../store/equityTicketStore";
 import { TF_MS, freshSpot, quoteIsStale, useTradingStore, type IndicatorToggles } from "../../store/tradingStore";
 import { useUiStore } from "../../store/uiStore";
 import {
@@ -44,11 +47,14 @@ import {
   fmtPrice,
   fmtTimeET,
   indexToX,
+  MIN_BARS_VISIBLE,
   priceDomain,
   priceToY,
   visibleRange,
   xToIndex,
   yToPrice,
+  zoomX,
+  zoomY,
   type Bars,
   type Layout,
   type ViewState,
@@ -157,7 +163,27 @@ type DragTarget =
   | { kind: "strike"; i: number }
   | { kind: "tp" }
   | { kind: "sl" }
-  | { kind: "timestop" };
+  | { kind: "timestop" }
+  // Equity ticket lines (share stop / target / exit day) — same drag
+  // affordances the options designer has, writing to equityTicketStore.
+  | { kind: "eqsl" }
+  | { kind: "eqtp" }
+  | { kind: "eqts" };
+
+const RTH_MINUTES = 390;
+
+/** Oscillator panes requested by the toggles (RSI, MACD stack under price). */
+function oscCountOf(ind: IndicatorToggles): number {
+  return (ind.rsi ? 1 : 0) + (ind.macd ? 1 : 0);
+}
+
+/** Price levels an equity plan wants on screen (bounded by extendDomain). */
+function equityLevels(eq: EquityPlan | null): number[] {
+  if (!eq || eq.price <= 0) return [];
+  const levels = [Math.abs(eq.exits.entry), Math.abs(eq.exits.sl)];
+  if (eq.exits.tp != null) levels.push(Math.abs(eq.exits.tp));
+  return levels;
+}
 
 type ChipRect = { i: number; x: number; y: number; w: number; label: string };
 
@@ -195,8 +221,9 @@ export function CandlePane({
   hudVariant,
 }: {
   designer: Designer;
-  /** "none": the host renders ChartHud itself (desktop left sidebar). */
-  hudVariant: "chips" | "none";
+  /** "none": the host renders ChartHud itself (desktop left sidebar).
+   * "readout": the phone's thin ATR/RV + enforcer overlay, no toggles. */
+  hudVariant: "readout" | "none";
 }) {
   const symbol = useTradingStore((s) => s.symbol);
   const tf = useTradingStore((s) => s.tf);
@@ -242,6 +269,21 @@ export function CandlePane({
   } | null>(null);
   const axisDragRef = useRef<{ startY: number; domain: [number, number] } | null>(null);
   const dragTargetRef = useRef<DragTarget | null>(null);
+  // Touch: every active pointer by id. Two of them make a pinch, which
+  // owns the view until one lifts (the surviving finger does not pan —
+  // that is how phones avoid the post-pinch jump).
+  const pointersRef = useRef(new Map<number, { x: number; y: number }>());
+  const pinchRef = useRef<{
+    dist: number;
+    midX: number;
+    midY: number;
+    barsVisible: number;
+    rightIndex: number;
+    domain: [number, number];
+    axis: "x" | "y" | null;
+  } | null>(null);
+  const tapRef = useRef<{ x: number; y: number; moved: boolean } | null>(null);
+  const sizedRef = useRef(false);
   const prevSymbolRef = useRef(symbol);
   const framedPlanRef = useRef<string | null>(null);
   const surfaceRef = useRef<HeatmapResult | null>(null);
@@ -278,6 +320,8 @@ export function CandlePane({
   const viewedHistorical = useUiStore((s) => s.viewedHistorical);
   const pnlMode = useUiStore((s) => s.pnlMode);
   const positions = useAccountStore((s) => s.positions);
+  const account = useAccountStore((s) => s.account);
+  const eqTicket = useEquityTicketStore();
   const viewingPlan = viewingPlanId
     ? positions.find((p) => p.id === viewingPlanId) ??
       (viewedHistorical?.id === viewingPlanId ? viewedHistorical : null)
@@ -385,6 +429,34 @@ export function CandlePane({
 
   overlayRef.current = overlay;
 
+  // EQUITY plan overlay: derived per draw (it reads the live bars for the
+  // vol horizon), from a ref of the latest ticket/quote/account inputs.
+  const eqInputsRef = useRef<{
+    on: boolean;
+    ticket: typeof eqTicket;
+    quote: typeof quote;
+    tf: typeof tf;
+    account: typeof account;
+  }>({ on: false, ticket: eqTicket, quote, tf, account });
+  eqInputsRef.current = {
+    on: assetMode === "equity" && !viewingPlan,
+    ticket: eqTicket,
+    quote,
+    tf,
+    account,
+  };
+  const eqPlanRef = useRef<EquityPlan | null>(null);
+  const eqLevelsRef = useRef<number[]>([]);
+  const computeEquityPlan = useCallback((): EquityPlan | null => {
+    const inp = eqInputsRef.current;
+    const plan = inp.on
+      ? deriveEquityPlan({ ticket: inp.ticket, quote: inp.quote, bars: barsRef.current, tf: inp.tf, account: inp.account })
+      : null;
+    eqPlanRef.current = plan;
+    eqLevelsRef.current = equityLevels(plan);
+    return plan;
+  }, []);
+
   const draw = useCallback(() => {
     cancelAnimationFrame(rafRef.current);
     rafRef.current = requestAnimationFrame(() => {
@@ -403,7 +475,21 @@ export function CandlePane({
       }
       const ctx = canvas.getContext("2d")!;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      const layout = computeLayout(cssW, cssH);
+      const layout = computeLayout(cssW, cssH, oscCountOf(indicatorsRef.current));
+      const eqPlan = computeEquityPlan();
+      if (!sizedRef.current) {
+        sizedRef.current = true;
+        // Phone-width plot: 120 bars at ~2.5px each is an unreadable smear.
+        // Open around 4px per bar; pinch takes it from there.
+        if (cssW < 640) {
+          const v = viewRef.current;
+          v.barsVisible = Math.max(
+            MIN_BARS_VISIBLE,
+            Math.min(v.barsVisible, Math.round(layout.plotW / 4)),
+          );
+          if (v.follow) v.rightIndex = Math.max(0, barsRef.current.n - 1) + v.barsVisible * RIGHT_PAD_FRAC;
+        }
+      }
       render(
         ctx,
         layout,
@@ -417,11 +503,12 @@ export function CandlePane({
         indicatorsRef.current,
         liveTickRef.current,
         showEthRef.current,
+        eqPlan,
       );
       // Feed HTML layers outside the canvas (sidebar HUD, leg rail).
       sharedBars.current = barsRef.current;
       const [lo, hi] = currentDomain(
-        barsRef.current, viewRef.current, overlayRef.current, surfaceRef.current,
+        barsRef.current, viewRef.current, overlayRef.current, surfaceRef.current, eqLevelsRef.current,
       );
       publishScale({ lo, hi, volTopPx: layout.volTop });
       // Quantized view window for the heatmap grid (see useHeatmap).
@@ -434,7 +521,12 @@ export function CandlePane({
         setViewWindow([qLo, qHi]);
       }
     });
-  }, [tf]);
+  }, [tf, computeEquityPlan]);
+
+  // The ticket's lines follow its inputs immediately (not the next tick).
+  useEffect(() => {
+    draw();
+  }, [eqTicket, account, assetMode, draw]);
 
   // Surface recompute (worker). The grid follows the QUANTIZED visible
   // window (dense vertical sampling at any zoom — see useHeatmap); pans
@@ -581,14 +673,14 @@ export function CandlePane({
 
   // ---------------------------------------------------------- interactions
 
-  const hitTestStrike = useCallback((y: number): number | null => {
+  const hitTestStrike = useCallback((y: number, tol = STRIKE_HIT_PX): number | null => {
     const overlayNow = overlayRef.current;
     const wrap = wrapRef.current;
     if (!overlayNow || overlayNow.readOnly || !overlayNow.strikes.length || !wrap) return null;
-    const layout = computeLayout(wrap.clientWidth, wrap.clientHeight);
-    const domain = currentDomain(barsRef.current, viewRef.current, overlayNow, surfaceRef.current);
+    const layout = computeLayout(wrap.clientWidth, wrap.clientHeight, oscCountOf(indicatorsRef.current));
+    const domain = currentDomain(barsRef.current, viewRef.current, overlayNow, surfaceRef.current, eqLevelsRef.current);
     let best: number | null = null;
-    let bestDist = STRIKE_HIT_PX + 1;
+    let bestDist = tol + 1;
     overlayNow.strikes.forEach((strike, i) => {
       const dist = Math.abs(priceToY(strike, domain, layout) - y);
       if (dist < bestDist) {
@@ -600,15 +692,15 @@ export function CandlePane({
   }, []);
 
   /** Drag handles where each strike line crosses the vertical rail. */
-  const hitTestRail = useCallback((x: number, y: number): number | null => {
+  const hitTestRail = useCallback((x: number, y: number, tol = RAIL_HIT_PX): number | null => {
     const overlayNow = overlayRef.current;
     const wrap = wrapRef.current;
     if (!overlayNow || overlayNow.readOnly || !overlayNow.strikes.length || !wrap) return null;
-    const layout = computeLayout(wrap.clientWidth, wrap.clientHeight);
-    if (Math.abs(x - (layout.plotW - RAIL_INSET)) > RAIL_HIT_PX) return null;
-    const domain = currentDomain(barsRef.current, viewRef.current, overlayNow, surfaceRef.current);
+    const layout = computeLayout(wrap.clientWidth, wrap.clientHeight, oscCountOf(indicatorsRef.current));
+    if (Math.abs(x - (layout.plotW - RAIL_INSET)) > tol) return null;
+    const domain = currentDomain(barsRef.current, viewRef.current, overlayNow, surfaceRef.current, eqLevelsRef.current);
     let best: number | null = null;
-    let bestDist = RAIL_HIT_PX + 1;
+    let bestDist = tol + 1;
     overlayNow.strikes.forEach((strike, i) => {
       const dist = Math.abs(priceToY(strike, domain, layout) - y);
       if (dist < bestDist) {
@@ -620,19 +712,19 @@ export function CandlePane({
   }, []);
 
   /** Exit boundaries: TP/SL premium contours and the time-stop vertical. */
-  const hitTestExit = useCallback((x: number, y: number): "tp" | "sl" | "timestop" | null => {
+  const hitTestExit = useCallback((x: number, y: number, tol = 6): "tp" | "sl" | "timestop" | null => {
     const overlayNow = overlayRef.current;
     const surface = surfaceRef.current;
     const wrap = wrapRef.current;
     if (!overlayNow?.legs || overlayNow.readOnly || !surface || !wrap) return null;
-    const layout = computeLayout(wrap.clientWidth, wrap.clientHeight);
-    const domain = currentDomain(barsRef.current, viewRef.current, overlayNow, surfaceRef.current);
+    const layout = computeLayout(wrap.clientWidth, wrap.clientHeight, oscCountOf(indicatorsRef.current));
+    const domain = currentDomain(barsRef.current, viewRef.current, overlayNow, surfaceRef.current, eqLevelsRef.current);
     const view = viewRef.current;
     const anchorIdx = anchorIndexFor(barsRef.current, overlayNow);
     const tfMinutes = TF_MS[useTradingStore.getState().tf] / 60000;
     if (y > layout.volTop) return null;
     const xTs = indexToX(futureIndex(overlayNow.timeStopHours, anchorIdx, tfMinutes), view, layout);
-    if (Math.abs(x - xTs) <= 6) return "timestop";
+    if (Math.abs(x - xTs) <= tol) return "timestop";
     const x0 = indexToX(anchorIdx, view, layout);
     const xExp = indexToX(futureIndex(surface.hoursToExpiry, anchorIdx, tfMinutes), view, layout);
     if (x < x0 || x > xExp || xExp <= x0) return null;
@@ -642,26 +734,43 @@ export function CandlePane({
     );
     const near = (line: Float64Array): boolean => {
       const s = line[ti];
-      return isFinite(s) && Math.abs(priceToY(s, domain, layout) - y) <= 6;
+      return isFinite(s) && Math.abs(priceToY(s, domain, layout) - y) <= tol;
     };
     if (near(surface.tpLine)) return "tp";
     if (near(surface.slLine)) return "sl";
     return null;
   }, []);
 
+  /** Equity plan lines: stop / target horizontals, exit-day vertical. */
+  const hitTestEquity = useCallback((x: number, y: number, tol = 6): "eqsl" | "eqtp" | "eqts" | null => {
+    const eq = eqPlanRef.current;
+    const wrap = wrapRef.current;
+    if (!eq || eq.price <= 0 || !wrap) return null;
+    const layout = computeLayout(wrap.clientWidth, wrap.clientHeight, oscCountOf(indicatorsRef.current));
+    if (y > layout.volTop) return null;
+    const domain = currentDomain(barsRef.current, viewRef.current, null, null, eqLevelsRef.current);
+    const tfMinutes = TF_MS[useTradingStore.getState().tf] / 60000;
+    const anchorIdx = Math.max(barsRef.current.n - 1, 0);
+    const xTs = indexToX(anchorIdx + (eq.holdDays * RTH_MINUTES) / tfMinutes, viewRef.current, layout);
+    if (Math.abs(x - xTs) <= tol) return "eqts";
+    if (Math.abs(priceToY(Math.abs(eq.exits.sl), domain, layout) - y) <= tol) return "eqsl";
+    if (eq.exits.tp != null && Math.abs(priceToY(Math.abs(eq.exits.tp), domain, layout) - y) <= tol) return "eqtp";
+    return null;
+  }, []);
+
   /** Strike chip zones: − / + edit the leg's contract ratio, middle drags. */
   const hitTestChip = useCallback(
-    (x: number, y: number): { i: number; zone: "minus" | "plus" | "drag" } | null => {
+    (x: number, y: number, padY = 0): { i: number; zone: "minus" | "plus" | "drag" } | null => {
       const overlayNow = overlayRef.current;
       const wrap = wrapRef.current;
       const canvas = canvasRef.current;
       if (!overlayNow || overlayNow.readOnly || !overlayNow.strikes.length || !wrap || !canvas) return null;
-      const layout = computeLayout(wrap.clientWidth, wrap.clientHeight);
-      const domain = currentDomain(barsRef.current, viewRef.current, overlayNow, surfaceRef.current);
+      const layout = computeLayout(wrap.clientWidth, wrap.clientHeight, oscCountOf(indicatorsRef.current));
+      const domain = currentDomain(barsRef.current, viewRef.current, overlayNow, surfaceRef.current, eqLevelsRef.current);
       const ctx = canvas.getContext("2d")!;
       ctx.font = "11px 'SF Mono', Consolas, monospace";
       for (const rect of computeChipRects(ctx, layout, domain, overlayNow)) {
-        if (x < rect.x || x > rect.x + rect.w || Math.abs(y - rect.y) > CHIP_H / 2) continue;
+        if (x < rect.x || x > rect.x + rect.w || Math.abs(y - rect.y) > CHIP_H / 2 + padY) continue;
         if (x <= rect.x + CHIP_ZONE) return { i: rect.i, zone: "minus" };
         if (x >= rect.x + rect.w - CHIP_ZONE) return { i: rect.i, zone: "plus" };
         return { i: rect.i, zone: "drag" };
@@ -675,28 +784,19 @@ export function CandlePane({
     (e: React.WheelEvent) => {
       const view = viewRef.current;
       const wrap = wrapRef.current!;
-      const layout = computeLayout(wrap.clientWidth, wrap.clientHeight);
+      const layout = computeLayout(wrap.clientWidth, wrap.clientHeight, oscCountOf(indicatorsRef.current));
       const rect = canvasRef.current!.getBoundingClientRect();
       const x = e.clientX - rect.left;
       const y = e.clientY - rect.top;
       const factor = e.deltaY > 0 ? 1.15 : 1 / 1.15;
       if (x > layout.plotW && y <= layout.plotH) {
         // Wheel over the price axis: vertical scale around the cursor price.
-        const domain = currentDomain(barsRef.current, view, overlayRef.current, surfaceRef.current);
-        const anchor = yToPrice(y, domain, layout);
-        view.yDomain = [
-          anchor - (anchor - domain[0]) * factor,
-          anchor + (domain[1] - anchor) * factor,
-        ];
+        const domain = currentDomain(barsRef.current, view, overlayRef.current, surfaceRef.current, eqLevelsRef.current);
+        zoomY(view, domain, layout, y, factor);
         draw();
         return;
       }
-      const anchor = xToIndex(x, view, layout);
-      const next = Math.max(20, Math.min(3000, view.barsVisible * factor));
-      const frac = (view.rightIndex - anchor) / view.barsVisible;
-      view.barsVisible = next;
-      view.rightIndex = anchor + frac * next;
-      view.follow = false;
+      zoomX(view, layout, x, factor);
       draw();
     },
     [draw],
@@ -715,16 +815,41 @@ export function CandlePane({
       const x = e.clientX - rect.left;
       const y = e.clientY - rect.top;
       const wrap = wrapRef.current!;
-      const layout = computeLayout(wrap.clientWidth, wrap.clientHeight);
+      const layout = computeLayout(wrap.clientWidth, wrap.clientHeight, oscCountOf(indicatorsRef.current));
+      const touch = e.pointerType === "touch";
+      pointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (pointersRef.current.size >= 2) {
+        // Second finger: whatever the first started (pan, strike drag) is
+        // over; the pair drives a pinch until one of them lifts.
+        dragRef.current = null;
+        axisDragRef.current = null;
+        dragTargetRef.current = null;
+        mouseRef.current = null;
+        const [a, b] = [...pointersRef.current.values()];
+        pinchRef.current = {
+          dist: Math.hypot(b.x - a.x, b.y - a.y),
+          midX: (a.x + b.x) / 2 - rect.left,
+          midY: (a.y + b.y) / 2 - rect.top,
+          barsVisible: viewRef.current.barsVisible,
+          rightIndex: viewRef.current.rightIndex,
+          domain: currentDomain(barsRef.current, viewRef.current, overlayRef.current, surfaceRef.current, eqLevelsRef.current),
+          axis: null,
+        };
+        return;
+      }
+      tapRef.current = { x: e.clientX, y: e.clientY, moved: false };
       if (x > layout.plotW && y <= layout.plotH) {
         // Grab the price axis: vertical scale drag.
         axisDragRef.current = {
           startY: y,
-          domain: currentDomain(barsRef.current, viewRef.current, overlayRef.current, surfaceRef.current),
+          domain: currentDomain(barsRef.current, viewRef.current, overlayRef.current, surfaceRef.current, eqLevelsRef.current),
         };
         return;
       }
-      const chip = hitTestChip(x, y);
+      // Finger targets are fatter than a mouse's: chips, the rail and the
+      // exit contours get a wider hit band, and the bare strike LINE is not
+      // a touch target at all — on a phone it hijacked ordinary pans.
+      const chip = hitTestChip(x, y, touch ? 8 : 0);
       if (chip) {
         const ratios = overlayRef.current?.ratios ?? [];
         if (chip.zone === "minus") {
@@ -736,17 +861,22 @@ export function CandlePane({
         }
         return;
       }
-      const rail = hitTestRail(x, y);
+      const rail = hitTestRail(x, y, touch ? RAIL_HIT_PX * 2 : RAIL_HIT_PX);
       if (rail !== null) {
         dragTargetRef.current = { kind: "strike", i: rail };
         return;
       }
-      const exit = hitTestExit(x, y);
+      const exit = hitTestExit(x, y, touch ? 14 : 6);
       if (exit !== null) {
         dragTargetRef.current = { kind: exit };
         return;
       }
-      const strikeIdx = hitTestStrike(y);
+      const eqHit = hitTestEquity(x, y, touch ? 14 : 6);
+      if (eqHit !== null) {
+        dragTargetRef.current = { kind: eqHit };
+        return;
+      }
+      const strikeIdx = touch ? null : hitTestStrike(y);
       if (strikeIdx !== null) {
         dragTargetRef.current = { kind: "strike", i: strikeIdx };
       } else {
@@ -754,28 +884,85 @@ export function CandlePane({
           startX: e.clientX,
           startY: e.clientY,
           startRight: viewRef.current.rightIndex,
-          startDomain: currentDomain(barsRef.current, viewRef.current, overlayRef.current, surfaceRef.current),
+          startDomain: currentDomain(barsRef.current, viewRef.current, overlayRef.current, surfaceRef.current, eqLevelsRef.current),
           vActive: viewRef.current.yDomain !== null,
         };
       }
     },
-    [hitTestChip, hitTestRail, hitTestExit, hitTestStrike, setRatio, decRatio],
+    [hitTestChip, hitTestRail, hitTestExit, hitTestStrike, hitTestEquity, setRatio, decRatio],
   );
 
   const onMouseMove = useCallback(
-    (e: React.MouseEvent) => {
+    (e: React.PointerEvent) => {
       const rect = canvasRef.current!.getBoundingClientRect();
       const x = e.clientX - rect.left;
       const y = e.clientY - rect.top;
-      mouseRef.current = { x, y };
       const wrap = wrapRef.current!;
-      const layout = computeLayout(wrap.clientWidth, wrap.clientHeight);
+      const layout = computeLayout(wrap.clientWidth, wrap.clientHeight, oscCountOf(indicatorsRef.current));
+
+      if (pointersRef.current.has(e.pointerId)) {
+        pointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      }
+      const pinch = pinchRef.current;
+      if (pinch && pointersRef.current.size >= 2) {
+        // Pinch: the dominant spread direction picks the axis once, then the
+        // gesture is stateless against its start (no drift on jittery
+        // fingers). Horizontal = bars visible, vertical = price scale; the
+        // midpoint's travel pans the time axis.
+        const [a, b] = [...pointersRef.current.values()];
+        const dist = Math.hypot(b.x - a.x, b.y - a.y);
+        if (pinch.axis === null) {
+          if (Math.abs(dist - pinch.dist) < 12) return;
+          pinch.axis = Math.abs(b.x - a.x) >= Math.abs(b.y - a.y) ? "x" : "y";
+        }
+        const view = viewRef.current;
+        const factor = pinch.dist / Math.max(dist, 1);
+        if (pinch.axis === "x") {
+          view.barsVisible = pinch.barsVisible;
+          view.rightIndex = pinch.rightIndex;
+          zoomX(view, layout, pinch.midX, factor);
+          const midX = (a.x + b.x) / 2 - rect.left;
+          view.rightIndex -= (midX - pinch.midX) / (layout.plotW / view.barsVisible);
+        } else {
+          zoomY(view, pinch.domain, layout, pinch.midY, factor);
+        }
+        draw();
+        return;
+      }
+      const tap = tapRef.current;
+      if (tap && !tap.moved && Math.hypot(e.clientX - tap.x, e.clientY - tap.y) > 6) tap.moved = true;
+      mouseRef.current = { x, y };
 
       if (dragTargetRef.current !== null) {
         const target = dragTargetRef.current;
         const overlayNow = overlayRef.current;
-        if (overlayNow) {
-          const domain = currentDomain(barsRef.current, viewRef.current, overlayNow, surfaceRef.current);
+        const eq = eqPlanRef.current;
+        if ((target.kind === "eqsl" || target.kind === "eqtp" || target.kind === "eqts") && eq) {
+          // Share plan lines write straight into the ticket store, as %
+          // of the entry price (the store's own units); the ticket, the
+          // next draw and the order payload all follow from there.
+          const store = useEquityTicketStore.getState();
+          const domain = currentDomain(barsRef.current, viewRef.current, null, null, eqLevelsRef.current);
+          const entryPx = Math.abs(eq.exits.entry);
+          if (target.kind === "eqts") {
+            const tfMinutes = TF_MS[useTradingStore.getState().tf] / 60000;
+            const idx = xToIndex(x, viewRef.current, layout);
+            const days = Math.round(((idx - Math.max(barsRef.current.n - 1, 0)) * tfMinutes) / RTH_MINUTES);
+            const clamped = Math.max(1, Math.min(30, days));
+            if (clamped !== eq.holdDays) store.setTimeStopDate(tradingDateAhead(clamped));
+          } else if (entryPx > 0) {
+            const price = yToPrice(y, domain, layout);
+            const side = store.side;
+            if (target.kind === "eqsl") {
+              const pct = Math.round(((side * (entryPx - price)) / entryPx) * 100 * 2) / 2;
+              if (pct >= 0.5 && pct !== store.slPct) store.setSlPct(pct);
+            } else {
+              const pct = Math.round(((side * (price - entryPx)) / entryPx) * 100 * 2) / 2;
+              if (pct >= 1 && pct !== store.tpPct) store.setTarget(true, pct);
+            }
+          }
+        } else if (overlayNow) {
+          const domain = currentDomain(barsRef.current, viewRef.current, overlayNow, surfaceRef.current, eqLevelsRef.current);
           if (target.kind === "strike") {
             const price = yToPrice(y, domain, layout);
             const snaps = overlayNow.snapStrikes;
@@ -848,8 +1035,11 @@ export function CandlePane({
         const overAxis = x > layout.plotW && y <= layout.plotH;
         const chip = overAxis ? null : hitTestChip(x, y);
         const exit = chip || overAxis ? null : hitTestExit(x, y);
+        const eqHit = overAxis ? null : hitTestEquity(x, y);
         const cursor = overAxis
           ? "ns-resize"
+          : eqHit
+            ? eqHit === "eqts" ? "ew-resize" : "ns-resize"
           : chip
             ? chip.zone === "drag"
               ? "ns-resize"
@@ -869,7 +1059,7 @@ export function CandlePane({
       }
       draw();
     },
-    [draw, hitTestChip, hitTestRail, hitTestExit, hitTestStrike, setStrike, setTpPct, setSlPct, setTimeStopEt],
+    [draw, hitTestChip, hitTestRail, hitTestExit, hitTestStrike, hitTestEquity, setStrike, setTpPct, setSlPct, setTimeStopEt],
   );
 
   const endDrag = useCallback(() => {
@@ -878,11 +1068,33 @@ export function CandlePane({
     dragTargetRef.current = null;
   }, []);
 
-  const onMouseLeave = useCallback(() => {
-    mouseRef.current = null;
-    endDrag();
-    draw();
-  }, [draw, endDrag]);
+  const onPointerUp = useCallback(
+    (e: React.PointerEvent) => {
+      const known = pointersRef.current.delete(e.pointerId);
+      if (pointersRef.current.size < 2) pinchRef.current = null;
+      const tap = tapRef.current;
+      tapRef.current = null;
+      endDrag();
+      if (!known || e.pointerType !== "touch") return;
+      // A tap parks the crosshair on that bar (inspect without a hover);
+      // a pan or drag clears it so it never sticks mid-chart.
+      if (!tap || tap.moved) mouseRef.current = null;
+      draw();
+    },
+    [draw, endDrag],
+  );
+
+  const onMouseLeave = useCallback(
+    (e: React.PointerEvent) => {
+      // Touch "leaves" on every lift (capture release) — the parked
+      // crosshair must survive that; onPointerUp already settled the state.
+      if (e.pointerType === "touch") return;
+      mouseRef.current = null;
+      endDrag();
+      draw();
+    },
+    [draw, endDrag],
+  );
 
   const onDoubleClick = useCallback(() => {
     const view = viewRef.current;
@@ -906,12 +1118,12 @@ export function CandlePane({
         onWheel={onWheel}
         onPointerDown={onMouseDown}
         onPointerMove={onMouseMove}
-        onPointerUp={endDrag}
+        onPointerUp={onPointerUp}
         // A cancelled pointer (touch gesture takeover, capture loss) never
         // sends pointerup; without these a strike drag stays armed and every
         // later hover keeps rewriting that leg — presets appeared "stuck".
-        onPointerCancel={endDrag}
-        onLostPointerCapture={endDrag}
+        onPointerCancel={onPointerUp}
+        onLostPointerCapture={onPointerUp}
         onPointerLeave={onMouseLeave}
         onDoubleClick={onDoubleClick}
       />
@@ -932,12 +1144,13 @@ function currentDomain(
   view: ViewState,
   overlay: StrategyOverlay | null,
   surface: HeatmapResult | null = null,
+  extraLevels: number[] = [],
 ): [number, number] {
   // Manual vertical scale (axis wheel/drag or chart vertical pan) wins;
   // double-click restores auto-fit.
   if (view.yDomain) return view.yDomain;
   const base = priceDomain(bars, view);
-  if (!overlay) return base;
+  if (!overlay) return extraLevels.length ? extendDomain(base, extraLevels) : base;
   const levels = [...overlay.strikes];
   if (overlay.spot) levels.push(overlay.spot);
   // Auto-fit also keeps the TP/SL execution boundaries on screen, so editing
@@ -970,6 +1183,7 @@ function render(
   indicators: IndicatorToggles,
   liveTick: { mid: number; ts: number } | null = null,
   showEth = false,
+  equity: EquityPlan | null = null,
 ) {
   const draggingStrike = dragTarget?.kind === "strike" ? dragTarget.i : null;
   ctx.fillStyle = COLORS.bg;
@@ -983,7 +1197,7 @@ function render(
     return;
   }
 
-  const domain = currentDomain(bars, view, overlay, surface);
+  const domain = currentDomain(bars, view, overlay, surface, equityLevels(equity));
   const [first, last] = visibleRange(bars, view);
   const barW = layout.plotW / view.barsVisible;
   const bodyW = Math.max(1, Math.min(barW * 0.7, 14));
@@ -1005,7 +1219,7 @@ function render(
   drawPriceGrid(ctx, layout, domain);
   if (showEth) drawSessionZones(ctx, layout, bars, view, first, last, etOff);
   drawSessionBoundaries(ctx, layout, bars, view, first, last, etOff);
-  drawTimeAxis(ctx, layout, bars, view, first, last, overlay, tfMinutes, anchorIdx);
+  drawTimeAxis(ctx, layout, bars, view, first, last, overlay, tfMinutes, anchorIdx, showEth);
 
   // Heatmap first: background layer in the future region (HEAT toggle).
   if (overlay?.legs && surface && indicators.heat) {
@@ -1013,6 +1227,14 @@ function render(
   }
 
   drawVolume(ctx, layout, bars, view, first, last);
+
+  // Everything priced on the y-scale is clipped to the price pane â€” a
+  // manual scale (axis drag, vertical pan) puts bars off-domain, and those
+  // must vanish at the pane edge, not paint over the volume and the axis.
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(0, 0, layout.plotW, layout.volTop);
+  ctx.clip();
 
   for (let i = first; i <= last; i++) {
     const x = indexToX(i, view, layout);
@@ -1046,6 +1268,13 @@ function render(
     drawStrikes(ctx, layout, domain, overlay, draggingStrike);
     drawRail(ctx, layout, domain, overlay, draggingStrike);
   }
+  if (equity && equity.price > 0) {
+    drawEquityPlan(ctx, layout, domain, view, bars, equity, tfMinutes, dragTarget);
+  }
+  ctx.restore();
+  if (layout.oscCount) drawOscillators(ctx, layout, bars, view, first, last, indicators);
+  // Axis badges (TP/SL/BE, last price) live in the axis column: unclipped.
+  if (equity && equity.price > 0) drawEquityBadges(ctx, layout, domain, equity);
   if (overlay?.legs && surface) drawExitLevels(ctx, layout, domain, surface, overlay);
   drawLastPrice(ctx, layout, bars, domain, live?.c);
   if (mouse && mouse.x <= layout.plotW && mouse.y <= layout.plotH) {
@@ -1463,6 +1692,13 @@ const IND_COLORS = {
   ema21: "#BA68C8",
   bb: "rgba(96,125,139,0.55)",
   bbFill: "rgba(96,125,139,0.08)",
+  sma20: "#E0E0E0",
+  sma50: "#7E57C2",
+  sma200: "#EF6C00",
+  rsi: "#B388FF",
+  macd: "#2196F3",
+  macdSignal: "#FFB000",
+  oscGuide: "#333333",
 };
 
 /** Overlay indicator lines across the visible bar range. */
@@ -1521,6 +1757,108 @@ function drawExpectedMove(
   ctx.textAlign = "right";
   ctx.fillText("±1σ EM", Math.min(endUp[0], layout.plotW) - 4, endUp[1] - 4);
   ctx.restore();
+}
+
+/** RSI / MACD panes stacked between the price pane and the volume strip,
+ * each with its own scale, a header readout and axis marks. */
+function drawOscillators(
+  ctx: CanvasRenderingContext2D,
+  layout: Layout,
+  bars: Bars,
+  view: ViewState,
+  first: number,
+  last: number,
+  indicators: IndicatorToggles,
+) {
+  if (!bars.n || last <= first) return;
+  let top = layout.oscTop;
+  const panes: ("rsi" | "macd")[] = [];
+  if (indicators.rsi) panes.push("rsi");
+  if (indicators.macd) panes.push("macd");
+  ctx.font = "10px 'SF Mono', Consolas, monospace";
+  for (const pane of panes) {
+    const h = layout.oscH;
+    const bottom = top + h;
+    ctx.strokeStyle = COLORS.grid;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(0, top + 0.5);
+    ctx.lineTo(layout.plotW, top + 0.5);
+    ctx.stroke();
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(0, top, layout.plotW, h);
+    ctx.clip();
+    const pad = 4;
+    const yOf = (v: number, lo: number, hi: number) => bottom - pad - ((v - lo) / (hi - lo || 1)) * (h - 2 * pad);
+    const polyline = (values: Float64Array, lo: number, hi: number, color: string, width = 1.2) => {
+      ctx.strokeStyle = color;
+      ctx.lineWidth = width;
+      ctx.beginPath();
+      let started = false;
+      for (let i = first; i <= last; i++) {
+        const x = indexToX(i, view, layout);
+        const y = yOf(values[i], lo, hi);
+        if (!isFinite(y)) { started = false; continue; }
+        if (!started) { ctx.moveTo(x, y); started = true; } else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+    };
+    let header = "";
+    let axisMarks: [number, string][] = [];
+    if (pane === "rsi") {
+      const rsi = computeRsi(bars.c, bars.n, 14);
+      for (const lvl of [30, 70]) {
+        ctx.strokeStyle = IND_COLORS.oscGuide;
+        ctx.setLineDash([2, 4]);
+        ctx.beginPath();
+        ctx.moveTo(0, yOf(lvl, 0, 100));
+        ctx.lineTo(layout.plotW, yOf(lvl, 0, 100));
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+      polyline(rsi, 0, 100, IND_COLORS.rsi);
+      const lastV = rsi[bars.n - 1];
+      header = `RSI 14  ${lastV.toFixed(1)}`;
+      axisMarks = [[yOf(70, 0, 100), "70"], [yOf(30, 0, 100), "30"]];
+    } else {
+      const { macd, signal, hist } = computeMacd(bars.c, bars.n);
+      let amp = 0;
+      for (let i = first; i <= last; i++) {
+        amp = Math.max(amp, Math.abs(macd[i]), Math.abs(signal[i]), Math.abs(hist[i]));
+      }
+      amp = amp || 1;
+      const zero = yOf(0, -amp, amp);
+      const barW = layout.plotW / view.barsVisible;
+      const bodyW = Math.max(1, Math.min(barW * 0.6, 10));
+      for (let i = first; i <= last; i++) {
+        const x = indexToX(i, view, layout);
+        const y = yOf(hist[i], -amp, amp);
+        ctx.fillStyle = hist[i] >= 0 ? COLORS.volUp : COLORS.volDown;
+        ctx.fillRect(x - bodyW / 2, Math.min(y, zero), bodyW, Math.max(1, Math.abs(zero - y)));
+      }
+      ctx.strokeStyle = IND_COLORS.oscGuide;
+      ctx.beginPath();
+      ctx.moveTo(0, zero);
+      ctx.lineTo(layout.plotW, zero);
+      ctx.stroke();
+      polyline(macd, -amp, amp, IND_COLORS.macd);
+      polyline(signal, -amp, amp, IND_COLORS.macdSignal);
+      const n1 = bars.n - 1;
+      header = `MACD 12·26·9  ${macd[n1].toFixed(2)} / ${signal[n1].toFixed(2)}  h ${hist[n1].toFixed(2)}`;
+      axisMarks = [[zero, "0"]];
+    }
+    ctx.restore();
+    ctx.fillStyle = COLORS.axisText;
+    ctx.textAlign = "left";
+    ctx.textBaseline = "top";
+    ctx.fillText(header, 6, top + 3);
+    for (const [y, label] of axisMarks) {
+      ctx.textBaseline = "middle";
+      ctx.fillText(label, layout.plotW + 6, y);
+    }
+    top = bottom;
+  }
 }
 
 function drawIndicators(
@@ -1582,6 +1920,11 @@ function drawIndicators(
   if (indicators.ema) {
     line(computeEma(bars.c, bars.n, 9), IND_COLORS.ema9, 1.2);
     line(computeEma(bars.c, bars.n, 21), IND_COLORS.ema21, 1.2);
+  }
+  if (indicators.sma) {
+    line(computeSma(bars.c, bars.n, 20), IND_COLORS.sma20, 1);
+    line(computeSma(bars.c, bars.n, 50), IND_COLORS.sma50, 1);
+    line(computeSma(bars.c, bars.n, 200), IND_COLORS.sma200, 1.4);
   }
   if (indicators.vwap) {
     line(computeVwap(bars), IND_COLORS.vwap, 1.4, [6, 3]);
@@ -1650,6 +1993,113 @@ function drawExitLevels(
   drawLevel(firstFinite(surface.slLine), COLORS.sl, "SL");
 }
 
+/** Share-plan lines: entry (amber), stop (red), target (green) with their
+ * $ and % on the plot, and the exit day as an orange vertical in trading
+ * time. The dragged line draws heavier. Clipped to the price pane. */
+function drawEquityPlan(
+  ctx: CanvasRenderingContext2D,
+  layout: Layout,
+  domain: [number, number],
+  view: ViewState,
+  bars: Bars,
+  eq: EquityPlan,
+  tfMinutes: number,
+  dragTarget: DragTarget | null,
+) {
+  const entryPx = Math.abs(eq.exits.entry);
+  const line = (price: number, color: string, label: string, heavy: boolean, dash: number[]) => {
+    const y = priceToY(price, domain, layout);
+    if (y < 0 || y > layout.volTop) return;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = heavy ? 2 : 1;
+    ctx.setLineDash(dash);
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(layout.plotW, y);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.font = "11px 'SF Mono', Consolas, monospace";
+    const w = ctx.measureText(label).width + 10;
+    const ly = Math.max(9, Math.min(layout.volTop - 9, y - 10));
+    ctx.fillStyle = "rgba(0,0,0,0.85)";
+    ctx.fillRect(6, ly - 8, w, 16);
+    ctx.fillStyle = color;
+    ctx.textAlign = "left";
+    ctx.textBaseline = "middle";
+    ctx.fillText(label, 11, ly);
+  };
+  const pctOf = (px: number) => `${px >= entryPx ? "+" : "−"}${(Math.abs(px - entryPx) / entryPx * 100).toFixed(1)}%`;
+  const dollars = (px: number) => {
+    const v = (px - entryPx) * eq.shares * (eq.exits.entry < 0 ? -1 : 1);
+    return `${v >= 0 ? "+" : "−"}$${Math.abs(v).toFixed(0)}`;
+  };
+  line(entryPx, COLORS.last, `ENTRY ${fmtPrice(entryPx)} · ${eq.shares} sh`, false, [6, 4]);
+  line(
+    Math.abs(eq.exits.sl), COLORS.sl,
+    `STOP ${pctOf(Math.abs(eq.exits.sl))} · ${dollars(Math.abs(eq.exits.sl))}`,
+    dragTarget?.kind === "eqsl", [2, 3],
+  );
+  if (eq.exits.tp != null) {
+    const p = eq.pTarget != null ? ` · P ${(eq.pTarget * 100).toFixed(0)}%` : "";
+    line(
+      Math.abs(eq.exits.tp), COLORS.tp,
+      `TARGET ${pctOf(Math.abs(eq.exits.tp))} · ${dollars(Math.abs(eq.exits.tp))}${p}`,
+      dragTarget?.kind === "eqtp", [2, 3],
+    );
+  }
+  // Exit day: trading-time offset from the last bar.
+  const anchorIdx = Math.max(bars.n - 1, 0);
+  const x = indexToX(anchorIdx + (eq.holdDays * RTH_MINUTES) / tfMinutes, view, layout);
+  if (x >= 0 && x <= layout.plotW) {
+    ctx.strokeStyle = COLORS.timeStop;
+    ctx.lineWidth = dragTarget?.kind === "eqts" ? 2 : 1;
+    ctx.setLineDash([4, 4]);
+    ctx.beginPath();
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x, layout.volTop);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    const label = `EXIT +${eq.holdDays}d${eq.timeStopAuto ? " auto" : ""}`;
+    ctx.font = "11px 'SF Mono', Consolas, monospace";
+    const w = ctx.measureText(label).width + 10;
+    const lx = Math.min(x + 4, layout.plotW - w - 2);
+    ctx.fillStyle = "rgba(0,0,0,0.85)";
+    ctx.fillRect(lx, 4, w, 16);
+    ctx.fillStyle = COLORS.timeStop;
+    ctx.textAlign = "left";
+    ctx.textBaseline = "middle";
+    ctx.fillText(label, lx + 5, 12);
+  } else if (x > layout.plotW) {
+    ctx.fillStyle = COLORS.timeStop;
+    ctx.textAlign = "right";
+    ctx.textBaseline = "middle";
+    ctx.fillText(`EXIT +${eq.holdDays}d →`, layout.plotW - 4, 12);
+  }
+}
+
+/** Axis badges for the share plan; off-scale levels show an arrow. */
+function drawEquityBadges(
+  ctx: CanvasRenderingContext2D,
+  layout: Layout,
+  domain: [number, number],
+  eq: EquityPlan,
+) {
+  const badge = (price: number, color: string, tag: string) => {
+    const y = priceToY(price, domain, layout);
+    const onScreen = y >= 0 && y <= layout.volTop;
+    const by = Math.max(8, Math.min(layout.volTop - 8, y));
+    ctx.fillStyle = color;
+    ctx.fillRect(layout.plotW, by - 8, layout.axisW, 16);
+    ctx.fillStyle = COLORS.bg;
+    ctx.textAlign = "left";
+    ctx.textBaseline = "middle";
+    ctx.font = "11px 'SF Mono', Consolas, monospace";
+    ctx.fillText(onScreen ? `${tag} ${fmtPrice(price)}` : `${tag} ${y < 0 ? "↑" : "↓"}`, layout.plotW + 4, by);
+  };
+  badge(Math.abs(eq.exits.sl), COLORS.sl, "SL");
+  if (eq.exits.tp != null) badge(Math.abs(eq.exits.tp), COLORS.tp, "TP");
+}
+
 function niceStep(span: number, maxTicks: number): number {
   const raw = span / maxTicks;
   const mag = 10 ** Math.floor(Math.log10(raw));
@@ -1686,12 +2136,21 @@ function drawTimeAxis(
   overlay: StrategyOverlay | null,
   tfMinutes: number,
   anchorIdx: number,
+  showEth = false,
 ) {
   const targetPx = 90;
   const step = Math.max(1, Math.round((view.barsVisible * targetPx) / layout.plotW));
+  // Zoomed out past ~half a session per label, an index-stepped grid lands
+  // on the same clock time every day ("04:15 04:15 04:15…"): switch to one
+  // label per session, at its first bar, showing the date.
+  const barsPerDay = (showEth ? 16 * 60 : 6.5 * 60) / tfMinutes;
+  const dayMode = step * 2 >= barsPerDay;
   ctx.textAlign = "center";
   ctx.textBaseline = "top";
-  for (let i = Math.ceil(first / step) * step; i <= last; i += step) {
+  let lastLabelX = -Infinity;
+  for (let i = Math.max(first, 0); i <= last; i++) {
+    const isNewDay = i > 0 && fmtDayET(bars.t[i]) !== fmtDayET(bars.t[i - 1]);
+    if (dayMode ? !isNewDay : !(i % step === 0 || isNewDay)) continue;
     const x = indexToX(i, view, layout);
     if (x < 0 || x > layout.plotW) continue;
     ctx.strokeStyle = COLORS.grid;
@@ -1699,7 +2158,8 @@ function drawTimeAxis(
     ctx.moveTo(x, 0);
     ctx.lineTo(x, layout.plotH);
     ctx.stroke();
-    const isNewDay = i > 0 && fmtDayET(bars.t[i]) !== fmtDayET(bars.t[i - 1]);
+    if (x - lastLabelX < 56) continue; // never overprint two labels
+    lastLabelX = x;
     ctx.fillStyle = isNewDay ? COLORS.last : COLORS.axisText;
     ctx.fillText(isNewDay ? fmtDayET(bars.t[i]) : fmtTimeET(bars.t[i]), x, layout.plotH + 6);
   }
@@ -1730,7 +2190,7 @@ function drawVolume(
   if (!maxV) return;
   const barW = layout.plotW / view.barsVisible;
   const bodyW = Math.max(1, Math.min(barW * 0.7, 14));
-  const volH = layout.plotH - layout.volTop - 1;
+  const volH = layout.plotH - layout.volStart - 1;
   for (let i = first; i <= last; i++) {
     const x = indexToX(i, view, layout);
     if (x < -barW || x > layout.plotW + barW) continue;

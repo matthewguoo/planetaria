@@ -23,6 +23,7 @@ import { computeAtr, realizedVolAnnualized } from "../../lib/indicators";
 import { buildPositionView, computeExcursions } from "../../lib/positionView";
 import type { McResult } from "../../lib/mcSim";
 import { bsThetaPerDay, structuralMaxLoss, TRADING_HOURS_PER_YEAR } from "../../lib/optionsMath";
+import { useCapabilities } from "../../lib/capabilities";
 import { useMonteCarlo, type McInputs } from "../../lib/useMonteCarlo";
 import type { Designer } from "../../lib/useDesigner";
 import { useAccountStore } from "../../store/accountStore";
@@ -38,6 +39,9 @@ const TOGGLES = [
   { key: "vwap", label: "VWAP", title: "Session-anchored VWAP" },
   { key: "ema", label: "EMA", title: "EMA 9 / 21" },
   { key: "bb", label: "BB", title: "Bollinger 20 × 2σ" },
+  { key: "sma", label: "SMA", title: "SMA 20 / 50 / 200" },
+  { key: "rsi", label: "RSI", title: "RSI 14 — oscillator pane under the price" },
+  { key: "macd", label: "MACD", title: "MACD 12·26·9 — oscillator pane under the price" },
 ] as const;
 
 function StatRow({ label, value, cls }: { label: string; value: string; cls?: string }) {
@@ -62,7 +66,7 @@ function etCountdown(iso: string | null): string {
 /** Post-trade report for a CLOSED plan viewed on the chart: realized P/L,
  * MAE/MFE reconstructed from the 1m bars over the holding window (entry-basis
  * pricing — consistent with the surface), exit reason, time in trade. */
-function HistoricalBlock({
+export function HistoricalBlock({
   plan,
   barsRef,
 }: {
@@ -169,7 +173,7 @@ function SpreadPaidRow({ plan, qty }: { plan: Plan; qty: number }) {
 /** "What is the enforcer doing for THIS position right now" — the live
  * conditionals of the bracket, shown while viewing a position on the chart.
  * Polls system state (monitor/health) and the plan's lifecycle journal. */
-function EnforcerBlock({ planId }: { planId: string }) {
+export function EnforcerBlock({ planId }: { planId: string }) {
   const plan = useAccountStore((s) => s.positions.find((p) => p.id === planId) ?? null);
   const [sys, setSys] = useState<SystemState | null>(null);
   const [events, setEvents] = useState<PlanEvent[]>([]);
@@ -341,12 +345,13 @@ export function ChartHud({
 }: {
   designer: Designer;
   barsRef: React.RefObject<Bars>;
-  /** "chips": toggles + one legend line only — the phone layout hosts the
-   * MC/theta data in tabs below the chart instead of floating over it.
+  /** "readout": the phone's thin overlay — the ATR/RV legend line plus the
+   * enforcer / closed-trade block in position view; no toggles (the phone
+   * keeps them in its chart bar) and no MC (its ticket runs that).
    * "sidebar": the full stat column rendered as a permanent static column
    * (desktop hosts it left of the chart so it never occludes the canvas or
    * its drag handles). */
-  variant: "chips" | "sidebar";
+  variant: "readout" | "sidebar";
 }) {
   const indicators = useTradingStore((s) => s.indicators);
   const toggleIndicator = useTradingStore((s) => s.toggleIndicator);
@@ -364,7 +369,7 @@ export function ChartHud({
   mcRef.current = mc;
 
   const mcInputs: McInputs | null = useMemo(() => {
-    if (variant === "chips" || !indicators.sim || !designer.ready || !designer.legs) return null;
+    if (variant === "readout" || !indicators.sim || !designer.ready || !designer.legs) return null;
     return {
       legs: designer.legs,
       entry: designer.entry,
@@ -396,17 +401,19 @@ export function ChartHud({
   const rootCls =
     variant === "sidebar"
       ? "flex h-full w-52 shrink-0 flex-col gap-1 overflow-y-auto bg-bb-panel p-1.5 text-[10px]"
-      : "pointer-events-none absolute left-1.5 top-1.5 z-10 flex w-56 flex-col gap-1 text-[10px]";
+      : "pointer-events-none absolute left-1.5 top-1.5 z-10 flex w-[72%] max-w-64 flex-col gap-1 text-[11px]";
 
   // EQUITY mode: heat/sim/theta and the IV shock controls are options
   // machinery — hide them so the share trader's chart strip is just the
   // price indicators (VWAP/EMA/BB) and the ATR/RV line.
+  const caps = useCapabilities();
   const visibleToggles = equityMode
-    ? TOGGLES.filter(({ key }) => key === "vwap" || key === "ema" || key === "bb")
-    : TOGGLES;
+    ? TOGGLES.filter(({ key }) => key !== "heat" && key !== "sim" && key !== "theta")
+    : TOGGLES.filter(({ key }) => key !== "theta" || caps.spreadsAllowed);
 
   return (
     <div className={rootCls}>
+      {variant !== "readout" && (
       <div className="pointer-events-auto flex flex-wrap gap-px">
         {visibleToggles.map(({ key, label, title }) => (
           <button
@@ -458,8 +465,9 @@ export function ChartHud({
         </label>
         )}
       </div>
+      )}
 
-      <div className="pointer-events-none flex items-center gap-1 bg-black/70 px-1.5 py-0.5 text-bb-muted">
+      <div className="pointer-events-none flex items-center gap-1 self-start bg-black/70 px-1.5 py-0.5 text-bb-muted">
         {ivRv !== null && (
           <span
             className={
@@ -481,9 +489,9 @@ export function ChartHud({
         viewingPlanId && <EnforcerBlock planId={viewingPlanId} />
       )}
 
-      {variant !== "chips" && indicators.theta && <ThetaBlock designer={designer} />}
+      {variant !== "readout" && indicators.theta && <ThetaBlock designer={designer} />}
 
-      {variant !== "chips" && indicators.sim && designer.ready && p && (
+      {variant !== "readout" && indicators.sim && designer.ready && p && (
         <div
           className="pointer-events-none flex flex-col gap-0.5 border border-bb-border/60 bg-black/75 px-1.5 py-1"
           title="Monte Carlo: 2000 paths with the enforcer's exact exit rules, net of spread friction. Analytic rows: risk-neutral GBM."

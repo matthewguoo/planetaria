@@ -86,8 +86,15 @@ Tailscale install. It ends by printing the manual steps:
    `sudo tailscale serve --bg --https=443 http://127.0.0.1:8001` and
    `tailscale status` for the box's MagicDNS name.
 4. From the Windows box (also on the tailnet):
-   `https://<box>.<tailnet>.ts.net/terminal.html` — the header badge must
-   read **LIVE in red**.
+   `https://<box>.<tailnet>.ts.net/terminal` — the header badge must
+   read **LIVE in red**. (`/terminal.html` still works; `/terminal` is the
+   clean path the backend serves for it.)
+5. **Phone.** Open the same URL in mobile Chrome on the tailnet, then Chrome
+   menu → *Add to Home screen*: the manifest installs the terminal as a
+   full-screen app (no browser bars over the chart). Under 640px the
+   terminal switches to its phone shell — chart home with pinch-zoom, the
+   book docked under it, one TRADE button, POSITIONS / ACCOUNT / MORE tabs.
+   Everything that moves money there is a two-tap (confirm strip).
 
 Optional but recommended in the Tailscale admin console: an ACL that
 limits port 443 on this node to your own devices (tag it `tag:live` and
@@ -119,6 +126,7 @@ systemctl restart planetaria-live` — **outside** 09:25–10:00 and
 | `equity_gross_exposure_pct` | 1.0 | the adopted ETFs are ~78% invested and the gross gate counts every open equity plan — the 0.50 default would block all new entries. 1.0 is structurally safe on a cash account (no margin; Alpaca enforces settled cash) |
 | `max_trades_per_day` | 5 | |
 | `equity_long_only`, `manual_equity_require_stop` | true | keep; on the live server every entry is discretionary, so the stop requirement binds on all of them |
+| `options_level` | 2 | ACCOUNT CAPABILITIES (ACCOUNT page): the Roth is options level 2. The UI then offers only long single-leg presets / no sell buttons on the chain / no theta templates, and the risk gate refuses anything else. The live server floors this at 2 whatever is stored |
 
 ## 5. Verification tests (the Linux session runs these; all must pass before §6)
 

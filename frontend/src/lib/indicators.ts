@@ -120,3 +120,60 @@ export function realizedVolAnnualized(bars: Bars, lookback: number, tfMinutes: n
   const barsPerYear = (252 * 390) / tfMinutes;
   return Math.sqrt(variance * barsPerYear);
 }
+
+/** Simple moving average over closes; the first `period-1` values use the
+ * partial window (a line that starts at bar 0, not NaN for 200 bars). */
+export function computeSma(closes: Float64Array, n: number, period: number): Float64Array {
+  const out = new Float64Array(n);
+  let sum = 0;
+  for (let i = 0; i < n; i++) {
+    sum += closes[i];
+    if (i >= period) sum -= closes[i - period];
+    out[i] = sum / Math.min(i + 1, period);
+  }
+  return out;
+}
+
+/** Wilder RSI over closes. Flat tape (no gains, no losses) reads 50. */
+export function computeRsi(closes: Float64Array, n: number, period = 14): Float64Array {
+  const out = new Float64Array(n);
+  if (!n) return out;
+  out[0] = 50;
+  let avgGain = 0;
+  let avgLoss = 0;
+  for (let i = 1; i < n; i++) {
+    const d = closes[i] - closes[i - 1];
+    const gain = d > 0 ? d : 0;
+    const loss = d < 0 ? -d : 0;
+    if (i <= period) {
+      avgGain += gain / period;
+      avgLoss += loss / period;
+    } else {
+      avgGain = (avgGain * (period - 1) + gain) / period;
+      avgLoss = (avgLoss * (period - 1) + loss) / period;
+    }
+    out[i] =
+      avgGain === 0 && avgLoss === 0 ? 50 : avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss);
+  }
+  return out;
+}
+
+export type Macd = { macd: Float64Array; signal: Float64Array; hist: Float64Array };
+
+/** MACD (fast EMA − slow EMA), its signal EMA, and the histogram. */
+export function computeMacd(
+  closes: Float64Array,
+  n: number,
+  fast = 12,
+  slow = 26,
+  signalPeriod = 9,
+): Macd {
+  const f = computeEma(closes, n, fast);
+  const s = computeEma(closes, n, slow);
+  const macd = new Float64Array(n);
+  for (let i = 0; i < n; i++) macd[i] = f[i] - s[i];
+  const signal = computeEma(macd, n, signalPeriod);
+  const hist = new Float64Array(n);
+  for (let i = 0; i < n; i++) hist[i] = macd[i] - signal[i];
+  return { macd, signal, hist };
+}

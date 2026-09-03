@@ -479,18 +479,18 @@ function AccountTab() {
     suffix: string,
     step: number,
   ) => (
-    <label className="flex items-center justify-between gap-2 text-[11px]">
-      <span className="text-bb-muted">{label}</span>
-      <span className="flex items-center gap-1">
+    <label className="fld">
+      <span className="fld-l">{label}</span>
+      <span className="fld-c">
         <input
           data-numeric
           type="number"
           step={step}
-          className="w-16 border border-bb-border bg-black px-1 py-0.5 text-right text-bb-amber outline-none focus:border-bb-amber"
+          className="fld-i w-sm"
           value={Math.round((risk[key] as number) * scale * 100) / 100}
           onChange={(e) => setDraft({ ...draft, [key]: Number(e.target.value) / scale })}
         />
-        <span className="w-4 text-[10px] text-bb-muted">{suffix}</span>
+        <span className="fld-u">{suffix}</span>
       </span>
     </label>
   );
@@ -531,23 +531,29 @@ function AccountTab() {
         {numField("entry_ttl_min", "ENTRY TTL", 1, "m", 1)}
         {numField("max_trades_per_day", "MAX TRADES/DAY", 1, "", 1)}
         {numField("sl_confirm_s", "SL CONFIRM DWELL", 1, "s", 0.5)}
-        <label className="flex items-center justify-between gap-2 text-[11px]">
-          <span className="text-bb-muted">TIME STOP (ET)</span>
-          <input
-            type="time"
-            className="border border-bb-border bg-black px-1 py-0.5 text-bb-orange outline-none"
-            value={risk.time_stop_et}
-            onChange={(e) => setDraft({ ...draft, time_stop_et: e.target.value })}
-          />
+        <label className="fld">
+          <span className="fld-l">TIME STOP (ET)</span>
+          <span className="fld-c">
+            <input
+              type="time"
+              className="fld-i w-md is-orange"
+              value={risk.time_stop_et}
+              onChange={(e) => setDraft({ ...draft, time_stop_et: e.target.value })}
+            />
+            <span className="fld-u">ET</span>
+          </span>
         </label>
-        <label className="flex items-center justify-between gap-2 text-[11px]">
-          <span className="text-bb-muted">EXPIRY-DAY STOP (ET)</span>
-          <input
-            type="time"
-            className="border border-bb-border bg-black px-1 py-0.5 text-bb-orange outline-none"
-            value={risk.expiry_time_stop_et}
-            onChange={(e) => setDraft({ ...draft, expiry_time_stop_et: e.target.value })}
-          />
+        <label className="fld">
+          <span className="fld-l">EXPIRY-DAY STOP (ET)</span>
+          <span className="fld-c">
+            <input
+              type="time"
+              className="fld-i w-md is-orange"
+              value={risk.expiry_time_stop_et}
+              onChange={(e) => setDraft({ ...draft, expiry_time_stop_et: e.target.value })}
+            />
+            <span className="fld-u">ET</span>
+          </span>
         </label>
         <div className="mt-1 flex items-center gap-2">
           <button

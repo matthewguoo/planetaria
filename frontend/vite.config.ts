@@ -21,8 +21,22 @@ const proxy = {
 // They share the api client, the stores and the palette. In production the
 // backend serves `dist/` itself (StaticFiles in app/main.py), so
 // `npm run build` is the whole deploy.
+// Dev-server twin of the backend's clean `/terminal` route (main.py serves
+// dist/terminal.html there in production).
+const cleanTerminalPath = {
+  name: "planetaria-clean-terminal-path",
+  configureServer(server: { middlewares: { use: (fn: (req: { url?: string }, _res: unknown, next: () => void) => void) => void } }) {
+    server.middlewares.use((req, _res, next) => {
+      if (req.url === "/terminal" || req.url?.startsWith("/terminal?")) {
+        req.url = req.url.replace("/terminal", "/terminal.html");
+      }
+      next();
+    });
+  },
+};
+
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), cleanTerminalPath],
   build: {
     target: "esnext",
     rollupOptions: { input: { main: "index.html", terminal: "terminal.html" } },

@@ -33,6 +33,132 @@ body {
   font-family: "SF Mono", "Fira Code", "Consolas", monospace;
   font-size: 13px;
   overflow: hidden;
+  /* Phone: a downward pan on the chart must never become Chrome's
+     pull-to-refresh, and a horizontal one must never become back-swipe. */
+  overscroll-behavior: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Touch surfaces: no 300ms tap delay, no double-tap zoom, no long-press
+   text selection on controls. Inputs keep selection so values stay editable. */
+button,
+[role="button"],
+.touch-ui {
+  touch-action: manipulation;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* Phone number inputs: the spinner arrows are unusable at finger size; the
+   [−]/[+] steppers next to them are the control. */
+@media (pointer: coarse) {
+  input[type="number"]::-webkit-inner-spin-button,
+  input[type="number"]::-webkit-outer-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+  input[type="number"] {
+    -moz-appearance: textfield;
+    appearance: textfield;
+  }
+}
+
+/* ── Terminal fields (Bloomberg discipline): ONE height, FIXED widths,
+   label column left in small caps, value right-aligned in tabular figures,
+   amber on black, a hairline under the value that lights amber on focus.
+   Every numeric control in the desktop panels is built from these — no
+   per-panel box sizes. */
+.fld {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  min-height: 24px;
+}
+.fld-l {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+}
+.fld-c {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+}
+.fld-i {
+  height: 22px;
+  width: 5.25rem;
+  padding: 0 6px;
+  background: #000;
+  border: 1px solid var(--border);
+  border-bottom-color: #4a4a4a;
+  color: var(--text-primary);
+  font-size: 12px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  outline: none;
+}
+.fld-i:focus {
+  border-color: #555;
+  border-bottom-color: var(--text-primary);
+}
+.fld-i.w-sm { width: 3.75rem; }
+.fld-i.w-md { width: 6.5rem; }
+.fld-i.w-lg { width: 9rem; }
+.fld-i.is-select { text-align: left; padding-right: 2px; }
+.fld-i.is-profit { color: var(--profit); }
+.fld-i.is-loss { color: var(--loss); }
+.fld-i.is-orange { color: var(--text-secondary); }
+.fld-i.is-white { color: var(--text-white); }
+.fld-u {
+  width: 1.6rem;
+  font-size: 10px;
+  color: var(--text-muted);
+}
+.fld-aux {
+  width: 3.5rem;
+  text-align: right;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.fld-b {
+  height: 22px;
+  min-width: 22px;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+}
+.fld-b:hover:not(:disabled) {
+  color: var(--text-primary);
+  border-color: #555;
+}
+.fld-b.on {
+  color: var(--text-primary);
+  border-color: var(--text-primary);
+}
+.fld-b:disabled {
+  opacity: 0.3;
+}
+
+/* Horizontal chip rails (timeframes, presets, expiries): scroll, no bar. */
+.chip-rail {
+  display: flex;
+  gap: 4px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+.chip-rail::-webkit-scrollbar {
+  display: none;
 }
 
 /* All numbers tabular so columns never jitter */

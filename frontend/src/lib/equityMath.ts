@@ -127,3 +127,62 @@ export function holdDaysUntil(dateStr: string, now: Date = new Date()): number {
   const cal = (target - now.getTime()) / 86_400_000;
   return Math.max(1, Math.round(cal * (5 / 7)));
 }
+
+// ------------------------------------------------------ automatic horizon
+// The stop and the hold horizon are one decision seen from two sides: a
+// stop k× the horizon's 1σ (suggestedStopPct) inverts to "how long does a
+// stop of this width buy me before ordinary noise reaches it". That is the
+// automatic time stop — the planned exit is where the stop stops being a
+// disaster line and starts being a coin flip against the symbol's own vol.
+
+/** Trading days a stop of `slPct` covers at k× the horizon 1σ; [1, 30]. */
+export function autoHoldDays(slPct: number, dailySigma: number, k = 1.5): number | null {
+  if (dailySigma <= 0 || slPct <= 0) return null;
+  const days = (slPct / (k * dailySigma)) ** 2;
+  return Math.min(30, Math.max(1, Math.round(days)));
+}
+
+/** ET calendar date (yyyy-mm-dd) `tradingDays` weekdays ahead of `now`.
+ * Weekends skipped; exchange holidays are not (the enforcer's clock parks
+ * a holiday exit to the next session anyway). */
+export function tradingDateAhead(tradingDays: number, now: Date = new Date()): string {
+  const et = new Date(
+    now.toLocaleString("en-US", { timeZone: "America/New_York" }),
+  );
+  let left = Math.max(1, Math.round(tradingDays));
+  while (left > 0) {
+    et.setDate(et.getDate() + 1);
+    const dow = et.getDay();
+    if (dow !== 0 && dow !== 6) left -= 1;
+  }
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${et.getFullYear()}-${p(et.getMonth() + 1)}-${p(et.getDate())}`;
+}
+
+/** Probability the TARGET is touched before the STOP for a driftless
+ * (martingale) log-price — the gambler's-ruin answer, independent of vol
+ * and of the time stop: ln(S/L) / ln(U/L) on the two barriers. Honest
+ * baseline for the ticket's target chips: a 2R target is NOT a 33% shot,
+ * it is whatever the log distances say. Null without both exits. */
+export function pTargetFirst(exits: EquityExits): number | null {
+  if (exits.tp == null) return null;
+  const s = Math.abs(exits.entry);
+  const stop = Math.abs(exits.sl);
+  const target = Math.abs(exits.tp);
+  if (!(s > 0 && stop > 0 && target > 0) || stop === target) return null;
+  const p = Math.log(s / stop) / Math.log(target / stop);
+  return Math.min(1, Math.max(0, p));
+}
+
+/** The ticket's entry price: marketable (ask long / bid short) when the
+ * book is fresh, else the freshest spot; 0 when nothing prices. */
+export function ticketPrice(
+  quote: { bid: number; ask: number; mid: number } | null,
+  quoteFresh: boolean,
+  side: 1 | -1,
+  fallbackSpot: number,
+): number {
+  const raw = side > 0 ? quote?.ask : quote?.bid;
+  if (quoteFresh && raw && raw > 0) return raw;
+  return fallbackSpot > 0 ? fallbackSpot : (quote?.mid ?? 0);
+}

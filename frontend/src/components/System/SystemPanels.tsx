@@ -71,9 +71,9 @@ function NumField({
   label: string; value: number; onChange: (v: number) => void; min: number; max: number; suffix?: string;
 }) {
   return (
-    <label className="flex items-center justify-between gap-2 px-2 py-1">
-      <span className="text-[10px] tracking-wider text-bb-muted">{label}</span>
-      <span className="flex items-center gap-1">
+    <label className="fld px-2">
+      <span className="fld-l">{label}</span>
+      <span className="fld-c">
         <input
           data-numeric
           type="number"
@@ -81,10 +81,10 @@ function NumField({
           max={max}
           value={value}
           onChange={(e) => onChange(Number(e.target.value))}
-          className="w-16 border border-bb-border bg-black px-1 py-0.5 text-right text-[11px] text-bb-amber outline-none focus:border-bb-amber"
+          className="fld-i w-sm"
           aria-label={label}
         />
-        <span className="text-[10px] text-bb-muted">{suffix}</span>
+        <span className="fld-u">{suffix}</span>
       </span>
     </label>
   );
@@ -325,22 +325,22 @@ export function FeedSettingsPanel() {
         min={5} max={300}
         onChange={(v) => setDraft((d) => ({ ...d, account_poll_s: v }))}
       />
-      <label className="flex items-center justify-between gap-2 px-2 py-1">
-        <span className="text-[10px] tracking-wider text-bb-muted">
+      <label className="fld px-2">
+        <span className="fld-l">
           STOCK FEED <span className="text-bb-orange">↻</span>
         </span>
         <select
           value={merged.stock_feed}
           onChange={(e) => setDraft((d) => ({ ...d, stock_feed: e.target.value as "iex" | "sip" }))}
-          className="border border-bb-border bg-black px-1 py-0.5 text-[11px] text-bb-amber outline-none"
+          className="fld-i is-select w-lg"
           aria-label="Stock feed"
         >
           <option value="iex">IEX (free)</option>
           <option value="sip">SIP (paid sub)</option>
         </select>
       </label>
-      <label className="flex items-center justify-between gap-2 px-2 py-1">
-        <span className="text-[10px] tracking-wider text-bb-muted">
+      <label className="fld px-2">
+        <span className="fld-l">
           OPTION FEED <span className="text-bb-orange">↻</span>
         </span>
         <select
@@ -348,7 +348,7 @@ export function FeedSettingsPanel() {
           onChange={(e) =>
             setDraft((d) => ({ ...d, option_feed: e.target.value as "indicative" | "opra" }))
           }
-          className="border border-bb-border bg-black px-1 py-0.5 text-[11px] text-bb-amber outline-none"
+          className="fld-i is-select w-lg"
           aria-label="Option feed"
         >
           <option value="indicative">INDICATIVE (free)</option>

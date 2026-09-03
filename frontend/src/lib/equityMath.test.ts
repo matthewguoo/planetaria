@@ -1,14 +1,18 @@
 import { describe, expect, it } from "vitest";
 import {
+  autoHoldDays,
   capitalUsd,
   dailySigmaPct,
   equityExits,
   equityPreflight,
   holdDaysUntil,
   holdSigmaPct,
+  pTargetFirst,
   rr,
   sharesForRisk,
   suggestedStopPct,
+  ticketPrice,
+  tradingDateAhead,
 } from "./equityMath";
 
 describe("equityExits — ref_tick's signed arithmetic, verbatim", () => {
@@ -116,5 +120,46 @@ describe("smart stop suggestions (vol-scaled)", () => {
     expect(holdDaysUntil("2026-09-15", now)).toBe(10); // 14 cal -> 10 trading
     expect(holdDaysUntil("2026-09-01", now)).toBe(1); // floor
     expect(holdDaysUntil("garbage", now)).toBe(1);
+  });
+});
+
+describe("automatic horizon", () => {
+  it("inverts the stop suggestion: a 1.5σ·N-day stop maps back to N days", () => {
+    const dailySigma = 1.2;
+    for (const days of [1, 4, 9, 16]) {
+      const stop = suggestedStopPct(dailySigma, days)!;
+      // rounding to 0.5% in the suggestion moves the inverse by < 1 day
+      expect(Math.abs(autoHoldDays(stop, dailySigma)! - days)).toBeLessThanOrEqual(1);
+    }
+    expect(autoHoldDays(5, 0)).toBeNull();
+    expect(autoHoldDays(50, 0.5)).toBe(30); // clamped
+  });
+
+  it("tradingDateAhead skips weekends", () => {
+    // Fri 2026-09-04 12:00 ET
+    const fri = new Date("2026-09-04T16:00:00Z");
+    expect(tradingDateAhead(1, fri)).toBe("2026-09-07");
+    expect(tradingDateAhead(5, fri)).toBe("2026-09-11");
+  });
+});
+
+describe("pTargetFirst", () => {
+  it("is the log-barrier gambler's-ruin probability, symmetric long/short", () => {
+    const long = equityExits(100, 1, 0.05, 0.1);
+    const p = pTargetFirst(long)!;
+    expect(p).toBeCloseTo(Math.log(100 / 95) / Math.log(110 / 95), 6);
+    const short = equityExits(100, -1, 0.05, 0.1);
+    expect(pTargetFirst(short)!).toBeCloseTo(Math.log(100 / 105) / Math.log(90 / 105), 6);
+    expect(pTargetFirst(equityExits(100, 1, 0.05, null))).toBeNull();
+  });
+});
+
+describe("ticketPrice", () => {
+  it("pays the ask long, hits the bid short, falls back to spot when stale", () => {
+    const q = { bid: 99, ask: 101, mid: 100 };
+    expect(ticketPrice(q, true, 1, 0)).toBe(101);
+    expect(ticketPrice(q, true, -1, 0)).toBe(99);
+    expect(ticketPrice(q, false, 1, 100.5)).toBe(100.5);
+    expect(ticketPrice(null, false, 1, 0)).toBe(0);
   });
 });

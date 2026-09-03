@@ -2,17 +2,12 @@ import { useMemo, useState } from "react";
 import { suggestSlPctFromUnderlying } from "../../lib/analytics";
 import { apiError, postOrder } from "../../lib/api";
 import { playCue } from "../../lib/audio";
-import { etDateIso, etWallToUtcIso } from "../../lib/et";
 import { nakedShortUnits } from "../../lib/optionsMath";
+import { liveLevel2Blocked, optionsOrderPayload } from "../../lib/orderPayload";
 import type { Designer } from "../../lib/useDesigner";
 import { useAccountStore, useTradingMode } from "../../store/accountStore";
 import { useStrategyStore } from "../../store/strategyStore";
 import { useTradingStore } from "../../store/tradingStore";
-
-/** Today at HH:MM ET -> UTC ISO. */
-function etToUtcIso(timeEt: string): string {
-  return etWallToUtcIso(etDateIso(), timeEt);
-}
 
 /** What crossing the spread RIGHT NOW pays/receives: every leg filled at its
  * natural price (buy at ask, sell at bid) instead of mid. The gap vs the mid
@@ -88,10 +83,7 @@ export function OrderPanel({ designer }: { designer: Designer }) {
   const { live, loaded } = useTradingMode();
   // The live account is options level 2: long single-leg only. The backend
   // refuses the same shape; this pre-empts the 422 with the reason visible.
-  const l2Blocked =
-    live &&
-    !!designer.legs &&
-    (designer.legs.length !== 1 || designer.legs.some((leg) => leg.side < 0));
+  const l2Blocked = liveLevel2Blocked(live, designer);
   const canTrade =
     loaded &&
     designer.ready &&
@@ -106,26 +98,9 @@ export function OrderPanel({ designer }: { designer: Designer }) {
     setSubmitting(true);
     setError(null);
     try {
-      const plan = await postOrder({
-        underlying: symbol,
-        strategy: modified ? "custom" : kind,
-        legs: designer.legs.map((leg) => ({
-          symbol: leg.symbol,
-          right: leg.right,
-          strike: leg.strike,
-          expiry: leg.expiry,
-          side: leg.side,
-          ratio: leg.qty,
-          entry: leg.entry,
-          iv: leg.iv,
-          half_spread: leg.halfSpread,
-        })),
-        qty: designer.qty,
-        entry_limit: Number(designer.entry.toFixed(2)),
-        tp_premium: Number(designer.tpPremium!.toFixed(2)),
-        sl_premium: Number(designer.slPremium!.toFixed(2)),
-        time_stop_utc: etToUtcIso(timeStopEt),
-      });
+      const plan = await postOrder(
+        optionsOrderPayload({ designer, symbol, kind, modified, timeStopEt }),
+      );
       setPlaced(plan.id);
       setConfirming(false);
       void refreshPositions();
@@ -143,22 +118,22 @@ export function OrderPanel({ designer }: { designer: Designer }) {
     <div className="panel relative flex min-w-0 flex-col">
       <div className="panel-title">ORDER</div>
       <div className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto p-2">
-        <div className="flex items-center justify-between gap-2">
-          <span className="text-[11px] text-bb-muted">TP</span>
-          <span className="flex items-center gap-1">
+        <div className="fld">
+          <span className="fld-l">TAKE PROFIT</span>
+          <span className="fld-c">
             <input
               data-numeric
               type="number"
               step={10}
               min={5}
               max={1000}
-              className="w-14 border border-bb-border bg-black px-1 py-0.5 text-right text-[12px] text-bb-profit outline-none focus:border-bb-amber"
+              className="fld-i w-sm is-profit"
               value={Math.round(tpPct * 100)}
               onChange={(e) => setTpPct(Number(e.target.value) / 100)}
               aria-label="Take profit percent"
             />
-            <span className="text-[10px] text-bb-muted">%</span>
-            <span data-numeric className="w-14 text-right text-[11px] text-bb-profit">
+            <span className="fld-u">%</span>
+            <span data-numeric className="fld-aux text-bb-profit">
               {designer.tpPremium != null ? designer.tpPremium.toFixed(2) : "—"}
             </span>
           </span>
@@ -169,22 +144,22 @@ export function OrderPanel({ designer }: { designer: Designer }) {
         >
           executes ≈ @{designer.probabilities?.tpBarrier?.toFixed(2) ?? "—"}
         </div>
-        <div className="flex items-center justify-between gap-2">
-          <span className="text-[11px] text-bb-muted">SL</span>
-          <span className="flex items-center gap-1">
+        <div className="fld">
+          <span className="fld-l">STOP LOSS</span>
+          <span className="fld-c">
             <input
               data-numeric
               type="number"
               step={5}
               min={5}
               max={300}
-              className="w-14 border border-bb-border bg-black px-1 py-0.5 text-right text-[12px] text-bb-loss outline-none focus:border-bb-amber"
+              className="fld-i w-sm is-loss"
               value={Math.round(slPct * 100)}
               onChange={(e) => setSlPct(Number(e.target.value) / 100)}
               aria-label="Stop loss percent"
             />
-            <span className="text-[10px] text-bb-muted">%</span>
-            <span data-numeric className="w-14 text-right text-[11px] text-bb-loss">
+            <span className="fld-u">%</span>
+            <span data-numeric className="fld-aux text-bb-loss">
               {designer.slPremium != null ? designer.slPremium.toFixed(2) : "—"}
             </span>
           </span>
@@ -196,10 +171,8 @@ export function OrderPanel({ designer }: { designer: Designer }) {
             <button
               onClick={() => setSlPct(slSuggestion.slPct)}
               className={
-                "border px-1 py-0 text-[9px] " +
-                (Math.abs(slPct - slSuggestion.slPct) < 0.026
-                  ? "border-bb-profit text-bb-profit"
-                  : "border-bb-border text-bb-muted hover:text-bb-amber")
+                "fld-b " +
+                (Math.abs(slPct - slSuggestion.slPct) < 0.026 ? "on border-bb-profit text-bb-profit" : "")
               }
               title={
                 `Vol-scaled stop: the premium if the UNDERLYING moves 1.5σ ` +
@@ -221,21 +194,21 @@ export function OrderPanel({ designer }: { designer: Designer }) {
             executes ≈ @{designer.probabilities?.slBarrier?.toFixed(2) ?? "—"}
           </span>
         </div>
-        <div className="flex items-center justify-between gap-2">
-          <span className="text-[11px] text-bb-muted">TIME STOP</span>
-          <span className="flex items-center gap-1">
+        <div className="fld">
+          <span className="fld-l">TIME STOP</span>
+          <span className="fld-c">
             <input
               type="time"
-              className="border border-bb-border bg-black px-1 py-0.5 text-[11px] text-bb-orange outline-none focus:border-bb-amber"
+              className="fld-i w-md is-orange"
               value={timeStopEt}
               onChange={(e) => e.target.value && setTimeStopEt(e.target.value)}
               aria-label="Time stop (ET)"
             />
-            <span className="text-[10px] text-bb-muted">ET</span>
+            <span className="fld-u">ET</span>
           </span>
         </div>
-        <div className="flex items-baseline justify-between gap-2">
-          <span className="text-[11px] text-bb-muted">
+        <div className="fld">
+          <span className="fld-l">
             ENTRY {designer.ready && designer.entry < 0 ? "CREDIT" : "LIMIT"}
           </span>
           <span data-numeric className={"text-[12px] " + (designer.entry < 0 ? "text-bb-profit" : "text-bb-amber")}>

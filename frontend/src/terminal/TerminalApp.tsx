@@ -23,13 +23,21 @@ import { useTradingStore } from "../store/tradingStore";
 import { useUiStore } from "../store/uiStore";
 
 // Below this width the dedicated phone layout takes over (chart-first,
-// bottom-sheet panels — see components/Mobile/).
+// bottom-sheet panels — see components/Mobile/). A touch device whose SHORT
+// side is under it is a phone too — landscape phones are ~850px wide and
+// were getting the eleven-column desktop grid.
 const MIN_WIDTH = 640;
 
+function isPhoneViewport(): boolean {
+  const coarse = window.matchMedia?.("(pointer: coarse)").matches ?? false;
+  const shortSide = Math.min(window.innerWidth, window.innerHeight);
+  return window.innerWidth < MIN_WIDTH || (coarse && shortSide < MIN_WIDTH);
+}
+
 function usePhoneViewport(): boolean {
-  const [phone, setPhone] = useState(window.innerWidth < MIN_WIDTH);
+  const [phone, setPhone] = useState(isPhoneViewport);
   useEffect(() => {
-    const onResize = () => setPhone(window.innerWidth < MIN_WIDTH);
+    const onResize = () => setPhone(isPhoneViewport());
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
   }, []);

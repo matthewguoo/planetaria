@@ -44,6 +44,9 @@ export type IndicatorToggles = {
   vwap: boolean;
   ema: boolean;
   bb: boolean;
+  sma: boolean; // SMA 20 / 50 / 200
+  rsi: boolean; // RSI 14 (oscillator pane)
+  macd: boolean; // MACD 12·26·9 (oscillator pane)
 };
 
 export type AssetMode = "options" | "equity";
@@ -74,7 +77,7 @@ export const useTradingStore = create<TradingState>((set) => ({
   tf: "1m",
   quote: null,
   status: { configured: false, demo: false, sources: {}, redis: false, stream_age_s: null, connection: "connecting" },
-  indicators: { heat: true, sim: true, theta: false, vwap: true, ema: false, bb: false },
+  indicators: { heat: true, sim: true, theta: false, vwap: true, ema: false, bb: false, sma: false, rsi: false, macd: false },
   assetMode:
     typeof localStorage !== "undefined" && localStorage.getItem("planetaria.assetMode") === "equity"
       ? "equity"

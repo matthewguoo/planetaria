@@ -23,12 +23,12 @@ export function SizingPanel({ designer }: { designer: Designer }) {
       <div className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto p-2">
         {sizing ? (
           <>
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-[11px] text-bb-muted">CONTRACTS</span>
-              <span className="flex items-center gap-1">
+            <div className="fld">
+              <span className="fld-l">CONTRACTS</span>
+              <span className="fld-c">
                 <input
                   data-numeric
-                  className="w-14 border border-bb-border bg-black px-1 py-0.5 text-right text-[12px] text-bb-amber outline-none focus:border-bb-amber"
+                  className="fld-i w-sm"
                   type="number"
                   min={0}
                   max={Math.max(designer.autoQty, 0)}
@@ -37,7 +37,7 @@ export function SizingPanel({ designer }: { designer: Designer }) {
                   aria-label="Contracts"
                 />
                 <button
-                  className="border border-bb-border px-1 text-[10px] text-bb-muted hover:text-bb-amber"
+                  className={"fld-b" + (qty === 0 ? " on" : "")}
                   onClick={() => setQty(0)}
                   title="Auto-size from max loss"
                 >

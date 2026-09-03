@@ -94,4 +94,12 @@ async def health(request: Request) -> dict:
 # request, so `npm run build` redeploys the UI without a restart.
 _dist = Path(__file__).resolve().parent.parent.parent / "frontend" / "dist"
 if not get_settings().headless and _dist.is_dir():
+    from fastapi.responses import FileResponse
+
+    # Clean path for the cockpit: /terminal (the Vite entry is still
+    # terminal.html on disk — a build artifact name, not a URL to type).
+    @app.get("/terminal", include_in_schema=False)
+    async def terminal_page():
+        return FileResponse(_dist / "terminal.html")
+
     app.mount("/", StaticFiles(directory=str(_dist), html=True), name="ui")

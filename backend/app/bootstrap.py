@@ -79,6 +79,10 @@ async def startup(app: FastAPI, settings: Settings) -> None:
     app.state.redis = redis
     app.state.db = db
     app.state.alpaca = alpaca
+    # Symbol picker's tradability universe (lazy: first search loads it).
+    from app.services.symbols import AssetUniverse
+
+    app.state.symbols = AssetUniverse(alpaca)
     app.state.broadcaster = broadcaster
     app.state.market = market
     app.state.chain = ChainService(alpaca, redis, market)

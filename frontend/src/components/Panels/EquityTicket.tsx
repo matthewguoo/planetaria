@@ -1,41 +1,45 @@
 /**
  * Manual EQUITY / ETF swing ticket. The discipline is structural: sizing is
- * risk-%-of-the-manual-book against the stop distance, the stop is REQUIRED
- * (the backend refuses a stopless manual equity entry), the target is
- * optional (let winners run), and every gate shows its refusal reason
- * BEFORE submit. The server re-validates everything.
+ * risk-%-of-account against the stop distance, the stop is REQUIRED (the
+ * backend refuses a stopless manual equity entry), the target is optional
+ * (let winners run), and every gate shows its refusal reason BEFORE
+ * submit. The server re-validates everything.
  *
- * One component for both shells, mobile-first: base classes are
- * touch-sized (44px targets, steppers instead of bare number spinners,
- * advanced fields behind MORE), `sm:` tightens everything for the desktop
- * panel grid. Submit is a two-step with an explicit summary — the confirm
- * shows exactly what the enforcer will hold you to.
+ * Inputs live in equityTicketStore — the chart draws the same stop /
+ * target / exit-day lines and drags them back into this ticket. The plan
+ * itself (price, shares, horizon, odds) is derived once in lib/equityPlan
+ * for both surfaces.
+ *
+ * Automation, not habit numbers: the stop suggestion comes from the
+ * symbol's own realized vol for the intended hold; the time stop is
+ * AUTOMATIC by default — the number of days that stop buys before ordinary
+ * noise reaches it; the target chips are 1σ/2σ of the horizon beside the
+ * R multiples, with the driftless P(target before stop) stated honestly.
+ *
+ * One component for both shells, mobile-first: base classes are touch-
+ * sized, `sm:` tightens everything for the desktop panel grid.
  */
 
 import { useState } from "react";
 import { apiError, postOrder } from "../../lib/api";
 import { playCue } from "../../lib/audio";
+import { useCapabilities } from "../../lib/capabilities";
 import { sharedBars } from "../../lib/chartShared";
+import { equityPreflight, swingBackstopUtc } from "../../lib/equityMath";
+import { deriveEquityPlan } from "../../lib/equityPlan";
 import { etWallToUtcIso } from "../../lib/et";
-import {
-  capitalUsd,
-  dailySigmaPct,
-  equityExits,
-  equityPreflight,
-  holdDaysUntil,
-  holdSigmaPct,
-  rr,
-  sharesForRisk,
-  suggestedStopPct,
-  swingBackstopUtc,
-} from "../../lib/equityMath";
-import { realizedVolAnnualized } from "../../lib/indicators";
 import { useAccountStore, useTradingMode } from "../../store/accountStore";
-import { freshSpot, quoteIsStale, TF_MS, useTradingStore } from "../../store/tradingStore";
+import { useEquityTicketStore } from "../../store/equityTicketStore";
+import { useTradingStore } from "../../store/tradingStore";
 
 /** ET 15:55 on a calendar date -> UTC ISO. */
 function etCloseToUtcIso(dateStr: string): string {
   return etWallToUtcIso(dateStr, "15:55");
+}
+
+function fmtDate(iso: string): string {
+  const [y, m, d] = iso.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d)).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
 }
 
 function Row({ label, value, cls, title, big }: {
@@ -57,6 +61,10 @@ function Row({ label, value, cls, title, big }: {
   );
 }
 
+const stepBtn =
+  "h-10 w-10 shrink-0 border border-bb-border text-[16px] leading-none text-bb-muted " +
+  "active:bg-bb-amber active:text-black sm:h-5 sm:w-5 sm:text-[11px]";
+
 /** Touch-first numeric control: [−] value [+] steppers plus a real input
  * (inputMode=decimal so phones open the number pad). */
 function StepRow({
@@ -66,14 +74,11 @@ function StepRow({
   step: number; min: number; max: number; unit?: string; accent?: string; title?: string;
 }) {
   const clamp = (v: number) => Math.min(max, Math.max(min, Math.round(v * 100) / 100));
-  const btn =
-    "h-10 w-10 shrink-0 border border-bb-border text-[16px] leading-none text-bb-muted " +
-    "active:bg-bb-amber active:text-black sm:h-5 sm:w-5 sm:text-[11px]";
   return (
     <div className="flex items-center justify-between gap-2 py-0.5" title={title}>
       <span className="text-[11px] text-bb-muted sm:text-[10px]">{label}</span>
       <span className="inline-flex items-center gap-1">
-        <button className={btn} onClick={() => onChange(clamp(value - step))} aria-label={`decrease ${label}`}>−</button>
+        <button className={stepBtn} onClick={() => onChange(clamp(value - step))} aria-label={`decrease ${label}`}>−</button>
         <span className="inline-flex items-center gap-0.5">
           <input
             data-numeric
@@ -89,11 +94,15 @@ function StepRow({
           />
           <span className="text-[11px] text-bb-muted sm:text-[10px]">{unit}</span>
         </span>
-        <button className={btn} onClick={() => onChange(clamp(value + step))} aria-label={`increase ${label}`}>+</button>
+        <button className={stepBtn} onClick={() => onChange(clamp(value + step))} aria-label={`increase ${label}`}>+</button>
       </span>
     </div>
   );
 }
+
+const chipCls = (on: boolean) =>
+  "h-9 border px-2 text-[11px] sm:h-5 sm:px-1.5 sm:text-[10px] " +
+  (on ? "border-bb-amber text-bb-amber" : "border-bb-border text-bb-muted active:text-bb-amber");
 
 export function EquityTicket() {
   const symbol = useTradingStore((s) => s.symbol);
@@ -102,256 +111,235 @@ export function EquityTicket() {
   const account = useAccountStore((s) => s.account);
   const refreshAccount = useAccountStore((s) => s.refreshAccount);
   const refreshPositions = useAccountStore((s) => s.refreshPositions);
+  const caps = useCapabilities();
+  const t = useEquityTicketStore();
 
-  const [side, setSide] = useState<1 | -1>(1);
-  const [riskPct, setRiskPct] = useState(1.0);
-  const [slPct, setSlPct] = useState(5.0);
-  const [tpOn, setTpOn] = useState(false);
-  const [tpPct, setTpPct] = useState(10.0);
   const [more, setMore] = useState(false);
-  const [sharesOverride, setSharesOverride] = useState(0); // 0 = auto
-  const [timeStopDate, setTimeStopDate] = useState(""); // "" = +30d backstop
-  const [extendedHours, setExtendedHours] = useState(false);
-  const [confirming, setConfirming] = useState(false);
+  // A pending confirm / result belongs to the ticket revision it was made
+  // on; any edit (from here or the chart) leaves it behind — no effects.
+  const [confirmRev, setConfirmRev] = useState<number | null>(null);
   const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [placed, setPlaced] = useState<string | null>(null);
+  const [error, setError] = useState<{ rev: number; msg: string } | null>(null);
+  const [placed, setPlaced] = useState<{ rev: number; id: string } | null>(null);
+  const confirming = confirmRev === t.rev;
+  const errorMsg = error && error.rev === t.rev ? error.msg : null;
+  const placedId = placed && placed.rev === t.rev ? placed.id : null;
 
-  // Sizing denominates in the SELECTED account's real equity — capital
-  // separation is done with real accounts (one per book), so a $11k share
-  // account makes every %-gate bind at $11k by construction.
-  const quoteFresh = !!quote && quote.mid > 0 && !quoteIsStale(quote);
-  // Marketable pricing: pay the ask long, hit the bid short; mid fallback.
-  const rawPx = side > 0 ? quote?.ask : quote?.bid;
-  const price = quoteFresh && rawPx && rawPx > 0 ? rawPx : freshSpot(quote, 0);
-  const halfSpread =
-    quote && quote.ask > 0 && quote.bid > 0 && quote.ask >= quote.bid
-      ? (quote.ask - quote.bid) / 2
-      : null;
-
-  const exits = equityExits(price, side, slPct / 100, tpOn ? tpPct / 100 : null);
-  const acctEquity = account?.equity ?? 0;
-  const maxLossCapUsd =
-    account && account.risk ? account.equity * account.risk.max_loss_pct : null;
-  const dailyCapUsd =
-    account && account.risk ? account.equity * account.risk.daily_loss_pct : null;
-  const riskBudget = (acctEquity * riskPct) / 100;
-
-  // Vol-scaled stop intelligence off the symbol's own tape (chart bars).
-  const bars = sharedBars.current;
-  const rv = bars.n > 30 ? realizedVolAnnualized(bars, 30, TF_MS[tf] / 60_000) : 0;
-  const dSigma = dailySigmaPct(rv);
-  const holdDays = timeStopDate ? holdDaysUntil(timeStopDate) : 5; // default swing horizon
-  const stopSuggestion = suggestedStopPct(dSigma, holdDays);
-  const noiseSigma = dSigma > 0 ? holdSigmaPct(dSigma, holdDays) : 0;
-  const stopInsideNoise = noiseSigma > 0 && slPct < noiseSigma;
-  const autoShares = price > 0 ? sharesForRisk(riskBudget, exits.entry, exits.sl) : 0;
-  const shares = sharesOverride > 0 ? Math.min(sharesOverride, Math.max(autoShares, 1)) : autoShares;
-  const notional = capitalUsd(price, shares, side);
-  const maxLoss = (exits.entry - exits.sl) * shares;
-  const rrMult = rr(exits.entry, exits.tp, exits.sl);
-  const longOnly = account?.risk?.equity_long_only ?? true;
-
+  const plan = deriveEquityPlan({ ticket: t, quote, bars: sharedBars.current, tf, account });
+  const { price, exits, shares } = plan;
+  const longOnly = !caps.shortsAllowed;
   const reasons = equityPreflight({
-    price, side, shares, exits, maxLossCapUsd,
-    equityLongOnly: longOnly,
-    quoteFresh,
+    price, side: t.side, shares, exits, maxLossCapUsd: plan.maxLossCapUsd,
+    equityLongOnly: longOnly, quoteFresh: plan.quoteFresh,
   });
   // Nothing submits until the server mode has loaded — an unloaded ticket
   // on the live server would send a real order under a PAPER label.
   const { live, loaded } = useTradingMode();
   const canTrade = loaded && reasons.length === 0 && shares > 0 && !submitting;
-  const sideWord = side > 0 ? "BUY" : "SHORT";
+  const sideWord = t.side > 0 ? "BUY" : "SHORT";
   const modeWord = live ? "LIVE" : "PAPER";
-
-  const edit = <T,>(setter: (v: T) => void) => (v: T) => {
-    // Any edit invalidates a pending confirm and clears stale feedback —
-    // the confirm summary must never describe a different trade.
-    setConfirming(false);
-    setError(null);
-    setPlaced(null);
-    setter(v);
-  };
 
   const submit = async () => {
     setSubmitting(true);
     setError(null);
+    const rev = t.rev;
     try {
-      const plan = await postOrder({
+      const created = await postOrder({
         underlying: symbol,
         strategy: "manual_equity",
         asset_class: "equity",
-        extended_hours: extendedHours,
+        extended_hours: t.extendedHours,
         legs: [{
           symbol,
-          side,
+          side: t.side,
           ratio: 1,
           entry: Number(exits.entry.toFixed(2)),
-          half_spread: halfSpread != null ? Number(halfSpread.toFixed(4)) : null,
+          half_spread: plan.halfSpread != null ? Number(plan.halfSpread.toFixed(4)) : null,
         }],
         qty: shares,
         entry_limit: Number(exits.entry.toFixed(2)),
         tp_premium: exits.tp,
         sl_premium: exits.sl,
-        time_stop_utc: timeStopDate ? etCloseToUtcIso(timeStopDate) : swingBackstopUtc(),
+        time_stop_utc: plan.timeStopDate ? etCloseToUtcIso(plan.timeStopDate) : swingBackstopUtc(),
       });
       playCue("submitted");
-      setPlaced(plan.id);
-      setConfirming(false);
+      setPlaced({ rev, id: created.id });
+      setConfirmRev(null);
       void refreshPositions();
       void refreshAccount();
     } catch (err) {
       // Server-side risk rejections never create a plan, so no WS cue fires
       // for them — buzz locally.
       playCue("rejected");
-      setError(apiError(err));
+      setError({ rev, msg: apiError(err) });
     } finally {
       setSubmitting(false);
     }
   };
 
-  const toggleBtn = (on: boolean) =>
-    "h-10 min-w-14 border px-2 text-[11px] sm:h-5 sm:min-w-0 sm:px-1.5 sm:text-[10px] " +
-    (on ? "border-bb-amber text-bb-amber" : "border-bb-border text-bb-muted");
-
   return (
     <div className="panel relative flex min-w-0 flex-col">
       <div className="panel-title flex items-center justify-between">
         <span>EQUITY SWING TICKET</span>
-        {acctEquity > 0 && (
+        {plan.acctEquity > 0 && (
           <span
             className="text-[10px] tracking-normal text-bb-muted sm:text-[9px]"
-            title="The SELECTED account's equity — every %-gate binds here. Switch accounts in the ⚙ SYSTEM drawer (restart applies)."
+            title="The SELECTED account's equity — every %-gate binds here. Switch accounts on the ACCOUNT page (restart applies)."
           >
-            ACCT ${Math.round(acctEquity).toLocaleString()}
+            ACCT ${Math.round(plan.acctEquity).toLocaleString()}
           </span>
         )}
       </div>
       <div className="flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto p-2 sm:gap-1">
-        {/* Direction: the one decision that recolors everything below it. */}
+        {/* Direction: the one decision that recolors everything below it.
+            A long-only account (cash / IRA) has no SHORT side at all. */}
         <div className="flex gap-px">
-          {([1, -1] as const).map((s) => (
+          {(longOnly ? ([1] as const) : ([1, -1] as const)).map((s) => (
             <button
               key={s}
-              onClick={() => edit(setSide)(s)}
+              onClick={() => t.setSide(s)}
               className={
                 "h-11 flex-1 text-[13px] tracking-widest sm:h-7 sm:text-[11px] " +
-                (side === s
+                (t.side === s
                   ? s > 0
                     ? "bg-bb-profit font-semibold text-black"
                     : "bg-bb-loss font-semibold text-black"
                   : "border border-bb-border text-bb-muted active:text-bb-amber")
               }
             >
-              {s > 0 ? "LONG" : "SHORT"}
+              {s > 0 ? (longOnly ? "LONG · long-only account" : "LONG") : "SHORT"}
             </button>
           ))}
         </div>
-        {side < 0 && longOnly && (
-          <div className="text-[11px] text-bb-orange sm:text-[10px]">
-            shorts are gated off (equity_long_only) — long-only book
-          </div>
-        )}
 
         {/* The two numbers that ARE the trade plan. */}
-        <StepRow label="RISK (% OF ACCT)" value={riskPct} onChange={edit(setRiskPct)}
+        <StepRow label="RISK (% OF ACCT)" value={t.riskPct} onChange={t.setRiskPct}
           step={0.25} min={0.1} max={10} accent="text-bb-amber"
-          title={`Risk budget: $${riskBudget.toFixed(0)} of the $${acctEquity.toLocaleString()} account`} />
-        <StepRow label="STOP DISTANCE" value={slPct} onChange={edit(setSlPct)}
+          title={`Risk budget: $${plan.riskBudget.toFixed(0)} of the $${plan.acctEquity.toLocaleString()} account`} />
+        <StepRow label="STOP DISTANCE" value={t.slPct} onChange={t.setSlPct}
           step={0.5} min={0.5} max={50} accent="text-bb-loss"
-          title="Hard stop below entry. The enforcer executes it — entries without a stop are refused." />
-        {/* Vol-scaled stop intelligence: suggestion from the symbol's OWN
-            measured volatility for the intended hold, and a warning when
-            the chosen stop sits inside ordinary noise (shakeout-prone). */}
-        {stopSuggestion != null && (
+          title="Hard stop below entry. The enforcer executes it — entries without a stop are refused. Drag the red line on the chart to move it." />
+        {plan.stopSuggestion != null && (
           <div className="flex items-center justify-between gap-2">
             <button
-              onClick={() => edit(setSlPct)(stopSuggestion)}
+              onClick={() => t.setSlPct(plan.stopSuggestion!)}
               className={
                 "h-9 border px-2 text-[11px] sm:h-5 sm:px-1.5 sm:text-[10px] " +
-                (Math.abs(slPct - stopSuggestion) < 0.26
+                (Math.abs(t.slPct - plan.stopSuggestion) < 0.26
                   ? "border-bb-profit text-bb-profit"
                   : "border-bb-border text-bb-muted active:text-bb-amber")
               }
               title={
-                `Suggested stop for a ~${holdDays}-trading-day hold: 1.5× the ` +
-                `hold-horizon 1σ (daily σ ${dSigma.toFixed(1)}% from this chart's ` +
+                `Suggested stop for a ~${plan.holdDays}-trading-day hold: 1.5× the ` +
+                `hold-horizon 1σ (daily σ ${plan.dSigma.toFixed(1)}% from this chart's ` +
                 `realized vol). Outside ordinary noise, inside disaster range.`
               }
             >
-              SUGGEST {stopSuggestion}% (1.5σ·{holdDays}d)
+              SUGGEST {plan.stopSuggestion}% (1.5σ·{plan.holdDays}d)
             </button>
-            {stopInsideNoise && (
+            {plan.stopInsideNoise && (
               <span
                 className="text-right text-[10px] text-bb-orange sm:text-[9px]"
                 title="House wick study: winners routinely trade ~1σ against entry before paying — a stop inside the noise band mostly harvests shakeouts."
               >
-                ⚠ inside {holdDays}d noise (1σ≈{noiseSigma.toFixed(1)}%)
+                ⚠ inside {plan.holdDays}d noise (1σ≈{plan.noiseSigma.toFixed(1)}%)
               </span>
             )}
           </div>
         )}
+
+        {/* Horizon: automatic by default — how long this stop stays outside
+            the symbol's own noise. A date makes it manual; AUTO restores. */}
         <div className="flex items-center justify-between gap-2 py-0.5">
-          <span className="text-[11px] text-bb-muted sm:text-[10px]">TARGET</span>
+          <span
+            className="text-[11px] text-bb-muted sm:text-[10px]"
+            title="Hard exit at 15:55 ET on this date. AUTO = the trading days a stop of this width buys at 1.5σ of the symbol's realized vol (drag the orange line on the chart)."
+          >
+            TIME STOP
+          </span>
           <span className="inline-flex items-center gap-1">
+            <button
+              onClick={() => t.setAutoTimeStop(true)}
+              className={chipCls(plan.timeStopAuto)}
+              title={plan.dSigma > 0 ? `stop ${t.slPct}% ≈ 1.5σ over ${plan.holdDays} trading days` : "no vol read yet — 5-day default"}
+            >
+              AUTO{plan.timeStopAuto ? ` · ${fmtDate(plan.timeStopDate)} (${plan.holdDays}d)` : ""}
+            </button>
+            <input
+              type="date"
+              value={t.timeStopDate}
+              onChange={(e) => t.setTimeStopDate(e.target.value)}
+              className={
+                "h-9 border bg-black px-1 text-[12px] outline-none focus:border-bb-amber sm:h-5 sm:text-[11px] " +
+                (t.timeStopDate ? "border-bb-orange text-bb-orange" : "border-bb-border text-bb-muted")
+              }
+              aria-label="Time stop date"
+            />
+          </span>
+        </div>
+
+        {/* Target: σ-of-horizon chips beside the R multiples; RUN = none. */}
+        <div className="flex items-center justify-between gap-2 py-0.5">
+          <span className="text-[11px] text-bb-muted sm:text-[10px]" title="Optional. Drag the green line on the chart to move it.">
+            TARGET
+          </span>
+          <span className="inline-flex flex-wrap items-center justify-end gap-1">
+            <button onClick={() => t.setTarget(false)} className={chipCls(!t.tpOn)} title="No target — let the winner run under the hard stop">
+              RUN
+            </button>
+            {plan.sigmaTargets &&
+              ([1, 2] as const).map((k) => (
+                <button
+                  key={k}
+                  onClick={() => t.setTarget(true, plan.sigmaTargets![k - 1])}
+                  className={chipCls(t.tpOn && Math.abs(t.tpPct - plan.sigmaTargets![k - 1]) < 0.26)}
+                  title={`${k}σ expected move over the ${plan.holdDays}-day horizon (${plan.sigmaTargets![k - 1]}%)`}
+                >
+                  {k}σ
+                </button>
+              ))}
             {[2, 3].map((mult) => (
               <button
                 key={mult}
-                onClick={() => {
-                  edit(setTpOn)(true);
-                  setTpPct(Math.round(slPct * mult * 2) / 2);
-                }}
-                className={
-                  "h-9 border border-bb-border px-1.5 text-[10px] text-bb-muted active:text-bb-amber sm:h-5 sm:px-1 sm:text-[9px]"
-                }
-                title={`Set target at ${mult}R (${mult}× the stop distance)`}
+                onClick={() => t.setTarget(true, Math.round(t.slPct * mult * 2) / 2)}
+                className={chipCls(t.tpOn && Math.abs(t.tpPct - Math.round(t.slPct * mult * 2) / 2) < 0.26)}
+                title={`Target at ${mult}R (${mult}× the stop distance)`}
               >
                 {mult}R
               </button>
             ))}
-            <button
-              onClick={() => edit(setTpOn)(!tpOn)}
-              className={toggleBtn(tpOn)}
-              title="Optional: RUN = no target, let the winner run under the hard stop"
-            >
-              {tpOn ? `+${tpPct}%` : "RUN"}
-            </button>
-            {tpOn && (
+            {t.tpOn && (
               <span className="inline-flex items-center gap-1">
-                <button className="h-10 w-10 border border-bb-border text-[16px] text-bb-muted active:bg-bb-amber active:text-black sm:h-5 sm:w-5 sm:text-[11px]"
-                  onClick={() => edit(setTpPct)(Math.max(1, tpPct - 1))} aria-label="decrease target">−</button>
-                <button className="h-10 w-10 border border-bb-border text-[16px] text-bb-muted active:bg-bb-amber active:text-black sm:h-5 sm:w-5 sm:text-[11px]"
-                  onClick={() => edit(setTpPct)(Math.min(200, tpPct + 1))} aria-label="increase target">+</button>
+                <button className={stepBtn} onClick={() => t.setTpPct(t.tpPct - 1)} aria-label="decrease target">−</button>
+                <span data-numeric className="w-12 text-center text-[13px] text-bb-profit sm:text-[11px]">+{t.tpPct}%</span>
+                <button className={stepBtn} onClick={() => t.setTpPct(t.tpPct + 1)} aria-label="increase target">+</button>
               </span>
             )}
           </span>
         </div>
+        {t.tpOn && plan.pTarget != null && (
+          <div
+            className="text-right text-[10px] text-bb-muted sm:text-[9px]"
+            title="Driftless (martingale) log-price: probability the target is touched before the stop, ignoring the time stop. Independent of vol — it is the log distances alone. Any edge you have is on top of this."
+          >
+            P(target before stop) ≈ <span className={plan.pTarget >= 0.5 ? "text-bb-profit" : "text-bb-orange"}>{(plan.pTarget * 100).toFixed(0)}%</span> driftless
+          </div>
+        )}
 
         {/* Advanced fields fold away — the default ticket is 3 decisions. */}
         <button
           onClick={() => setMore(!more)}
           className="self-start py-1 text-[11px] tracking-widest text-bb-muted active:text-bb-amber sm:py-0 sm:text-[10px]"
         >
-          {more ? "▾ LESS" : "▸ MORE (time stop · shares · ext-hours)"}
+          {more ? "▾ LESS" : "▸ MORE (shares · ext-hours)"}
         </button>
         {more && (
           <div className="flex flex-col gap-1.5 border-l border-bb-border pl-2 sm:gap-1">
             <label className="flex items-center justify-between gap-2">
-              <span className="text-[11px] text-bb-muted sm:text-[10px]"
-                title="Hard exit date (15:55 ET). Empty = +30 day backstop so the enforcer always has an exit.">
-                TIME STOP
-              </span>
+              <span className="text-[11px] text-bb-muted sm:text-[10px]">SHARES (0 = AUTO {plan.autoShares})</span>
               <input
-                type="date" value={timeStopDate}
-                onChange={(e) => edit(setTimeStopDate)(e.target.value)}
-                className="h-10 border border-bb-border bg-black px-1 text-[12px] text-bb-orange outline-none focus:border-bb-amber sm:h-5 sm:text-[11px]"
-              />
-            </label>
-            <label className="flex items-center justify-between gap-2">
-              <span className="text-[11px] text-bb-muted sm:text-[10px]">SHARES (0 = AUTO)</span>
-              <input
-                data-numeric type="number" inputMode="numeric" step={1} min={0} value={sharesOverride}
-                onChange={(e) => edit(setSharesOverride)(Math.max(0, Math.floor(Number(e.target.value))))}
+                data-numeric type="number" inputMode="numeric" step={1} min={0} value={t.sharesOverride}
+                onChange={(e) => t.setSharesOverride(Number(e.target.value))}
                 className="h-10 w-20 border border-bb-border bg-black px-1 text-right text-[14px] text-white outline-none focus:border-bb-amber sm:h-5 sm:w-16 sm:text-[11px]"
               />
             </label>
@@ -360,8 +348,8 @@ export function EquityTicket() {
                 title="DAY limit working the 24/5 extended book (premarket/AH/overnight). RTH-only when off.">
                 EXTENDED HOURS
               </span>
-              <button onClick={() => edit(setExtendedHours)(!extendedHours)} className={toggleBtn(extendedHours)}>
-                {extendedHours ? "ON" : "OFF"}
+              <button onClick={() => t.setExtendedHours(!t.extendedHours)} className={chipCls(t.extendedHours)}>
+                {t.extendedHours ? "ON" : "OFF"}
               </button>
             </label>
           </div>
@@ -370,16 +358,17 @@ export function EquityTicket() {
         {/* Derived plan — the four numbers that matter, big; context muted. */}
         <div className="mt-1 border-t border-bb-border pt-1.5 sm:pt-1">
           <Row big label={`${sideWord} ${symbol}`} value={price > 0 ? `${shares} sh @ ${price.toFixed(2)}` : "—"} cls="text-bb-amber" />
-          <Row big label="MAX LOSS @ STOP" value={shares > 0 ? `$${maxLoss.toFixed(0)}` : "—"} cls="text-bb-loss"
+          <Row big label="MAX LOSS @ STOP" value={shares > 0 ? `$${plan.maxLoss.toFixed(0)}` : "—"} cls="text-bb-loss"
             title="Planned risk. A gap through the stop (overnight, earnings) exceeds this — size is the only cap there." />
           <Row label="STOP / TARGET"
             value={price > 0 ? `${Math.abs(exits.sl).toFixed(2)} / ${exits.tp != null ? Math.abs(exits.tp).toFixed(2) : "run"}` : "—"} />
-          <Row label="R / R" value={rrMult != null ? `${rrMult.toFixed(1)} : 1` : "open-ended"} />
+          <Row label="R / R" value={plan.rrMult != null ? `${plan.rrMult.toFixed(1)} : 1` : "open-ended"} />
+          <Row label="EXIT" value={plan.timeStopDate ? `${fmtDate(plan.timeStopDate)} 15:55 ET${plan.timeStopAuto ? " (auto)" : ""}` : "30d backstop"} cls="text-bb-orange" />
           <Row label="NOTIONAL · % OF ACCT"
-            value={notional > 0 ? `$${notional.toLocaleString("en-US", { maximumFractionDigits: 0 })}${side < 0 ? " (1.5×)" : ""} · ${acctEquity > 0 ? ((notional / acctEquity) * 100).toFixed(1) : "—"}%` : "—"} />
-          {account && dailyCapUsd != null && (
+            value={plan.notional > 0 ? `$${plan.notional.toLocaleString("en-US", { maximumFractionDigits: 0 })}${t.side < 0 ? " (1.5×)" : ""} · ${plan.acctEquity > 0 ? ((plan.notional / plan.acctEquity) * 100).toFixed(1) : "—"}%` : "—"} />
+          {account && plan.dailyCapUsd != null && (
             <Row label="ACCT DAY P/L"
-              value={`$${account.day_realized_pnl.toFixed(0)} / −$${dailyCapUsd.toFixed(0)}`}
+              value={`$${account.day_realized_pnl.toFixed(0)} / −$${plan.dailyCapUsd.toFixed(0)}`}
               title="Realized today vs the account's daily circuit breaker (daily_loss_pct)"
               cls={account.day_realized_pnl < 0 ? "text-bb-loss" : "text-bb-profit"} />
           )}
@@ -393,14 +382,14 @@ export function EquityTicket() {
             ))}
           </div>
         )}
-        {error && (
+        {errorMsg && (
           <div className="border border-bb-loss/60 p-1.5 text-[11px] text-bb-loss sm:p-1 sm:text-[10px]">
-            ✗ broker/engine refused: {error}
+            ✗ broker/engine refused: {errorMsg}
           </div>
         )}
-        {placed && !error && (
+        {placedId && !errorMsg && (
           <div className="border border-bb-profit/60 p-1.5 text-[11px] text-bb-profit sm:p-1 sm:text-[10px]">
-            ✓ plan {placed.slice(0, 8)} submitted — enforcer armed (stop is live)
+            ✓ plan {placedId.slice(0, 8)} submitted — enforcer armed (stop is live)
           </div>
         )}
 
@@ -408,7 +397,7 @@ export function EquityTicket() {
         {!confirming ? (
           <button
             disabled={!canTrade}
-            onClick={() => setConfirming(true)}
+            onClick={() => setConfirmRev(t.rev)}
             className={
               "mt-auto h-12 text-[13px] tracking-widest sm:h-8 sm:text-[11px] " +
               (canTrade
@@ -434,9 +423,9 @@ export function EquityTicket() {
               }
             >
               {live && <span className="font-semibold">LIVE ORDER — REAL MONEY · </span>}
-              {sideWord} {shares} {symbol} @ ≤{price.toFixed(2)} · stop {Math.abs(exits.sl).toFixed(2)} (−${maxLoss.toFixed(0)})
+              {sideWord} {shares} {symbol} @ ≤{price.toFixed(2)} · stop {Math.abs(exits.sl).toFixed(2)} (−${plan.maxLoss.toFixed(0)})
               {exits.tp != null ? ` · target ${Math.abs(exits.tp).toFixed(2)}` : " · no target (run)"}
-              {timeStopDate ? ` · exit ${timeStopDate}` : " · 30d backstop"}
+              {plan.timeStopDate ? ` · exit ${plan.timeStopDate}` : " · 30d backstop"}
             </div>
             <div className="flex gap-px">
               <button
@@ -448,7 +437,7 @@ export function EquityTicket() {
               </button>
               <button
                 disabled={submitting}
-                onClick={() => setConfirming(false)}
+                onClick={() => setConfirmRev(null)}
                 className="h-12 flex-1 border border-bb-border text-[12px] text-bb-muted sm:h-8 sm:text-[11px]"
               >
                 CANCEL

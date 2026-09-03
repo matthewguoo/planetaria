@@ -7,6 +7,15 @@
       content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"
     />
     <title>PLANETARIA — OPTIONS TERMINAL</title>
+    <!-- Installable on a phone ("Add to Home screen" in Chrome): standalone,
+         black chrome, no browser bars over the chart. Same build, same
+         server — the manifest only changes how the page is launched. -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <meta name="theme-color" content="#000000" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <link rel="apple-touch-icon" href="/icons/planetaria-192.png" />
   </head>
   <body>
     <div id="root"></div>

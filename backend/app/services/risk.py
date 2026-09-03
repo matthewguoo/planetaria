@@ -50,6 +50,13 @@ DEFAULT_RISK = {
     # %-of-equity gates above bind at the right dollars by construction —
     # there is deliberately no virtual sub-account bookkeeping here.
     "manual_equity_require_stop": True,
+    # ACCOUNT CAPABILITIES — what this account is approved for, declared
+    # once here and honoured everywhere: the UI hides what the level cannot
+    # place, and place_trade refuses it. Alpaca levels: 0/1 = no long
+    # options here (covered calls / CSPs are not a manual-ticket shape),
+    # 2 = long single-leg calls/puts, 3 = spreads and every defined-risk
+    # structure. The live server additionally floors itself at 2.
+    "options_level": 3,
 }
 
 RISK_KEY = "risk"
@@ -82,12 +89,14 @@ class RiskService:
             elif key in ("equity_long_only", "equity_short_overnight",
                          "manual_equity_require_stop"):
                 clean[key] = bool(value)
-            elif key in ("max_positions", "entry_ttl_min", "max_trades_per_day"):
+            elif key in ("max_positions", "entry_ttl_min", "max_trades_per_day",
+                         "options_level"):
                 iv = int(value)
                 bounds = {
                     "max_positions": (1, 20),
                     "entry_ttl_min": (1, 120),
                     "max_trades_per_day": (1, 200),
+                    "options_level": (0, 3),
                 }[key]
                 if not bounds[0] <= iv <= bounds[1]:
                     raise ValueError(f"{key} must be {bounds[0]}-{bounds[1]}")
@@ -378,6 +387,20 @@ class RiskService:
                     f"(${gross_cap:.0f})"
                 )
         else:
+            # ACCOUNT CAPABILITY: the declared options level bounds the shape.
+            # Level 2 = one long leg (the live server's rule, now for any
+            # account that says so); below 2 = no manual option entries.
+            level = int(cfg.get("options_level", 3))
+            if level < 2:
+                violations.append(
+                    f"options level {level}: this account cannot place option entries "
+                    "(raise options_level on the ACCOUNT page if the broker approved it)"
+                )
+            elif level == 2 and (len(legs) != 1 or any(l["side"] < 0 for l in legs)):
+                violations.append(
+                    "options level 2: long single-leg calls/puts only (no spreads, "
+                    "no short legs)"
+                )
             # Uncovered short calls are unplaceable at Alpaca L3 (verified against
             # the paper API: "account not eligible to trade uncovered option
             # contracts") — fail here with a fix hint instead of at the broker.
