@@ -357,6 +357,100 @@ class TestCircuitBreaker:
         assert (await runner.breaker_state(row["id"]))["tripped"] is False
 
 
+class _Market:
+    """latest_quote stand-in: symbol -> quote dict."""
+
+    def __init__(self, quotes: dict[str, dict]):
+        self._quotes = quotes
+
+    def latest_quote(self, symbol: str) -> dict | None:
+        return self._quotes.get(symbol)
+
+
+class TestBreakerMarksOpenPositions:
+    """The unrealised leg of the breaker. Marking is per LEG through pnl_at:
+    on 2026-09-01 the old code marked fly-1's freshly filled one-set iron fly
+    at ITS UNDERLYING'S price — a $70,648 phantom loss on a $545-max-loss
+    structure — tripped the $2,000 breaker and flattened a good fill."""
+
+    FLY_LEGS = [
+        {"symbol": "QQQ260901C00708000", "right": "C", "side": -1, "ratio": 1},
+        {"symbol": "QQQ260901P00708000", "right": "P", "side": -1, "ratio": 1},
+        {"symbol": "QQQ260901C00715000", "right": "C", "side": 1, "ratio": 1},
+        {"symbol": "QQQ260901P00701000", "right": "P", "side": 1, "ratio": 1},
+    ]
+
+    async def _open_plan(self, runner, name: str, **fields) -> None:
+        from sqlalchemy import select
+
+        from app.models.strategies import StrategyInstanceRow
+        from app.models.trade import TradePlan
+
+        async with runner.db.session() as session:
+            sid = await session.scalar(
+                select(StrategyInstanceRow.id)
+                .where(StrategyInstanceRow.name == name))
+            session.add(TradePlan(
+                strategy=name, strategy_id=sid, status="filled",
+                tp_premium=None, sl_premium=None,
+                time_stop_utc=datetime.now(timezone.utc) + timedelta(hours=2),
+                **fields,
+            ))
+            await session.commit()
+
+    async def _fly(self, runner) -> str:
+        """fly-1's actual 2026-09-01 plan: short 708 straddle, long wings,
+        filled at the $1.55 credit."""
+        row = await runner.create("pead_flagship", "flag", {})
+        await runner.set_allocation(row["id"], {"mode": "usd", "value": 10_000})
+        await runner.set_breaker(row["id"], {"mode": "pct", "value": 20})
+        await self._open_plan(
+            runner, "flag", underlying="QQQ", asset_class="option",
+            legs=self.FLY_LEGS, qty=1, filled_qty=1,
+            entry_limit=-1.55, fill_premium=-1.55,
+        )
+        return row["id"]
+
+    @pytest.mark.asyncio
+    async def test_an_option_structure_is_marked_at_its_legs_not_its_underlying(self, runner):
+        row_id = await self._fly(runner)
+        runner.market = _Market({
+            "QQQ": {"bid": 708.06, "ask": 708.08, "mid": 708.07},
+            "QQQ260901C00708000": {"bid": 0.82, "ask": 0.88, "mid": 0.85},
+            "QQQ260901P00708000": {"bid": 0.73, "ask": 0.79, "mid": 0.76},
+            "QQQ260901C00715000": {"bid": 0.01, "ask": 0.04, "mid": 0.025},
+            "QQQ260901P00701000": {"bid": 0.01, "ask": 0.02, "mid": 0.015},
+        })
+        state = await runner.breaker_state(row_id)
+        # Structure mid -1.57 vs the -1.55 fill: down $2 on the set.
+        assert state["unrealized"] == -2.0
+        assert state["tripped"] is False
+
+    @pytest.mark.asyncio
+    async def test_an_unquoted_leg_marks_the_plan_at_entry(self, runner):
+        """Only the underlying quoted — exactly the moment after fly-1's fill.
+        Zero, not spot x 100."""
+        row_id = await self._fly(runner)
+        runner.market = _Market({"QQQ": {"bid": 708.06, "ask": 708.08,
+                                         "mid": 708.07}})
+        state = await runner.breaker_state(row_id)
+        assert state["unrealized"] == 0.0
+        assert state["tripped"] is False
+
+    @pytest.mark.asyncio
+    async def test_a_short_equity_plan_still_marks_signed(self, runner):
+        row = await runner.create("pead_flagship", "flag", {})
+        await runner.set_allocation(row["id"], {"mode": "usd", "value": 10_000})
+        await self._open_plan(
+            runner, "flag", underlying="AMD", asset_class="equity",
+            legs=[{"symbol": "AMD", "side": -1, "ratio": 1, "entry": 100.0}],
+            qty=10, filled_qty=10, entry_limit=-100.0, fill_premium=-100.0,
+        )
+        runner.market = _Market({"AMD": {"bid": 94.9, "ask": 95.1, "mid": 95.0}})
+        state = await runner.breaker_state(row["id"])
+        assert state["unrealized"] == 50.0    # short, tape fell $5 x 10 shares
+
+
 class TestDelete:
     @pytest.mark.asyncio
     async def test_removes_the_row_and_its_journal(self, runner):

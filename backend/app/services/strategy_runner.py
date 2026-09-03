@@ -34,6 +34,7 @@ from app.services.registered import ladder_state
 from app.services.signals.events import EventBus
 from app.services.signals.store import SignalStore
 from app.services.supervision import supervise
+from app.services.trade_service import position_mid_from_quotes
 from app.strategies import REGISTRY
 from app.strategies.base import Strategy, StrategyContext, TradeIntent
 
@@ -776,10 +777,13 @@ class StrategyRunner:
         and could be silently reset by anyone who edited a row — this cannot,
         and it costs one query.
 
-        Unrealised is marked from the live quote where there is one. A missing
-        quote marks the position at entry (contributing zero) rather than
-        dropping it: an unmarkable position must not be able to make a
-        drawdown look smaller than it is.
+        Unrealised is marked per LEG from live quotes through pnl_at — the
+        same formula every realized number comes from. A plan any of whose
+        legs is unquoted (or whose entry has not filled) is marked at entry
+        (contributing zero) rather than dropped: an unmarkable position must
+        not be able to make a drawdown look smaller than it is. Never mark a
+        structure at its underlying's price — that reads a $545-max-loss
+        option fly as a $70k loss and shoots it (fly-1, 2026-09-01).
         """
         async with self.db.session() as session:
             row = await session.get(StrategyInstanceRow, row_id)
@@ -807,16 +811,14 @@ class StrategyRunner:
             if (plan.status not in OPEN_STATUSES and plan.status != SIM_OPEN) \
                     or plan.realized_pnl is not None:
                 continue
-            mark = None
-            if self.market is not None:
-                quote = self.market.latest_quote(plan.underlying)
-                mark = (quote or {}).get("mid")
-            if mark is None:
+            if self.market is None or not plan.legs:
                 continue                      # marked at entry: contributes 0
-            side = plan.legs[0].get("side", 1) if plan.legs else 1
-            multiplier = 100 if (plan.legs and plan.legs[0].get("right")) else 1
-            qty = plan.filled_qty or plan.qty or 0
-            unrealized += side * (float(mark) - abs(plan.entry_limit)) * qty * multiplier
+            quotes = {leg["symbol"]: self.market.latest_quote(leg["symbol"])
+                      for leg in plan.legs}
+            pnl = plan.pnl_at(position_mid_from_quotes(plan.legs, quotes))
+            if pnl is None:
+                continue                      # marked at entry: contributes 0
+            unrealized += pnl
 
         live = equity + unrealized
         peak = max(peak, live)            # the live point can BE the new peak
@@ -1045,11 +1047,10 @@ class StrategyRunner:
         opt_margin = opt_premium = 0.0
         for inst in instances:
             row_id = inst["id"]
-            alloc = await self.allocation_state(row_id)
-            try:
-                breaker = await self.breaker_state(row_id)
-            except Exception:                                 # noqa: BLE001
-                breaker = {}
+            # instances() already computed allocation + breaker per row —
+            # reuse its payload instead of re-hitting the broker and DB.
+            alloc = inst.get("capital") or {}
+            breaker = alloc.get("breaker") or {}
             async with self.db.session() as session:
                 plans = list(await session.scalars(
                     select(TradePlan).where(
