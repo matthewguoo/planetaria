@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Request
@@ -167,6 +167,18 @@ class AdoptIn(BaseModel):
     time_stop_utc: str | None = None
 
 
+def default_time_stop(now_et: datetime, cutoff_hhmm: str) -> datetime:
+    """The designer's default time stop — today's configured ET cutoff —
+    rolled forward to the NEXT weekday session once today's has passed. An
+    after-hours adoption must never land a time stop in the past: the
+    enforcer would fire it immediately and park a sale for the open."""
+    hh, mm = str(cutoff_hhmm).split(":")
+    candidate = now_et.replace(hour=int(hh), minute=int(mm), second=0, microsecond=0)
+    while candidate <= now_et or candidate.weekday() >= 5:
+        candidate += timedelta(days=1)
+    return candidate.astimezone(timezone.utc)
+
+
 @router.post("/positions/adopt")
 async def adopt_positions(request: Request, body: AdoptIn) -> dict:
     """Fold untracked broker positions into managed plans with TP/SL/
@@ -185,15 +197,11 @@ async def adopt_positions(request: Request, body: AdoptIn) -> dict:
         if time_stop.tzinfo is None:
             time_stop = time_stop.replace(tzinfo=timezone.utc)
     else:
-        # Default: today's configured cutoff (ET) — same default the designer uses.
+        # Default: the configured ET cutoff, today or the next session.
         from zoneinfo import ZoneInfo
 
-        et = ZoneInfo("America/New_York")
-        hh, mm = str(risk["time_stop_et"]).split(":")
-        now_et = datetime.now(et)
-        time_stop = now_et.replace(hour=int(hh), minute=int(mm), second=0, microsecond=0).astimezone(
-            timezone.utc
-        )
+        time_stop = default_time_stop(datetime.now(ZoneInfo("America/New_York")),
+                                      risk["time_stop_et"])
     try:
         adopted = await app.state.trade.adopt_positions(
             body.symbols, tp_pct, sl_pct, time_stop,

@@ -259,6 +259,23 @@ async def test_adopt_shares_refuses_option_defaults(service, monkeypatch):
     assert len(adopted) == 1
 
 
+def test_default_time_stop_rolls_to_next_session():
+    """An after-hours adoption must never get a time stop in the past."""
+    from zoneinfo import ZoneInfo
+
+    from app.api.routes.trading import default_time_stop
+
+    et = ZoneInfo("America/New_York")
+    thu_morning = datetime(2026, 9, 3, 10, 0, tzinfo=et)
+    assert default_time_stop(thu_morning, "15:50").astimezone(et) == datetime(2026, 9, 3, 15, 50, tzinfo=et)
+    thu_evening = datetime(2026, 9, 3, 19, 50, tzinfo=et)
+    assert default_time_stop(thu_evening, "15:50").astimezone(et) == datetime(2026, 9, 4, 15, 50, tzinfo=et)
+    fri_evening = datetime(2026, 9, 4, 16, 30, tzinfo=et)
+    assert default_time_stop(fri_evening, "15:50").astimezone(et) == datetime(2026, 9, 7, 15, 50, tzinfo=et)
+    exactly_at_cutoff = datetime(2026, 9, 3, 15, 50, tzinfo=et)
+    assert default_time_stop(exactly_at_cutoff, "15:50").astimezone(et) == datetime(2026, 9, 4, 15, 50, tzinfo=et)
+
+
 @pytest.mark.asyncio
 async def test_adopt_rejects_unknown_symbols(service, monkeypatch):
     async def fake_broker_positions(max_age_s=5.0):
