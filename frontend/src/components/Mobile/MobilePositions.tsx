@@ -154,8 +154,9 @@ function PositionCard({ plan, monitored }: { plan: Plan; monitored: Set<string> 
           </div>
           <div data-numeric className="mt-0.5 flex flex-wrap gap-x-3 text-[12px] text-bb-muted">
             <span>×{qty}</span>
-            <span>
-              {Math.abs(basis).toFixed(2)} → {plan.mark != null ? Math.abs(plan.mark).toFixed(2) : <span className="text-bb-orange">stale</span>}
+            <span title={plan.mark_source === "broker" ? "broker position price (feed dark)" : undefined}>
+              {Math.abs(basis).toFixed(2)} → {plan.mark != null ? Math.abs(plan.mark).toFixed(2) : <span className="text-bb-orange">no mark</span>}
+              {plan.mark_source === "broker" && <span className="text-bb-muted"> ·brk</span>}
             </span>
             {plan.sl_premium != null && <span className="text-bb-loss">SL {Math.abs(plan.sl_premium).toFixed(2)}</span>}
             {plan.tp_premium != null && <span className="text-bb-profit">TP {Math.abs(plan.tp_premium).toFixed(2)}</span>}

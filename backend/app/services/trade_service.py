@@ -122,6 +122,58 @@ def parse_occ_symbol(symbol: str) -> dict | None:
         return None
 
 
+def mark_with_fallback(
+    legs: list[dict], quotes: dict[str, dict | None], broker_prices: dict[str, float],
+) -> tuple[float | None, str | None]:
+    """Position mark for the UI, with the broker's own position prices as the
+    fallback when the quote cache has nothing usable (extended hours on the
+    free tier, the weekend). Returns (mid, source): source "quote" when
+    every leg had a live quote, "broker" when the broker's current_price
+    filled the gaps, None when neither could mark the position. The enforcer
+    never reads this — it marks off its own quote map; this is sight, not
+    exits."""
+    mid = position_mid_from_quotes(legs, quotes)
+    if mid is not None:
+        return mid, "quote"
+    merged: dict[str, dict] = {}
+    for leg in legs:
+        quote = quotes.get(leg["symbol"])
+        if quote and (quote.get("bid") or quote.get("ask")):
+            merged[leg["symbol"]] = quote
+            continue
+        price = broker_prices.get(leg["symbol"])
+        if price is None or price <= 0:
+            return None, None
+        merged[leg["symbol"]] = {"bid": price, "ask": price, "mid": price}
+    mid = position_mid_from_quotes(legs, merged)
+    return (mid, "broker") if mid is not None else (None, None)
+
+
+def merge_holdings(positions: list[dict], plans: list[dict]) -> list[dict]:
+    """Broker positions × open plans by leg symbol. A position managed by a
+    plan carries that plan's id and exits (`protected` = it has a stop);
+    everything else is `protected: False` — the overview's loudest column
+    on a live account. Options group under their underlying for display."""
+    by_symbol: dict[str, dict] = {}
+    for plan in plans:
+        for leg in plan.get("legs") or []:
+            by_symbol[leg["symbol"]] = plan
+    out: list[dict] = []
+    for pos in positions:
+        plan = by_symbol.get(pos["symbol"])
+        occ = pos.get("occ")
+        row = dict(pos)
+        row["underlying"] = occ["underlying"] if occ else pos["symbol"]
+        row["plan_id"] = plan["id"] if plan else None
+        row["plan_status"] = plan["status"] if plan else None
+        row["sl"] = plan.get("sl_premium") if plan else None
+        row["tp"] = plan.get("tp_premium") if plan else None
+        row["time_stop_utc"] = plan.get("time_stop_utc") if plan else None
+        row["protected"] = bool(plan and plan.get("sl_premium") is not None)
+        out.append(row)
+    return out
+
+
 class TradeService:
     def __init__(self, db, alpaca: AlpacaService, market, risk):
         self.db = db
@@ -192,11 +244,27 @@ class TradeService:
                     "current_price": _f("current_price"),
                     "market_value": _f("market_value"),
                     "unrealized_pl": _f("unrealized_pl"),
+                    # Overview fields (the holdings table sorts on these).
+                    "unrealized_plpc": _f("unrealized_plpc"),
+                    "unrealized_intraday_pl": _f("unrealized_intraday_pl"),
+                    "change_today": _f("change_today"),
+                    "lastday_price": _f("lastday_price"),
+                    "cost_basis": _f("cost_basis"),
                     "occ": occ if is_option else None,
                 }
             )
         self._positions_cache = (time.monotonic(), out)
         return out
+
+    async def holdings(self, plans: list | None = None) -> list[dict]:
+        """EVERY broker position, each stamped with the plan that manages it
+        (stop / target / time stop) or `plan_id: None` — the account
+        overview's one list. See merge_holdings."""
+        if plans is None:
+            plans = await self.risk.open_plans()
+        universe = getattr(getattr(self.alpaca, "settings", None), "_unused", None)  # placeholder, names come from the route
+        del universe
+        return merge_holdings(await self.broker_positions(), [p.to_dict() for p in plans])
 
     async def untracked_positions(self, plans: list | None = None) -> list[dict]:
         """Broker positions not covered by any open plan's legs. Callers that

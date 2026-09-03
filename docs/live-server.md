@@ -89,6 +89,11 @@ Tailscale install. It ends by printing the manual steps:
    `https://<box>.<tailnet>.ts.net/terminal` — the header badge must
    read **LIVE in red**. (`/terminal.html` still works; `/terminal` is the
    clean path the backend serves for it.)
+   On the live server the ROOT `https://<box>.<tailnet>.ts.net/` is the
+   ACCOUNT OVERVIEW — equity big, today's move, holdings sortable by
+   SIZE / EXPOSURE / MOVERS / P/L with each row's protection (STOP or NO
+   STOP) and a tap into that symbol's trading interface. The ops console
+   stays at `/index.html`.
 5. **Phone.** Open the same URL in mobile Chrome on the tailnet, then Chrome
    menu → *Add to Home screen*: the manifest installs the terminal as a
    full-screen app (no browser bars over the chart). Under 640px the
@@ -114,6 +119,19 @@ systemctl restart planetaria-live` — **outside** 09:25–10:00 and
 - `live.ps1` / `backend/scripts/install-live-service.ps1` — the Windows
   equivalents for a side-by-side session on the dev box (same contract,
   Docker infra on :5433/:6380). Only one of the two hosts may run live.
+
+### Extended hours are not an outage
+
+The free data tier's IEX stream runs 08:00–17:00 ET only. Before and after
+it, an `extended-hours-poll` task refreshes every quoted equity every 15 s
+through `ah_quote()` (broker REST latest quote first, then Yahoo/Finnhub
+prints), so the header, marks, P/L and the ticket keep moving; overnight
+the Blue Ocean poller does the same. When the quote cache has nothing
+usable (weekend), `/api/positions` marks off the broker's own position
+prices (`mark_source: "broker"`, shown as BRK) instead of STALE, and the
+equity ticket turns extended-hours on automatically outside RTH (DAY limits
+without it just queue to the open). Exits are unchanged: the enforcer
+marks off its own quote map.
 
 ## 4. Risk posture for a ~$11k cash account (seed once, via the UI risk panel or `PUT /api/settings/risk` on :8001)
 

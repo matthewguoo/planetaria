@@ -102,4 +102,14 @@ if not get_settings().headless and _dist.is_dir():
     async def terminal_page():
         return FileResponse(_dist / "terminal.html")
 
+    # LIVE server: the root is the account — holdings, equity, protection —
+    # not the strategy console (there is no strategy plane in this process).
+    # The terminal bundle boots into its OVERVIEW view on "/"; the ops
+    # console stays reachable at /index.html for the SYSTEM page.
+    if get_settings().trading_mode == "live_manual":
+
+        @app.get("/", include_in_schema=False)
+        async def live_root():
+            return FileResponse(_dist / "terminal.html")
+
     app.mount("/", StaticFiles(directory=str(_dist), html=True), name="ui")

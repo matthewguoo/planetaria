@@ -11,6 +11,7 @@ import { dayChange } from "../../lib/dayChange";
 import { ModeBadge } from "../ModeBadge";
 import { sessionPhase } from "../PriceReadout";
 import { SymbolSearch } from "../SymbolSearch";
+import { fmtTimeET } from "../Chart/scales";
 import { useStrategyStore } from "../../store/strategyStore";
 import { freshSpot, quoteIsStale, useTradingStore } from "../../store/tradingStore";
 
@@ -68,7 +69,11 @@ export function MobileHeader() {
             <span className="text-bb-muted">—</span>
           )}
           <span className={PHASE_CLS[phase]}>{phase}</span>
-          {stale && <span className="text-bb-orange">quote stale</span>}
+          {stale && quote && (
+            <span className="text-bb-orange" title="No print since this time — the feed is dark for this session">
+              last {fmtTimeET(quote.ts)}
+            </span>
+          )}
         </span>
       </div>
       <span className={`h-2.5 w-2.5 rounded-full ${dot.cls}`} title={dot.label} aria-label={dot.label} />

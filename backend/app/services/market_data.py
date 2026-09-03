@@ -10,6 +10,7 @@ Topics published:
 """
 
 import asyncio
+import re
 import logging
 import time
 from datetime import datetime, timedelta, timezone
@@ -41,6 +42,26 @@ QUOTE_VS_BAR_GRACE_MS = 60_000
 # endpoint carries it on the free tier, so we poll and roll our own 1m bars.
 OVERNIGHT_POLL_S = 10.0
 OVERNIGHT_URL = "https://data.alpaca.markets/v2/stocks/{symbol}/trades/latest?feed=overnight"
+
+
+# Extended hours (04:00-09:30 / 16:00-20:00 ET): IEX streams only 08:00-17:00,
+# so premarket before 8 and postmarket after 5 are dark on the free tier while
+# the venues this account trades on keep printing. The extended-hours poller
+# refreshes every quoted equity through ah_quote() (broker REST first, then
+# public prints) so marks, P/L, the header and the ticket keep moving.
+EXT_POLL_S = 15
+EXT_STALE_S = 30.0
+_OCC_RE = re.compile(r"^[A-Z.]{1,6}\d{6}[CP]\d{8}$")  # option symbols are not polled
+
+
+def ext_hours_poll_due(session: str | None, quote_age_s: float | None) -> bool:
+    """Should the extended-hours poller refresh this symbol now? Only in the
+    two extended sessions (RTH streams, overnight has its own poller, the
+    weekend has nothing to poll), and only when the cached quote has aged
+    past EXT_STALE_S (None = never quoted)."""
+    if session not in ("premarket", "postmarket"):
+        return False
+    return quote_age_s is None or quote_age_s > EXT_STALE_S
 
 
 def is_overnight_et(now_utc: datetime) -> bool:
@@ -173,7 +194,42 @@ class MarketDataService:
                 supervise("silent-stream-gap-fill", self._gap_fill_loop),
                 name="silent-stream-gap-fill",
             ),
+            asyncio.create_task(
+                supervise("extended-hours-poll", self._extended_hours_poll_loop),
+                name="extended-hours-poll",
+            ),
         ]
+
+    async def _extended_hours_poll_loop(self) -> None:
+        """Premarket / postmarket freshness for every equity we quote (UI
+        subscriptions AND every share symbol that has ever been quoted here,
+        which covers open plan legs the enforcer marks): when a cached quote
+        is older than EXT_STALE_S, ah_quote() refreshes it — broker REST
+        first, public prints when the broker feed has gone dark — and the
+        result is broadcast under the usual newer-wins rule. RTH and the
+        overnight session are owned by the stream and the Blue Ocean poller."""
+        from app.services.market_clock import equity_session
+
+        while True:
+            await asyncio.sleep(EXT_POLL_S)
+            session = equity_session(datetime.now(timezone.utc))
+            if session not in ("premarket", "postmarket"):
+                continue
+            now_ms = time.time() * 1000
+            symbols = set(self._stock_refs.keys())
+            symbols.update(
+                s for s, q in self._latest_quotes.items()
+                if q.get("t") == "quote" and not _OCC_RE.match(s)
+            )
+            for symbol in sorted(symbols)[:40]:
+                cached = self._latest_quotes.get(symbol)
+                age = (now_ms - cached["ts"]) / 1000 if cached and cached.get("ts") else None
+                if not ext_hours_poll_due(session, age):
+                    continue
+                try:
+                    await self.ah_quote(symbol, max_age_s=EXT_STALE_S)
+                except Exception as exc:
+                    log.warning("extended-hours poll %s failed: %s", symbol, exc)
 
     async def _gap_fill_loop(self) -> None:
         """IEX only operates 08:00-17:00 ET, so the free real-time stream is

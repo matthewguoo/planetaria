@@ -10,6 +10,7 @@ import { ChartHud } from "../components/Chart/ChartHud";
 import { LegRail } from "../components/Chart/LegRail";
 import { sharedBars } from "../lib/chartShared";
 import { MobileApp } from "../components/Mobile/MobileApp";
+import { OverviewPage } from "../components/Overview/OverviewPage";
 import { EquityTicket } from "../components/Panels/EquityTicket";
 import { OrderPanel } from "../components/Panels/OrderPanel";
 import { SizingPanel } from "../components/Panels/SizingPanel";
@@ -98,6 +99,7 @@ export default function TerminalApp() {
   const setSymbol = useTradingStore((s) => s.setSymbol);
   const assetMode = useTradingStore((s) => s.assetMode);
   const setAssetMode = useTradingStore((s) => s.setAssetMode);
+  const setView = useUiStore((s) => s.setView);
   const optionsMode = assetMode === "options";
 
   if (phone && !UNLOCKED) return <MobileApp />;
@@ -107,7 +109,20 @@ export default function TerminalApp() {
       <TerminalHeader />
       <EnforcementBanner />
 
-      {view === "account" ? (
+      {view === "overview" ? (
+        <OverviewPage
+          onOpen={(h) => {
+            // A holding opens its own trading interface: the chart on its
+            // underlying, the ticket on its asset class, the plan (if any)
+            // in view.
+            setSymbol(h.underlying);
+            setAssetMode(h.occ ? "options" : "equity");
+            if (h.plan_id) viewPosition(h.plan_id);
+            else setView("terminal");
+          }}
+          onProtect={() => setView("account")}
+        />
+      ) : view === "account" ? (
         <AccountPage
           onViewPlan={(plan) => {
             setSymbol(plan.underlying);

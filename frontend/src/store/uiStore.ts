@@ -15,6 +15,7 @@ import type { Plan } from "../lib/api";
 export type PnlMode = "entry" | "live";
 
 export type View =
+  | "overview"
   | "terminal"
   | "fund"
   | "portfolio"

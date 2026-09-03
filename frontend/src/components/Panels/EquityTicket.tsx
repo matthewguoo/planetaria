@@ -31,6 +31,7 @@ import { etWallToUtcIso } from "../../lib/et";
 import { useAccountStore, useTradingMode } from "../../store/accountStore";
 import { useEquityTicketStore } from "../../store/equityTicketStore";
 import { useTradingStore } from "../../store/tradingStore";
+import { sessionPhase } from "../PriceReadout";
 
 /** ET 15:55 on a calendar date -> UTC ISO. */
 function etCloseToUtcIso(dateStr: string): string {
@@ -136,6 +137,12 @@ export function EquityTicket() {
   // on the live server would send a real order under a PAPER label.
   const { live, loaded } = useTradingMode();
   const canTrade = loaded && reasons.length === 0 && shares > 0 && !submitting;
+  // Common sense outside RTH: a DAY limit without extended_hours just queues
+  // to the next open — so the flag follows the session automatically (24/5
+  // limit-only book) and the confirm says so. RTH keeps the explicit toggle.
+  const phase = sessionPhase();
+  const outsideRth = phase !== "RTH" && phase !== "CLOSED";
+  const extendedEffective = t.extendedHours || outsideRth;
   const sideWord = t.side > 0 ? "BUY" : "SHORT";
   const modeWord = live ? "LIVE" : "PAPER";
 
@@ -148,7 +155,7 @@ export function EquityTicket() {
         underlying: symbol,
         strategy: "manual_equity",
         asset_class: "equity",
-        extended_hours: t.extendedHours,
+        extended_hours: extendedEffective,
         legs: [{
           symbol,
           side: t.side,
@@ -348,8 +355,12 @@ export function EquityTicket() {
                 title="DAY limit working the 24/5 extended book (premarket/AH/overnight). RTH-only when off.">
                 EXTENDED HOURS
               </span>
-              <button onClick={() => t.setExtendedHours(!t.extendedHours)} className={chipCls(t.extendedHours)}>
-                {t.extendedHours ? "ON" : "OFF"}
+              <button
+                onClick={() => t.setExtendedHours(!t.extendedHours)}
+                className={chipCls(extendedEffective)}
+                title={outsideRth ? `${phase} session: extended hours is on automatically (limit orders only)` : undefined}
+              >
+                {outsideRth ? `AUTO · ${phase}` : t.extendedHours ? "ON" : "OFF"}
               </button>
             </label>
           </div>
@@ -426,6 +437,7 @@ export function EquityTicket() {
               {sideWord} {shares} {symbol} @ ≤{price.toFixed(2)} · stop {Math.abs(exits.sl).toFixed(2)} (−${plan.maxLoss.toFixed(0)})
               {exits.tp != null ? ` · target ${Math.abs(exits.tp).toFixed(2)}` : " · no target (run)"}
               {plan.timeStopDate ? ` · exit ${plan.timeStopDate}` : " · 30d backstop"}
+              {extendedEffective ? " · ext-hours limit" : ""}
             </div>
             <div className="flex gap-px">
               <button

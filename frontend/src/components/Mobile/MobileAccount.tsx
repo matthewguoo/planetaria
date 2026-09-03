@@ -7,8 +7,7 @@
  */
 
 import { useCallback, useState } from "react";
-import { apiError, getAccountHistory, getAccountRisk, putRisk, type AccountRisk, type PortfolioHistory, type RiskSettings } from "../../lib/api";
-import { fmtUsd, pnlCls } from "../../lib/format";
+import { apiError, getAccountHistory, putRisk, type PortfolioHistory, type RiskSettings } from "../../lib/api";
 import { usePoll } from "../../lib/usePoll";
 import { useAccountStore, useTradingMode } from "../../store/accountStore";
 import { EquityCurve } from "../Account/AccountPage";
@@ -108,39 +107,24 @@ function RiskRules() {
 
 export function MobileAccount() {
   const account = useAccountStore((s) => s.account);
-  const positions = useAccountStore((s) => s.positions);
   const { live } = useTradingMode();
   const [history, setHistory] = useState<PortfolioHistory | null>(null);
   const [period, setPeriod] = useState("1M");
-  const [risk, setRisk] = useState<AccountRisk | null>(null);
 
   const refresh = useCallback(async (alive: () => boolean) => {
-    const [h, r] = await Promise.allSettled([
-      getAccountHistory(period, period === "1D" ? "15Min" : period === "1W" ? "1H" : "1D"),
-      getAccountRisk(),
-    ]);
-    if (!alive()) return;
-    setHistory(h.status === "fulfilled" ? h.value : { timestamps: [], equity: [], profit_loss: [], base_value: null });
-    if (r.status === "fulfilled") setRisk(r.value);
+    try {
+      const h = await getAccountHistory(period, period === "1D" ? "15Min" : period === "1W" ? "1H" : "1D");
+      if (alive()) setHistory(h);
+    } catch {
+      if (alive()) setHistory({ timestamps: [], equity: [], profit_loss: [], base_value: null });
+    }
   }, [period]);
   usePoll(refresh, 20_000, [refresh]);
 
-  const unrealized = positions.reduce((a, p) => a + (p.unrealized_pnl ?? 0), 0);
-  const day = (account?.day_realized_pnl ?? 0) + unrealized;
-
   return (
-    <div className="flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain">
-      <div className="grid grid-cols-2 gap-px p-px">
-        <Stat label="EQUITY" value={fmtUsd(account?.equity)} sub={account ? `${account.status} · ${live ? "LIVE" : "PAPER"}` : undefined} />
-        <Stat label="TODAY" value={fmtUsd(day, true)} cls={pnlCls(day)} sub={account ? `realized ${fmtUsd(account.day_realized_pnl, true)} · open ${fmtUsd(unrealized, true)}` : undefined} />
-        <Stat label="CASH" value={fmtUsd(account?.cash)} />
-        <Stat label="BUYING POWER" value={fmtUsd(account?.buying_power)} />
-        <Stat
-          label="AT RISK @ STOPS"
-          value={risk?.total.risk_pct != null ? `${risk.total.risk_pct.toFixed(1)}%` : risk ? fmtUsd(risk.total.risk_dollars) : "—"}
-          cls="text-bb-orange"
-          sub={risk ? `${fmtUsd(risk.total.risk_dollars)}${risk.total.corr_risk_pct != null ? ` · corr-adj ${risk.total.corr_risk_pct.toFixed(1)}%` : ""}` : undefined}
-        />
+    <div className="flex shrink-0 flex-col">
+      <div className="grid grid-cols-2 gap-px border-t border-bb-border p-px">
+        <Stat label="STATUS" value={account?.status ?? "—"} sub={live ? "LIVE · real money" : "PAPER"} />
         <Stat label="DAY TRADES" value={String(account?.daytrade_count ?? "—")} sub="rolling 5 sessions" />
       </div>
 

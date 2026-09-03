@@ -200,8 +200,19 @@ function PositionRow({ plan }: { plan: Plan }) {
         </span>
       </td>
       <td data-numeric className="px-2 py-1 text-right">{(plan.fill_premium ?? plan.entry_limit).toFixed(2)}</td>
-      <td data-numeric className="px-2 py-1 text-right">
-        {plan.mark != null ? plan.mark.toFixed(2) : <span className="text-bb-orange">STALE</span>}
+      <td
+        data-numeric
+        className="px-2 py-1 text-right"
+        title={plan.mark_source === "broker" ? "Broker position price — the quote feed is dark (extended hours / weekend)" : undefined}
+      >
+        {plan.mark != null ? (
+          <>
+            {plan.mark.toFixed(2)}
+            {plan.mark_source === "broker" && <span className="ml-1 text-[9px] text-bb-muted">BRK</span>}
+          </>
+        ) : (
+          <span className="text-bb-orange">NO MARK</span>
+        )}
       </td>
       <td
         data-numeric

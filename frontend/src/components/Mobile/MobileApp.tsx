@@ -22,6 +22,7 @@ import { ChainPanel } from "../Chart/ChainPanel";
 import { LegRail } from "../Chart/LegRail";
 import { EquityTicket } from "../Panels/EquityTicket";
 import { MobileAccount } from "./MobileAccount";
+import { OverviewPage } from "../Overview/OverviewPage";
 import { MobileChartBar } from "./MobileChartBar";
 import { MobileHeader } from "./MobileHeader";
 import { MobileMore } from "./MobileMore";
@@ -119,8 +120,15 @@ export function MobileApp() {
   const untracked = useAccountStore((s) => s.untracked);
   const modified = useStrategyStore((s) => s.modified);
   const viewingPlanId = useUiStore((s) => s.viewingPlanId);
+  const viewPosition = useUiStore((s) => s.viewPosition);
+  const setSymbol = useTradingStore((s) => s.setSymbol);
   const { live } = useTradingMode();
-  const [tab, setTab] = useState<Tab>("chart");
+  // The live server serves this bundle at "/" booted on the OVERVIEW: the
+  // phone opens on ACCOUNT (equity big, holdings) and one tap on a holding
+  // lands on its chart.
+  const [tab, setTab] = useState<Tab>(() =>
+    useUiStore.getState().view === "overview" ? "account" : "chart",
+  );
   const [dock, setDock] = useState<Dock>("positions");
   const [dockOpen, setDockOpen] = useState(true);
   const [ticket, setTicket] = useState(false);
@@ -230,8 +238,16 @@ export function MobileApp() {
         </div>
       )}
       {tab === "account" && (
-        <div className="flex min-h-0 flex-1 flex-col">
-          <div className="flex h-10 items-center px-3 text-[12px] tracking-widest text-bb-amber">ACCOUNT</div>
+        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain">
+          <OverviewPage
+            onOpen={(h) => {
+              setSymbol(h.underlying);
+              setAssetMode(h.occ ? "options" : "equity");
+              if (h.plan_id) viewPosition(h.plan_id);
+              setTab("chart");
+            }}
+            onProtect={() => setTab("positions")}
+          />
           <MobileAccount />
         </div>
       )}

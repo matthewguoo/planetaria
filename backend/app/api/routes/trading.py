@@ -6,7 +6,11 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from app.models.trade import OPEN_STATUSES, TradePlan
-from app.services.trade_service import position_mid_from_quotes
+from app.services.trade_service import mark_with_fallback, position_mid_from_quotes
+
+import logging
+
+log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["trading"])
 
@@ -96,13 +100,31 @@ async def place_order(request: Request, body: OrderIn) -> dict:
 async def positions(request: Request) -> dict:
     app = request.app
     plans = await app.state.risk.open_plans()
+    # Broker position prices back up the quote cache outside RTH (dark IEX
+    # premarket/postmarket, the weekend): one cached call, only when needed.
+    broker_prices: dict[str, float] = {}
+    if any(
+        position_mid_from_quotes(
+            plan.legs, {leg["symbol"]: app.state.market.latest_quote(leg["symbol"]) for leg in plan.legs}
+        ) is None
+        for plan in plans
+    ):
+        try:
+            broker_prices = {
+                p["symbol"]: p["current_price"]
+                for p in await app.state.trade.broker_positions()
+                if p.get("current_price")
+            }
+        except Exception as exc:  # broker down: marks simply stay unavailable
+            log.warning("broker price fallback unavailable: %s", exc)
     out = []
     for plan in plans:
         quotes = {leg["symbol"]: app.state.market.latest_quote(leg["symbol"]) for leg in plan.legs}
-        mid = position_mid_from_quotes(plan.legs, quotes)
+        mid, source = mark_with_fallback(plan.legs, quotes, broker_prices)
         row = plan.to_dict()
         row["mark"] = round(mid, 4) if mid is not None else None
-        row["quote_stale"] = mid is None
+        row["mark_source"] = source
+        row["quote_stale"] = source != "quote"
         row["unrealized_pnl"] = plan.pnl_at(mid)
         out.append(row)
 
@@ -113,6 +135,29 @@ async def positions(request: Request) -> dict:
     except Exception as exc:  # broker down != positions page down
         return {"positions": out, "untracked": [], "untracked_error": str(exc)}
     return {"positions": out, "untracked": untracked}
+
+
+@router.get("/holdings")
+async def holdings(request: Request) -> dict:
+    """The account overview: every broker position with its protection
+    state, plus the names the symbol universe knows. Never raises on a
+    broker hiccup — the page shows the last good list with an error line."""
+    app = request.app
+    try:
+        plans = await app.state.risk.open_plans()
+        rows = await app.state.trade.holdings(plans)
+    except Exception as exc:
+        raise HTTPException(502, f"holdings unavailable: {exc}")
+    universe = getattr(app.state, "symbols", None)
+    if universe is not None:
+        universe.ensure()
+        for row in rows:
+            asset = universe.assets.get(row["underlying"])
+            row["name"] = asset["name"] if asset else None
+    else:
+        for row in rows:
+            row["name"] = None
+    return {"holdings": rows}
 
 
 class AdoptIn(BaseModel):

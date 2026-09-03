@@ -95,7 +95,7 @@ function SystemButton() {
   );
 }
 
-const TABS: View[] = ["terminal", "account", "strategies"];
+const TABS: View[] = ["overview", "terminal", "account", "strategies"];
 
 export function TerminalHeader() {
   const symbol = useTradingStore((s) => s.symbol);

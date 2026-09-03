@@ -107,6 +107,9 @@ export type Plan = {
   exit_premium: number | null;
   realized_pnl: number | null;
   mark?: number | null;
+  /** "quote" = live quote cache; "broker" = the broker's own position price
+   * filled a dark cache (extended hours / weekend); null = unmarkable. */
+  mark_source?: "quote" | "broker" | null;
   tp_order_id?: string | null;
   unrealized_pnl?: number | null;
   quote_stale?: boolean;
@@ -142,6 +145,27 @@ export type UntrackedPosition = {
   unrealized_pl: number | null;
   occ: { underlying: string; expiry: string; right: "C" | "P"; strike: number } | null;
 };
+
+/** One row of the account overview: a broker position stamped with the
+ * plan that protects it (or not). See services/trade_service.merge_holdings. */
+export type Holding = UntrackedPosition & {
+  underlying: string;
+  name: string | null;
+  unrealized_plpc: number | null;
+  unrealized_intraday_pl: number | null;
+  change_today: number | null;
+  lastday_price: number | null;
+  cost_basis: number | null;
+  plan_id: string | null;
+  plan_status: string | null;
+  sl: number | null;
+  tp: number | null;
+  time_stop_utc: string | null;
+  protected: boolean;
+};
+
+export const getHoldings = () =>
+  api.get<{ holdings: Holding[] }>("/api/holdings").then((r) => r.data.holdings);
 
 export type PositionsPayload = {
   positions: Plan[];
