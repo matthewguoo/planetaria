@@ -1,0 +1,44 @@
+# planetaria PAPER server — systemd unit for the always-on Linux box, running
+# next to the LIVE unit from its OWN checkout (__REPO__ = ~/planetaria-paper).
+#
+# Everything that makes this the paper engine is in /etc/planetaria/paper.env
+# (see paper.env.example): TRADING_MODE=paper, ALPACA_PAPER=true, the paper
+# keys, its own DATABASE_URL (trader) / REDIS_URL (db 0). The strategy plane
+# runs here; it never exists in the live process.
+#
+# Bound to 127.0.0.1: reached through `tailscale serve --http=8000`, which
+# retires the old Windows 0.0.0.0 LAN binding. `setup-paper.sh` substitutes
+# __USER__, __REPO__ and __HOME__.
+
+[Unit]
+Description=planetaria PAPER server (uvicorn 127.0.0.1:8000, strategies on)
+Documentation=file://__REPO__/docs/paper-server.md
+After=network-online.target postgresql.service redis-server.service planetaria-live.service
+Wants=network-online.target
+Requires=postgresql.service redis-server.service
+
+[Service]
+Type=simple
+User=__USER__
+WorkingDirectory=__REPO__/backend
+EnvironmentFile=/etc/planetaria/paper.env
+# Own log dir (never inside the checkout, never shared with live).
+Environment=PLANETARIA_LOG_DIR=__HOME__/planetaria-logs/paper
+# The strategies' LLM backend is the Claude CLI on the service user's
+# subscription: it must be on PATH (native installer -> ~/.local/bin) and
+# systemd's PATH is minimal. HOME is set by systemd for User=, which the CLI
+# needs for its credentials.
+Environment=PATH=__HOME__/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=__REPO__/backend/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000
+Restart=always
+RestartSec=5
+TimeoutStopSec=45
+KillSignal=SIGINT
+StandardOutput=journal
+StandardError=journal
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target

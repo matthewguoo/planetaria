@@ -62,7 +62,8 @@ fi
 sudo chmod 640 /etc/planetaria/live.env
 
 say "6/8 systemd unit"
-sed -e "s|__USER__|$USER_NAME|g" -e "s|__REPO__|$REPO|g" \
+mkdir -p "$HOME/planetaria-logs/live"
+sed -e "s|__USER__|$USER_NAME|g" -e "s|__REPO__|$REPO|g" -e "s|__HOME__|$HOME|g" \
   "$REPO/deploy/live/planetaria-live.service" | sudo tee /etc/systemd/system/planetaria-live.service >/dev/null
 sudo systemctl daemon-reload
 sudo systemctl enable planetaria-live

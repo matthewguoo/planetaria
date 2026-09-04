@@ -10,7 +10,7 @@
 #
 # Bound to 127.0.0.1 on purpose: the API has no auth. Remote access is
 # `tailscale serve` in front of the loopback port (docs/live-server.md).
-# `setup-linux.sh` substitutes __USER__ and __REPO__.
+# `setup-linux.sh` substitutes __USER__, __REPO__ and __HOME__.
 
 [Unit]
 Description=planetaria LIVE server (uvicorn 127.0.0.1:8001, manual entries only, real money)
@@ -24,6 +24,10 @@ Type=simple
 User=__USER__
 WorkingDirectory=__REPO__/backend
 EnvironmentFile=/etc/planetaria/live.env
+# The rotating engine.log lives OUTSIDE the checkout: a rotated engine.log.1
+# inside it would read as a dirty tree and stall autodeploy forever, and two
+# engines (live + paper) must never share one log file.
+Environment=PLANETARIA_LOG_DIR=__HOME__/planetaria-logs/live
 ExecStart=__REPO__/backend/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8001
 # Restarts are safe: reconcile rebuilds every monitor from the DB. A dead
 # enforcer is worse than a restarting one.

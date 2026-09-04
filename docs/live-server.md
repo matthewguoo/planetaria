@@ -161,6 +161,8 @@ migrations by hand (the app auto-migrates at boot).
 - `deploy/live/setup-linux.sh` — the setup above.
 - `deploy/live/planetaria-live.service` — systemd unit (`__USER__`/`__REPO__` substituted by the script).
 - `deploy/live/live.env.example` — the whole environment of the live process.
+- `deploy/paper/*` — the PAPER server on the same box, second checkout
+  (`docs/paper-server.md`).
 - `live.ps1` / `backend/scripts/install-live-service.ps1` — the Windows
   equivalents for a side-by-side session on the dev box (same contract,
   Docker infra on :5433/:6380). Only one of the two hosts may run live.
@@ -322,9 +324,10 @@ position.
 **Network surfaces.**
 - Live: `127.0.0.1:8001` + `tailscale serve`. Never `--host 0.0.0.0`,
   never `tailscale funnel`, no router port-forward.
-- Paper: `0.0.0.0:8000` on the LAN for the phone. Acceptable for paper
-  money; it should also move behind `tailscale serve` when convenient so
-  there is one access model, not two.
+- Paper: on the box from its own checkout, `127.0.0.1:8000` +
+  `tailscale serve --http=8000` → `http://planetaria:8000`. One access
+  model for both (`docs/paper-server.md`); the old Windows `0.0.0.0` LAN
+  binding is retired.
 - Tailscale admin: disable key expiry on `planetaria` (was mikoyae-kojiki) (a lapsed node
   key takes the enforcer's remote access down silently); ACL the box to
   your own user; keep the tailnet single-user.

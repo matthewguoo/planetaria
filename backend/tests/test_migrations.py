@@ -132,3 +132,16 @@ async def test_reconnect_is_idempotent(tmp_path):
         await db.close()
     _, rev = await _survey(url)
     assert rev == _head_revision()
+
+
+@pytest.mark.asyncio
+async def test_connect_without_fallback_raises_and_leaves_no_sqlite(tmp_path, monkeypatch):
+    """fallback=False must never open the cwd-relative ./trader.db - a copy
+    tool pointed at a mistyped Postgres URL would otherwise 'succeed' into a
+    fresh SQLite file."""
+    monkeypatch.chdir(tmp_path)
+    db = Database()
+    with pytest.raises(RuntimeError, match="no fallback"):
+        await db.connect("postgresql+asyncpg://nobody:x@127.0.0.1:1/nothing", fallback=False)
+    assert not (tmp_path / "trader.db").exists()
+    assert db.engine is None

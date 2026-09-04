@@ -1,0 +1,4 @@
+# /etc/sudoers.d/planetaria-paper (0440) - the service user may operate the
+# paper unit without a password (autodeploy restarts it at night). Nothing
+# else. Installed by setup-paper.sh after `visudo -cf`.
+__USER__ ALL=(root) NOPASSWD: /usr/bin/systemctl start planetaria-paper, /usr/bin/systemctl stop planetaria-paper, /usr/bin/systemctl restart planetaria-paper, /usr/bin/systemctl status planetaria-paper, /usr/bin/journalctl -u planetaria-paper*

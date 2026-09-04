@@ -83,10 +83,16 @@ class Database:
         self.session_factory: async_sessionmaker[AsyncSession] | None = None
         self.url: str = ""
 
-    async def connect(self, url: str) -> None:
+    async def connect(self, url: str, fallback: bool = True) -> None:
+        """fallback=False: connect to `url` or raise - never the cwd-relative
+        SQLite file. Tools that write to a target store must use it (a
+        mistyped URL would otherwise "succeed" into ./trader.db), and a
+        production unit may set it to make a Postgres outage a boot failure
+        instead of a silent empty store."""
         from app.models.trade import Base
 
-        for candidate in (url, SQLITE_FALLBACK):
+        candidates = (url, SQLITE_FALLBACK) if fallback else (url,)
+        for candidate in candidates:
             try:
                 if candidate.startswith("sqlite"):
                     # NullPool: a pooled cap stalls concurrent exit monitors
@@ -126,6 +132,8 @@ class Database:
                 return
             except Exception as exc:
                 log.warning("db connect failed for %s: %s", candidate.split("@")[-1], exc)
+        if len(candidates) == 1:
+            raise RuntimeError(f"database unavailable: {url.split('@')[-1]} (no fallback)")
         raise RuntimeError("no database available (postgres AND sqlite failed)")
 
     async def _migrate(self, engine, url: str, Base) -> None:

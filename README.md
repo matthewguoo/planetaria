@@ -199,7 +199,8 @@ an always-on host (systemd/docker restart-always — restarts are safe, the
 reconcile machinery rebuilds all monitors from the DB) and keep the UI
 wherever you like. `backend/scripts/install-engine-service.ps1` installs
 exactly that shape as a Windows service (NSSM, boot-start,
-restart-on-crash, LAN-only).
+restart-on-crash, LAN-only). That service is retired once the paper engine
+runs on the Linux box next to the live one — `docs/paper-server.md`.
 
 ### The live server (real money, manual entries only)
 

@@ -76,29 +76,12 @@ shows `RELAY` instead of `LIVE` for the feed so a dark relay is visible.
 
 ## Moving the paper engine onto the box
 
-Outside market hours, in this order:
-
-1. **Data**: `docker compose exec db pg_dump -U trader -Fc trader > paper.dump` on
-   Windows; `scp` to the box; `sudo -u postgres createdb -O trader trader`;
-   `pg_restore -U trader -d trader paper.dump`. The bar cache in Redis is
-   disposable (backfills from REST).
-2. **Env**: `/etc/planetaria/paper.env` — the paper keys, `TRADING_MODE=paper`,
-   `QUOTE_SOURCE=redis`, `DATABASE_URL=.../trader`, `REDIS_URL=redis://localhost:6379/0`,
-   `LLM_BACKEND` — either `claude-cli` (install the CLI on the box and log
-   in as `mikoyae`; the service runs as that user so subscription auth
-   works) or `api` with `ANTHROPIC_API_KEY`. Same 0640 root:mikoyae hygiene.
-3. **Unit**: `deploy/paper/planetaria-paper.service` — a copy of the live
-   unit on port 8000, `EnvironmentFile=/etc/planetaria/paper.env`,
-   `After=planetaria-live.service` (it wants the relay up), **bound to
-   127.0.0.1** and published as a second `tailscale serve` path
-   (`--set-path /paper` or a second port) — the phone reaches it over the
-   tailnet, which retires the LAN-open `0.0.0.0` binding for good.
-4. **Windows**: `nssm stop planetaria-engine; nssm remove planetaria-engine confirm`.
-   The dev box keeps `dev.ps1` for hot-reload development against Docker
-   infra; nothing supervised runs there any more.
-5. Live gets `QUOTE_RELAY=publish` in `live.env` and a restart; paper
-   starts; `/api/system/state` on paper shows feed `RELAY`, on live shows
-   `relay.published` climbing and `relay.dropped` at 0.
+Done separately and first — see `docs/paper-server.md`. (The store is the
+Windows SQLite fallback file, not the Docker Postgres; it is copied into the
+box's Postgres by `app/db/copy_store.py`.) Once paper runs on the box, live
+gets `QUOTE_RELAY=publish` in `live.env` and a restart, paper gets
+`QUOTE_SOURCE=redis`; `/api/system/state` on paper shows feed `RELAY`, on
+live `relay.published` climbing and `relay.dropped` at 0.
 
 ## Config summary
 | var | live | paper |

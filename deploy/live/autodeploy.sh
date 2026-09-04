@@ -10,10 +10,18 @@
 #   bash deploy/live/autodeploy.sh --dry-run  # decide, print, change nothing
 #   touch ~/planetaria/.deploy-hold           # pause auto-deploys (rm to resume)
 set -u
+# Parametrized so one script serves both engines on the box. Defaults are
+# the LIVE server; the paper timer unit sets the PLANETARIA_* vars.
 REPO="${PLANETARIA_REPO:-$HOME/planetaria}"
+SERVICE="${PLANETARIA_SERVICE:-planetaria-live}"
+PORT="${PLANETARIA_PORT:-8001}"
+MODE="${PLANETARIA_MODE:-live_manual}"
 LOG="${PLANETARIA_DEPLOY_LOG:-$HOME/planetaria-deploy.log}"
-HEALTH="http://127.0.0.1:8001/api/health"
+HEALTH="http://127.0.0.1:$PORT/api/health"
 DRY=0; [[ "${1:-}" == "--dry-run" ]] && DRY=1
+if [[ "${1:-}" == "--show" ]]; then   # test seam: resolved config, no side effects
+  echo "repo=$REPO service=$SERVICE port=$PORT mode=$MODE log=$LOG"; exit 0
+fi
 say() { printf '%s %s\n' "$(date -u +%FT%TZ)" "$*" | tee -a "$LOG"; }
 
 # 1. Trading-hours guard, in ET. The engine may be mid-exit 09:25-10:00
@@ -39,7 +47,7 @@ rollback() {
   say "ROLLBACK to ${old:0:7}: $1"
   git checkout -q "$old" && git checkout -q -B main "$old" 2>/dev/null
   (cd frontend && npm run build --silent >/dev/null 2>&1)
-  sudo -n systemctl restart planetaria-live; sleep 12
+  sudo -n systemctl restart "$SERVICE"; sleep 12
   curl -sf --max-time 5 "$HEALTH" >/dev/null && say "rollback healthy" || say "ROLLBACK UNHEALTHY - human needed"
   exit 1
 }
@@ -55,8 +63,8 @@ if ! (cd backend && .venv/bin/python -m pytest -q -p no:cacheprovider -x >>"$LOG
   rollback "backend tests failed at ${new:0:7} (see $LOG.pytest)"
 fi
 (cd frontend && npm run build --silent >/dev/null 2>&1) || rollback "frontend build failed"
-sudo -n systemctl restart planetaria-live; sleep 12
-if curl -sf --max-time 5 "$HEALTH" | grep -q '"mode":"live_manual"'; then
+sudo -n systemctl restart "$SERVICE"; sleep 12
+if curl -sf --max-time 5 "$HEALTH" | grep -q "\"mode\":\"$MODE\""; then
   say "deployed ${new:0:7}, healthy"
 else
   rollback "health check failed after restart"

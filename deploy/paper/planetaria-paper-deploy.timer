@@ -1,0 +1,10 @@
+[Unit]
+Description=planetaria paper: check origin/main every 15 minutes (offset from the live timer so the two test runs never overlap)
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=15min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,14 @@
+[Unit]
+Description=planetaria paper: auto-deploy origin/main outside trading hours
+After=network-online.target planetaria-paper.service
+
+[Service]
+Type=oneshot
+User=__USER__
+WorkingDirectory=__REPO__
+Environment=PLANETARIA_REPO=__REPO__
+Environment=PLANETARIA_SERVICE=planetaria-paper
+Environment=PLANETARIA_PORT=8000
+Environment=PLANETARIA_MODE=paper
+Environment=PLANETARIA_DEPLOY_LOG=__HOME__/planetaria-paper-deploy.log
+ExecStart=/usr/bin/bash __REPO__/deploy/live/autodeploy.sh
