@@ -1,0 +1,9 @@
+[Unit]
+Description=planetaria live box: auto-deploy origin/main outside trading hours
+After=network-online.target planetaria-live.service
+
+[Service]
+Type=oneshot
+User=__USER__
+WorkingDirectory=__REPO__
+ExecStart=/usr/bin/bash __REPO__/deploy/live/autodeploy.sh

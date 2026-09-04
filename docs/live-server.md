@@ -119,6 +119,43 @@ requirements.lock.txt`, `cd frontend && npm ci && npm run build`, `sudo
 systemctl restart planetaria-live` — **outside** 09:25–10:00 and
 15:45–16:05 ET, when the enforcer may be mid-exit.
 
+## 2b. Auto-deploy outside trading hours
+
+The box keeps itself on the latest *working* commit without anyone
+touching it during the session. `planetaria-deploy.timer` runs
+`deploy/live/autodeploy.sh` every 15 minutes; the script:
+
+1. **Refuses to act during the trading day** — it only proceeds
+   20:30–07:30 ET on weekdays, or any time Saturday/Sunday (the engine
+   may be mid-exit 09:25–10:00 / 15:45–16:05 and extended-hours polling
+   runs 04:00–20:00). A `~/planetaria/.deploy-hold` file pauses it.
+2. Fetches `origin/main`; exits if the box is already there, or if the
+   checkout is dirty or not fast-forwardable (a human made local changes —
+   never silently overwritten).
+3. Fast-forwards, reinstalls Python deps / npm packages only when their
+   lock files changed, then **runs the full backend suite on the box** —
+   that is the definition of "working", not the commit message.
+4. Rebuilds the UI, restarts the service, checks `/api/health` says
+   `live_manual`.
+5. On any failure — tests, build, health — **rolls back** to the commit that
+   was running, rebuilds, restarts, and logs `ROLLBACK`. The log is
+   `~/planetaria-deploy.log` (pytest output in `~/planetaria-deploy.log.pytest`).
+
+Install once (needs sudo; uses the scoped NOPASSWD rule for the restart):
+
+```bash
+sudo bash ~/planetaria/deploy/live/install-autodeploy.sh
+```
+
+Check it: `systemctl list-timers planetaria-deploy.timer`, and
+`tail ~/planetaria-deploy.log` shows `skip: inside trading day` during the
+session and `deployed <sha>, healthy` at night. Dry-run any time:
+`bash deploy/live/autodeploy.sh --dry-run`.
+
+What it does NOT do: deploy anything that isn't on `origin/main` (push is
+the human act that releases), touch `/etc/planetaria/live.env`, or run
+migrations by hand (the app auto-migrates at boot).
+
 ## 3. Files
 
 - `deploy/live/setup-linux.sh` — the setup above.
