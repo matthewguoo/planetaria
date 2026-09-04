@@ -152,7 +152,7 @@ async def test_hung_handler_times_out_and_queue_keeps_draining(rig, monkeypatch)
 
 @pytest.mark.asyncio
 async def test_intent_storm_capped_by_budget(rig):
-    row = await rig.runner.create("chaos", "storm", {"budget": {"max_open_plans": 3}})
+    row = await rig.runner.create("chaos", "storm", {"live": True, "budget": {"max_open_plans": 3}})
     await rig.runner.set_state(row["id"], "enabled")
     strategy = rig.runner._running[row["id"]].strategy
 
@@ -185,7 +185,7 @@ async def test_intent_storm_capped_by_budget(rig):
 @pytest.mark.asyncio
 async def test_kill_all_mid_storm_stops_new_placements(rig):
     row = await rig.runner.create("chaos", "killstorm",
-                                  {"budget": {"max_open_plans": 100}})
+                                  {"live": True, "budget": {"max_open_plans": 100}})
     await rig.runner.set_state(row["id"], "enabled")
 
     for i in range(3):

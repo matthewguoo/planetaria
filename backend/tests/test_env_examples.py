@@ -46,4 +46,11 @@ def test_paper_example_boots_paper(monkeypatch):
     s = _boot("paper/paper.env.example", monkeypatch)
     assert s.trading_mode == "paper" and s.alpaca_paper is True and s.strategies_enabled is True
     assert s.database_url.endswith(":5432/trader") and s.redis_url.endswith(":6379/0")
-    assert s.llm_backend == "claude-cli" and s.headless is False
+    assert s.llm_backend == "claude-cli"
+    # A server unit must never open the cwd-relative SQLite file.
+    assert s.sqlite_fallback is False
+
+
+def test_live_example_never_falls_back_to_sqlite(monkeypatch):
+    s = _boot("live/live.env.example", monkeypatch)
+    assert s.sqlite_fallback is False

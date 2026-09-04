@@ -44,12 +44,12 @@ class Settings(BaseSettings):
 
     cors_origins: list[str] = ["http://localhost:5173", "http://127.0.0.1:5173"]
 
-    # HEADLESS=true boots the ENGINE ONLY: full execution stack (streams,
-    # FSM, exit enforcer, reconcile, risk) plus the command/ops API, but no
-    # UI-serving routes (chain, bars REST, browser WebSocket). This is the
-    # future split seam: run the engine supervised on an always-on host and
-    # point any UI at it — or at a separate UI-serving instance.
-    headless: bool = False
+    # SQLITE_FALLBACK=true (the dev default) lets a boot with Postgres down
+    # continue on ./trader.db so exit enforcement keeps working on a laptop.
+    # A server unit sets it false: an empty fallback store means zero
+    # monitors on real positions while /api/health still answers, so a
+    # Postgres outage must be a boot failure there. Live forces it off.
+    sqlite_fallback: bool = True
 
     # Bar cache retention: 10 trading days of 1-minute bars per symbol.
     bar_cache_days: int = 10
@@ -108,6 +108,9 @@ class Settings(BaseSettings):
         # Derived, never trusted from env: the live server talks to the live
         # endpoint by construction, and ALPACA_PAPER is ignored entirely.
         self.alpaca_paper = False
+        # Likewise derived: a live enforcer that silently opened an empty
+        # SQLite store would run zero monitors on real positions.
+        self.sqlite_fallback = False
 
 
 @lru_cache

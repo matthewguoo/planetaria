@@ -103,6 +103,23 @@ _LIVE_ENV = {
 }
 
 
+def _flat_paths(routes) -> set[str]:
+    """FastAPI mounts included routers lazily (_IncludedRouter wrapping the
+    original APIRouter); walk both plain routes and wrapped routers."""
+    out: set[str] = set()
+    for r in routes:
+        path = getattr(r, "path", None)
+        if path:
+            out.add(path)
+        inner = getattr(r, "original_router", None)
+        if inner is not None:
+            out |= _flat_paths(inner.routes)
+        sub = getattr(r, "routes", None)
+        if sub:
+            out |= _flat_paths(sub)
+    return out
+
+
 def _reload_main(monkeypatch, env: dict[str, str]):
     for k, v in env.items():
         monkeypatch.setenv(k, v)
@@ -143,8 +160,6 @@ def test_live_server_stubs_strategies_with_409(monkeypatch):
 
 
 def test_live_server_keeps_manual_engine_routes(monkeypatch):
-    from tests.test_headless import _flat_paths
-
     main = _reload_main(monkeypatch, _LIVE_ENV)
     paths = _flat_paths(main.app.routes)
     for p in ("/api/orders", "/api/positions", "/api/positions/adopt",
@@ -157,8 +172,6 @@ def test_live_server_keeps_manual_engine_routes(monkeypatch):
 
 
 def test_paper_server_mounts_real_strategies(monkeypatch):
-    from tests.test_headless import _flat_paths
-
     for k in _LIVE_ENV:
         monkeypatch.delenv(k, raising=False)
     main = _reload_main(monkeypatch, {"TRADING_MODE": "paper"})

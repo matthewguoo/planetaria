@@ -93,7 +93,7 @@ def test_bus_publish_records_engine_but_not_timer(monkeypatch):
 async def test_monitor_route_shape(monkeypatch):
     fresh = CallLog()
     monkeypatch.setattr(call_log_mod, "CALL_LOG", fresh)
-    import app.api.routes.monitor as monitor_mod
+    import app.api.routes.admin as monitor_mod
 
     monkeypatch.setattr(monitor_mod, "CALL_LOG", fresh)
     fresh.record("data", "GET x", ms=1.0)

@@ -1,7 +1,8 @@
 """The server administration window's data: one summary (process, stores,
 feed, broker, enforcer, account), the engine's recent journal across
-every plan, and the tail of its own log file. The broker/data call feed is
-/api/monitor/calls. Read-only; mounted on both servers."""
+every plan, the tail of its own log file, and the live call flow (what the
+process is saying to whom, from the one ring in services/call_log.py).
+Read-only; mounted on both servers."""
 
 from __future__ import annotations
 
@@ -149,6 +150,16 @@ async def admin_summary(request: Request) -> dict:
         "last_error": last_error,
         "capabilities": caps.summary() if caps is not None else None,
         "system": system,
+    }
+
+
+@router.get("/monitor/calls")
+async def calls(category: str | None = None, limit: int = 100) -> dict:
+    """Three categories from one ring: data-source HTTP, broker REST,
+    internal engine chokepoints."""
+    return {
+        "status": CALL_LOG.status(),
+        "calls": CALL_LOG.recent(category, min(limit, 300)),
     }
 
 

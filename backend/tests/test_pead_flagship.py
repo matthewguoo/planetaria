@@ -190,7 +190,7 @@ class TestAllocation:
         this refuses the order if it sized past it anyway."""
         from app.strategies.base import TradeIntent
 
-        row = await runner.create("pead_flagship", "flag", {})
+        row = await runner.create("pead_flagship", "flag", {"live": True})
         await runner.set_allocation(row["id"], {"mode": "usd", "value": 5_000})
         intent = TradeIntent(
             asset_class="equity", underlying="AMD",

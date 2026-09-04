@@ -36,7 +36,7 @@ from app.services.signals.store import SignalStore
 from app.services.supervision import supervise
 from app.services.trade_service import position_mid_from_quotes
 from app.strategies import REGISTRY
-from app.strategies.base import Strategy, StrategyContext, TradeIntent
+from app.strategies.base import IntentRefused, Strategy, StrategyContext, TradeIntent
 
 log = logging.getLogger("app.strategy")
 
@@ -289,9 +289,12 @@ class StrategyRunner:
                     "error": f"on_event timeout after {timeout_s:.0f}s",
                     "event_type": event.type,
                 }, signal_ids=_ids(event))
-            except ValueError:
+            except IntentRefused:
                 # execute_intent already journaled the refusal; a strategy
                 # letting it propagate is normal control flow, not an error.
+                # (Only THAT type: a strategy's own ValueError — a bad
+                # float(), a dict-shape slip — is a bug and is journaled
+                # below like any other exception.)
                 pass
             except Exception as exc:
                 running.errors += 1
@@ -447,12 +450,12 @@ class StrategyRunner:
         name = running.name if running else row_id
         signal_ids = list(intent.signal_ids)
 
-        async def refuse(action: str, why: str) -> ValueError:
+        async def refuse(action: str, why: str) -> IntentRefused:
             await self._journal(row_id, action, detail={
                 "why": why, "reason": intent.reason,
                 "underlying": intent.underlying, "qty": intent.qty,
             }, dedupe_key=intent.dedupe_key, signal_ids=signal_ids)
-            return ValueError(why)
+            return IntentRefused(why)
 
         # Stale-event guard: never trade on old news after a restart or a
         # backed-up queue. Uses journal timestamps, not wall-clock trust.
@@ -528,7 +531,15 @@ class StrategyRunner:
                 f"), ${alloc['deployed']:,.0f} already deployed")
 
         # Per-strategy budget (layered UNDER the global guards, both must pass).
-        params = running.ctx.params if running else {}
+        # Not running (a direct call, or an intent racing a despawn): read
+        # the row's params rather than assuming an empty set — `live` must
+        # come from what the operator stored, never from a default.
+        if running is not None:
+            params = running.ctx.params
+        else:
+            async with self.db.session() as session:
+                row = await session.get(StrategyInstanceRow, row_id)
+            params = dict(row.params or {}) if row is not None else {}
         violations = await self.risk.validate_strategy_budget(
             strategy_id=row_id,
             budget=(params or {}).get("budget"),
@@ -562,7 +573,9 @@ class StrategyRunner:
         # strategy's allocation, counts against its breaker, and shows in
         # PERFORMANCE and the FUND page under its sim status — the
         # before-paper paper test. Only the broker is missing.
-        if not bool((params or {}).get("live", True)):
+        # Fail CLOSED: an instance whose params cannot be read, or a kind
+        # whose defaults omit `live`, places a sim plan, never a real one.
+        if not bool((params or {}).get("live", False)):
             plan_dict = await self._place_sim(row_id, name, intent)
             await self._journal(row_id, "placed_sim", detail={
                 "reason": intent.reason,

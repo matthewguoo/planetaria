@@ -227,9 +227,30 @@ class ExitEnforcer:
                 except Exception:
                     log.exception("blank-exit repair scan failed")
 
+    def _now(self) -> datetime:
+        """The one wall-clock read for date/age decisions, so a test can pin
+        it. (Incident: the expiry-settlement tests hard-coded 2026-09-03
+        legs and began failing at midnight ET that night.)"""
+        return datetime.now(timezone.utc)
+
+    # A `planned` row is legitimately order-less for the length of one
+    # broker submit (place_trade commits FIRST, then awaits the broker, up to
+    # ~15s). Only a row older than this is an orphan of a crash.
+    ORPHAN_PLANNED_AGE_S = 90.0
+
     async def _reconcile_plan(self, plan: TradePlan) -> None:
         """Sync one plan's order state from broker REST, then (re-)arm."""
         if plan.status == "planned" and not plan.entry_order_id:
+            stamp = plan.updated_at or plan.created_at
+            age_s = (
+                (self._now() - as_utc(stamp)).total_seconds()
+                if stamp is not None else float("inf")
+            )
+            if age_s < self.ORPHAN_PLANNED_AGE_S:
+                # place_trade is mid-submit: cancelling now would leave the
+                # order it is about to get at the broker with a terminal plan
+                # (the FSM would drop the later ENTRY_SUBMITTED).
+                return
             # Crashed between plan commit and order submit: no order
             # ever reached the broker, so nothing to manage.
             await self.trade.fsm.apply(
@@ -474,7 +495,7 @@ class ExitEnforcer:
         closes, anything not tradable by the next open is dead. MarketClock
         is fail-open, so a clock failure reads as 'today still tradable' —
         the conservative direction (park/ladder rather than settle)."""
-        et_today = datetime.now(ZoneInfo("America/New_York")).date()
+        et_today = self._now().astimezone(ZoneInfo("America/New_York")).date()
         if await self.clock.is_open():
             return et_today
         next_open = await self.clock.next_open()
@@ -924,6 +945,17 @@ class ExitEnforcer:
                     ):
                         plan = await self.trade.get_plan(plan_id)
                         last_plan_fetch = time.monotonic()
+                        # Re-derive from the fresh row: tighten_exits may
+                        # have GIVEN a stopless plan a stop, and a flag
+                        # computed once at arm time would skip evaluating
+                        # it until the next restart.
+                        was_bracketless = bracketless
+                        bracketless = plan.tp_premium is None and plan.sl_premium is None
+                        if was_bracketless and not bracketless:
+                            log.info("plan %s: bracket added while armed - "
+                                     "evaluating TP=%s SL=%s from now on",
+                                     plan.id, plan.tp_premium, plan.sl_premium)
+                            wait_s = self.quote_poll_near_s
                     if plan.status not in OPEN_STATUSES:
                         return
                     timeout = (as_utc(plan.time_stop_utc) - datetime.now(timezone.utc)).total_seconds()

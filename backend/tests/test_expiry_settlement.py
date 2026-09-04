@@ -145,6 +145,9 @@ async def env(tmp_path):
     trade = TradeService(db, alpaca, market, risk)
     enforcer = ExitEnforcer(db, market, trade,
                             clock=_Clock(is_open=False, next_open_at=NEXT_OPEN))
+    # Pin the wall clock to the incident evening: the legs expire 2026-09-03
+    # and "today" must be that date, whatever day the suite runs on.
+    enforcer._now = lambda: T0 + timedelta(hours=2, minutes=30)   # 16:30 ET
 
     async with db.session() as session:
         plan = TradePlan(

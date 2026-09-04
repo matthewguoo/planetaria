@@ -13,7 +13,6 @@ from app import bootstrap
 from app.api.routes.admin import router as admin_router
 from app.api.routes.capabilities import router as capabilities_router
 from app.api.routes.market_data import router as market_router
-from app.api.routes.monitor import router as monitor_router
 from app.api.routes.options import router as options_router
 from app.api.routes.strategies import router as strategies_router
 from app.api.routes.system import router as system_router
@@ -86,12 +85,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# The ENGINE API (trading commands + system ops) is always mounted; the
-# UI-serving surface (chain, bars REST, browser WebSocket fanout, and the
-# built frontend itself) is skipped in HEADLESS mode — engine-only
-# deployments for reliability. On the LIVE server the strategies surface
-# is replaced by a 409 stub: the runner is never constructed there, and
-# the real router would 500 against the missing app.state.
+# Every server mounts the whole engine API and serves its own UI. The one
+# mode-dependent surface is strategies: on the LIVE server it is replaced
+# by a 409 stub, because the runner is never constructed there and the real
+# router would 500 against the missing app.state.
 app.include_router(trading_router)
 app.include_router(system_router)
 app.include_router(capabilities_router)
@@ -102,11 +99,9 @@ else:
     from app.api.routes.live_stubs import router as live_stubs_router
 
     app.include_router(live_stubs_router)
-app.include_router(monitor_router)
-if not get_settings().headless:
-    app.include_router(market_router)
-    app.include_router(options_router)
-    app.include_router(ws_router)
+app.include_router(market_router)
+app.include_router(options_router)
+app.include_router(ws_router)
 
 
 @app.get("/api/health")
@@ -130,7 +125,7 @@ async def health(request: Request) -> dict:
 # (registration order is match order); StaticFiles reads from disk per
 # request, so `npm run build` redeploys the UI without a restart.
 _dist = Path(__file__).resolve().parent.parent.parent / "frontend" / "dist"
-if not get_settings().headless and _dist.is_dir():
+if _dist.is_dir():
     from fastapi.responses import FileResponse
 
     # Clean path for the cockpit: /terminal (the Vite entry is still

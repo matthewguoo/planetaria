@@ -75,7 +75,8 @@ class RedisFacade:
         """Delete fields not in keep_ts (bounded retention)."""
         key = self._bars_key(symbol, tf)
         existing = await self._guard(lambda: self._client.hkeys(key), [])
-        stale = [ts for ts in existing if ts not in set(keep_ts)]
+        keep = set(keep_ts)
+        stale = [ts for ts in existing if ts not in keep]
         if stale:
             await self._guard(lambda: self._client.hdel(key, *stale))
 

@@ -42,6 +42,21 @@ MAX_EVENT_AGE_S = 300.0
 CAPABILITIES = frozenset({"sip", "shorts", "options", "llm"})
 
 
+# Params every instance carries regardless of kind. `live` is the runner's
+# switch between placing real orders and the note-mode paper twin; a kind
+# that forgets to declare it gets False, never True.
+RUNNER_PARAMS = frozenset({"live", "budget"})
+RUNNER_PARAM_DEFAULTS = {"live": False}
+
+
+class IntentRefused(ValueError):
+    """ctx.submit() refused the intent (stale event, dedupe, budget, global
+    risk). Already journaled by the runner; a strategy may let it propagate
+    as normal control flow. Deliberately a subclass of ValueError so a
+    strategy's own bugs (a bad float(), a dict-shape slip) are NOT mistaken
+    for refusals by the runner — those are journaled as errors."""
+
+
 @dataclass(slots=True)
 class TradeIntent:
     asset_class: Literal["option", "equity"]
@@ -82,8 +97,9 @@ class StrategyContext:
 
     async def submit(self, intent: TradeIntent) -> dict:
         """Full pipeline: stale-event guard -> dedupe -> per-strategy budget
-        -> global risk -> place_trade. Raises ValueError with the violation
-        list when refused; every outcome is journaled either way."""
+        -> global risk -> place_trade. Raises IntentRefused (a ValueError)
+        with the violation when refused; every outcome is journaled either
+        way."""
         return await self._runner.execute_intent(self._instance_id, intent)
 
     async def note(self, action_detail: dict, signal_ids: tuple[int, ...] = ()) -> None:
@@ -175,12 +191,14 @@ class Strategy(abc.ABC):
     @classmethod
     def validate_params(cls, params: dict) -> dict:
         """Merge over defaults; raise ValueError on garbage. Override for
-        stricter validation. The 'budget' key is reserved for the runner's
-        per-strategy risk budget and passes through untouched."""
+        stricter validation. RUNNER_PARAMS are owned by the runner, not the
+        strategy: 'live' (False = note-mode paper twin, the fail-closed
+        default for every kind) and 'budget' (the per-strategy risk
+        envelope) pass through whether or not the kind declares them."""
         for key in params:
-            if key not in cls.default_params and key != "budget":
+            if key not in cls.default_params and key not in RUNNER_PARAMS:
                 raise ValueError(f"unknown param {key!r} for strategy {cls.kind!r}")
-        return {**cls.default_params, **params}
+        return {**RUNNER_PARAM_DEFAULTS, **cls.default_params, **params}
 
     async def on_start(self, ctx: StrategyContext) -> None:  # noqa: B027
         """Optional warm-up (subscribe market data, load state)."""

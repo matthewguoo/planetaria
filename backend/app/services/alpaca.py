@@ -130,7 +130,18 @@ class _PatientStreamMixin:
                 self._running = False
                 await asyncio.sleep(delay)
             except Exception as e:
-                log.exception("error during websocket communication: %s", e)
+                # A dead socket surfacing as OSError / ConnectionReset / a
+                # decode error must not re-enter _consume() at zero delay —
+                # that is the same 100%-CPU class as the two cases above.
+                # Reconnect with the refusal backoff, resetting the client
+                # so the next pass builds a fresh connection.
+                refusals += 1
+                delay = min(REFUSAL_BACKOFF_MAX_S, 2.0 ** refusals)
+                log.exception("%s stream error (%s) - reconnecting in %.0fs",
+                              self._name, e, delay)
+                await self.close()
+                self._running = False
+                await asyncio.sleep(delay)
             finally:
                 await asyncio.sleep(0)
 

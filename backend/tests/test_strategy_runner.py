@@ -204,7 +204,7 @@ class TestRegistry:
 class TestIntentGate:
     @pytest.mark.asyncio
     async def test_option_intent_places_and_journals(self, rig):
-        row = await rig.runner.create("dummy", "placer", {})
+        row = await rig.runner.create("dummy", "placer", {"live": True})
         await rig.runner.set_state(row["id"], "enabled")
         rig.bus.publish(news_event(submit=True))
         assert await wait_for(lambda: len(rig.trade.placed) == 1)
@@ -216,7 +216,7 @@ class TestIntentGate:
 
     @pytest.mark.asyncio
     async def test_equity_intent_flows_with_flags(self, rig):
-        row = await rig.runner.create("dummy", "eq", {})
+        row = await rig.runner.create("dummy", "eq", {"live": True})
         await rig.runner.set_state(row["id"], "enabled")
         await rig.runner.execute_intent(row["id"], option_intent(
             asset_class="equity", extended_hours=True,
@@ -230,7 +230,7 @@ class TestIntentGate:
 
     @pytest.mark.asyncio
     async def test_dedupe_key_places_once_ever(self, rig):
-        row = await rig.runner.create("dummy", "dedupe", {})
+        row = await rig.runner.create("dummy", "dedupe", {"live": True})
         await rig.runner.set_state(row["id"], "enabled")
         await rig.runner.execute_intent(row["id"], option_intent(dedupe_key="k"))
         with pytest.raises(ValueError, match="dedupe"):

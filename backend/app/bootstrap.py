@@ -38,7 +38,7 @@ async def startup(app: FastAPI, settings: Settings) -> None:
     await redis.connect()
 
     db = Database()
-    await db.connect(settings.database_url)
+    await db.connect(settings.database_url, fallback=settings.sqlite_fallback)
 
     # Persisted feed settings override env defaults for the feed tiers —
     # applied here because the stream clients are constructed once.
