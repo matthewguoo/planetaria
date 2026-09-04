@@ -23,6 +23,39 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 )
+
+
+def _attach_file_logging() -> None:
+    """The engine owns its log file: size-capped rotation, independent of
+    however stdout/stderr are (or are not) being captured. Incident
+    2026-09-03: the NSSM service wrote no log files after a restart's
+    rotation, so a missed exit had to be diagnosed from broker order
+    history; separately, a DNS outage once spewed 259MB of reconnect
+    tracebacks into an uncapped stderr file. PLANETARIA_LOG_DIR overrides
+    the default; PLANETARIA_LOG_DIR=off disables."""
+    import os
+    from logging.handlers import RotatingFileHandler
+    from pathlib import Path as _Path
+
+    configured = os.environ.get("PLANETARIA_LOG_DIR", "")
+    if configured.lower() == "off":
+        return
+    base = configured or os.path.join(
+        os.environ.get("LOCALAPPDATA", "."), "planetaria-logs")
+    try:
+        _Path(base).mkdir(parents=True, exist_ok=True)
+        handler = RotatingFileHandler(
+            os.path.join(base, "engine.log"),
+            maxBytes=50 * 1024 * 1024, backupCount=3, encoding="utf-8",
+        )
+        handler.setFormatter(logging.Formatter(
+            "%(asctime)s %(levelname)s %(name)s: %(message)s"))
+        logging.getLogger().addHandler(handler)
+    except OSError as exc:  # a broken log dir must never stop the engine
+        logging.getLogger("app").warning("file logging disabled: %s", exc)
+
+
+_attach_file_logging()
 log = logging.getLogger("app")
 
 

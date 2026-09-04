@@ -19,8 +19,9 @@ per minute against a closed market all night without ever closing.)
 import asyncio
 import logging
 import time
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 from app.models.trade import OPEN_STATUSES, TradePlan, as_utc
 from app.services.market_clock import MarketClock, equity_session
@@ -233,6 +234,29 @@ class ExitEnforcer:
                 notes="orphaned planned row (no order submitted)",
             )
             return
+        # Manual/external liquidation, checked BEFORE the time-stop backstop:
+        # a held position that VANISHED at the broker without any exit order
+        # of ours means someone closed it out from under the engine (broker
+        # UI, desk auto-liquidation, expiry). The backstop below returns
+        # early on every pass while a stop is overdue, so if this check came
+        # after it, a vanished position with an overdue stop would ladder
+        # forever and never be captured (incident 2026-09-03: fly-1's legs
+        # expired at 16:00 and reconcile spent the evening re-firing an exit
+        # that had nothing left to close). The updated_at age gate avoids
+        # racing the broker's position-propagation right after an entry fill.
+        if (
+            plan.status in ("filled", "partially_filled")
+            and not plan.exit_order_id
+            and plan.updated_at is not None
+            and (datetime.now(timezone.utc) - as_utc(plan.updated_at)).total_seconds() > 90
+            and await self._position_gone(plan)
+        ):
+            log.error(
+                "plan %s: position gone at broker with no exit order - "
+                "external liquidation, capturing fills", plan.id,
+            )
+            await self._force_close_with_capture(plan, "position closed outside the engine")
+            return
         # TIME-STOP BACKSTOP, independent of the monitor task: an overdue stop
         # on a held position means the monitor failed (wedged, crashed loop,
         # engine just restarted after downtime) — fire the exit ladder NOW.
@@ -292,26 +316,6 @@ class ExitEnforcer:
                         notes=f"entry {status} while offline",
                     )
                     return
-        # Manual/external liquidation: a held position that VANISHED at the
-        # broker without any exit order of ours means someone closed it out
-        # from under the engine (broker UI, expiry). Detect it here directly
-        # instead of waiting for an exit submit to bounce three times, and
-        # capture the real closing fills for the trade record. The updated_at
-        # age gate avoids racing the broker's position-propagation right
-        # after an entry fill.
-        if (
-            plan.status in ("filled", "partially_filled")
-            and not plan.exit_order_id
-            and plan.updated_at is not None
-            and (datetime.now(timezone.utc) - as_utc(plan.updated_at)).total_seconds() > 90
-            and await self._position_gone(plan)
-        ):
-            log.error(
-                "plan %s: position gone at broker with no exit order - "
-                "external liquidation, capturing fills", plan.id,
-            )
-            await self._force_close_with_capture(plan, "position closed outside the engine")
-            return
         # Broker-resting TP truth-sync: a fill that the stream missed must
         # still close the plan; a dead resting order must re-rest. (Reachable
         # only when the plan is still "filled", i.e. no exit ladder holds the
@@ -454,6 +458,71 @@ class ExitEnforcer:
             return False
         return not ({leg["symbol"] for leg in plan.legs} & positions)
 
+    async def _expiry_cutoff_date(self) -> date:
+        """Option legs expiring BEFORE this ET date can never trade again.
+        While the market is open, today's expiries are still live; once it
+        closes, anything not tradable by the next open is dead. MarketClock
+        is fail-open, so a clock failure reads as 'today still tradable' —
+        the conservative direction (park/ladder rather than settle)."""
+        et_today = datetime.now(ZoneInfo("America/New_York")).date()
+        if await self.clock.is_open():
+            return et_today
+        next_open = await self.clock.next_open()
+        if next_open is not None:
+            return next_open.astimezone(ZoneInfo("America/New_York")).date()
+        return et_today
+
+    @staticmethod
+    def _leg_expiry(leg: dict) -> date | None:
+        raw = leg.get("expiry")
+        if not raw:
+            return None
+        try:
+            return date.fromisoformat(str(raw)[:10])
+        except ValueError:
+            return None
+
+    async def _plan_expired(self, plan: TradePlan) -> bool:
+        """Every leg is an option that can never trade again. Parking such a
+        plan is a category error: there is no next session for it — the
+        position stops existing at the closing bell of its expiry day.
+        (Incident 2026-09-03: fly-1's 0DTE exit was parked 'until the next
+        open' at 16:00; the short put expired 33c ITM and was assigned.)"""
+        expiries = [self._leg_expiry(leg) for leg in plan.legs or []]
+        if not expiries or any(e is None for e in expiries):
+            return False
+        cutoff = await self._expiry_cutoff_date()
+        return all(e < cutoff for e in expiries)
+
+    async def _held_close_legs(self, plan: TradePlan) -> tuple[list[dict], int]:
+        """The subset of plan legs the broker still holds, and the sets that
+        can close. Normally (plan.legs, effective_qty) — but the broker's
+        desk clips legs out of expiring structures on its own (verified
+        2026-09-03: their auto-liquidation bought back fly-1's short call at
+        15:45, five minutes before our stop; every 4-leg close after that
+        was unfillable). ([], 0) means nothing is held. Broker truth being
+        unavailable degrades to the full structure, never to []."""
+        if not self.trade.alpaca.configured:
+            return plan.legs, plan.effective_qty
+        try:
+            held: dict[str, float] = {}
+            for pos in await self.trade.broker_positions(max_age_s=2.0):
+                held[pos["symbol"]] = held.get(pos["symbol"], 0.0) + abs(pos["qty"])
+        except Exception as exc:
+            log.warning("held-legs check failed for %s: %s", plan.id, exc)
+            return plan.legs, plan.effective_qty
+        legs = [leg for leg in plan.legs if held.get(leg["symbol"], 0) > 0]
+        if len(legs) == len(plan.legs):
+            return plan.legs, plan.effective_qty
+        if not legs:
+            return [], 0
+        # Another plan could hold the same symbol; capping at this plan's own
+        # qty keeps a shared-symbol close from eating a sibling's position.
+        sets = min(
+            int(held[leg["symbol"]] // max(leg.get("ratio", 1), 1)) for leg in legs
+        )
+        return legs, max(1, min(sets, plan.effective_qty))
+
     @staticmethod
     def _cluster_exit_events(
         plan: TradePlan, records: list[dict], window_s: float = 90.0
@@ -583,6 +652,38 @@ class ExitEnforcer:
         for order in orders:
             _absorb(order)
 
+        # Legs with no closing fills that can never trade again EXPIRED —
+        # value them at intrinsic against the underlying's mark instead of
+        # abandoning the whole capture to a blank. This is how a structure
+        # the desk partially clipped (2026-09-03: short call bought back at
+        # 15:45, the rest expired) still settles to a real number: real
+        # fills for the clipped legs, intrinsic for the expired ones.
+        expired_valued: list[str] = []
+        missing = [leg for leg in plan.legs if leg["symbol"] not in fills]
+        if missing:
+            cutoff = await self._expiry_cutoff_date()
+            spot = None
+            if self.market is not None:
+                spot = (self.market.latest_quote(plan.underlying) or {}).get("mid")
+            if spot is not None:
+                for leg in missing:
+                    expiry = self._leg_expiry(leg)
+                    strike = leg.get("strike")
+                    right = str(leg.get("right") or "").upper()
+                    if expiry is None or expiry >= cutoff or strike is None \
+                            or right not in ("C", "P"):
+                        continue
+                    intrinsic = (
+                        max(float(spot) - float(strike), 0.0) if right == "C"
+                        else max(float(strike) - float(spot), 0.0)
+                    )
+                    fills[leg["symbol"]] = [
+                        float(plan.effective_qty * max(leg.get("ratio", 1), 1)),
+                        round(intrinsic, 4),
+                        None,
+                    ]
+                    expired_valued.append(leg["symbol"])
+
         if fills and all(leg["symbol"] in fills for leg in plan.legs):
             premium = sum(
                 leg["side"] * leg.get("ratio", 1) * fills[leg["symbol"]][1]
@@ -601,6 +702,11 @@ class ExitEnforcer:
                 default=None,
             )
             detail = "closing fills recovered from broker history"
+            if expired_valued:
+                detail += (
+                    f"; {len(expired_valued)} expired leg(s) valued at intrinsic"
+                    " vs the underlying's mark (approximate)"
+                )
             if len({round(s) for s in sets_per_leg}) > 1:
                 detail += f" (UNEQUAL per-leg close qty {sets_per_leg})"
             events = self._cluster_exit_events(plan, records)
@@ -1159,8 +1265,20 @@ class ExitEnforcer:
         # orders bounce) and actively harmful (all-night cancel/replace
         # churn). Park one resting limit instead; the monitor resumes the
         # ladder at the next open. Keyless mode skips this — simulated fills
-        # land instantly regardless of the session.
+        # land instantly regardless of the session. EXCEPTION: a structure
+        # whose every leg has expired has no next session — parking it waits
+        # for a market that will never reopen for these symbols while the
+        # ITM legs get assigned. Settle it against reality instead.
         if self.trade.alpaca.configured and not await self._session_open(plan):
+            if await self._plan_expired(plan):
+                log.error(
+                    "plan %s: %s exit triggered after its legs expired - "
+                    "settling from broker history + intrinsic", plan_id, reason,
+                )
+                await self._force_close_with_capture(
+                    plan, "legs expired before the exit completed"
+                )
+                return
             await self._park_exit_locked(plan_id, reason)
             return
         token = uuid4().hex[:6]
@@ -1176,17 +1294,39 @@ class ExitEnforcer:
                     pass
             if await self._handle_ghost(plan):
                 return  # a ghost already filled; adopted and closing
-            quotes = {leg["symbol"]: self.market.latest_quote(leg["symbol"]) for leg in plan.legs}
-            mid = position_mid_from_quotes(plan.legs, quotes)
-            if mid is None:
+            # Close what the broker actually HOLDS, not what the plan says:
+            # the desk clips legs out of expiring structures on its own, and
+            # a close naming a leg the account no longer holds bounces on
+            # every rung (incident 2026-09-03).
+            close_legs, close_sets = await self._held_close_legs(plan)
+            if not close_legs:
+                log.error(
+                    "plan %s: no legs held at broker mid-exit - "
+                    "capturing external fills instead of laddering", plan_id,
+                )
+                await self._force_close_with_capture(plan, "position vanished during exit")
+                return
+            reduced = len(close_legs) < len(plan.legs)
+            if reduced:
+                log.warning(
+                    "plan %s: broker holds %d of %d legs - closing the remainder "
+                    "(x%d)", plan_id, len(close_legs), len(plan.legs), close_sets,
+                )
+            quotes = {leg["symbol"]: self.market.latest_quote(leg["symbol"]) for leg in close_legs}
+            mid = position_mid_from_quotes(close_legs, quotes)
+            if mid is None and not reduced:
                 mid = plan.sl_premium
             # Marketable = accept a WORSE position value: sign-agnostic shift
             # downward by |mid|*buffer (long: sell lower; short: buy back higher).
-            limit = await self._rung_limit(plan, mid, buffer)
+            limit = await self._rung_limit(plan, mid, buffer) if mid is not None else None
             key = f"{token}r{rung}"
             self._ghost_keys.setdefault(plan_id, []).append(key)
             try:
-                await self.trade.submit_exit(plan, reason, limit, attempt_key=key)
+                await self.trade.submit_exit(
+                    plan, reason, limit, attempt_key=key,
+                    close_legs=close_legs if reduced else None,
+                    close_sets=close_sets if reduced else None,
+                )
                 self._resolve_ghost_key(plan_id, key)  # recorded on the plan
             except Exception as exc:
                 log.error("exit submit failed for %s (%s) - retrying: %s", plan_id, reason, exc)
@@ -1219,10 +1359,24 @@ class ExitEnforcer:
             return
         if await self._handle_ghost(plan):
             return  # a ghost already filled; adopted and closing
-        quotes = {leg["symbol"]: self.market.latest_quote(leg["symbol"]) for leg in plan.legs}
-        mid = position_mid_from_quotes(plan.legs, quotes)
-        if mid is None:
+        close_legs, close_sets = await self._held_close_legs(plan)
+        if not close_legs:
+            log.error(
+                "plan %s: no legs held at broker while parking - "
+                "capturing external fills", plan_id,
+            )
+            await self._force_close_with_capture(plan, "position vanished before park")
+            return
+        reduced = len(close_legs) < len(plan.legs)
+        quotes = {leg["symbol"]: self.market.latest_quote(leg["symbol"]) for leg in close_legs}
+        mid = position_mid_from_quotes(close_legs, quotes)
+        if mid is None and not reduced:
             mid = plan.sl_premium
+        if mid is None:
+            # No defensible price to rest at — leave it unparked; the
+            # reconcile backstop retries with fresher quotes.
+            log.warning("plan %s: no quotes to price a parked exit - deferring", plan_id)
+            return
         # Rung-1 marketability: enough give to fill at the open, not a fire
         # sale against a gap (a gap through the limit waits for the ladder).
         buffer = self.escalation[0][0] or 0.02
@@ -1230,7 +1384,11 @@ class ExitEnforcer:
         key = f"{uuid4().hex[:6]}p"
         self._ghost_keys.setdefault(plan_id, []).append(key)
         try:
-            await self.trade.submit_exit(plan, reason, limit, attempt_key=key)
+            await self.trade.submit_exit(
+                plan, reason, limit, attempt_key=key,
+                close_legs=close_legs if reduced else None,
+                close_sets=close_sets if reduced else None,
+            )
             self._resolve_ghost_key(plan_id, key)
         except Exception:
             # Status is unchanged, so the reconcile backstop / monitor

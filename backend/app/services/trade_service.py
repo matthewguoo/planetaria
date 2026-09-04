@@ -1016,12 +1016,19 @@ class TradeService:
 
     # -------------------------------------------------------------- exits
 
-    def _close_request(self, plan: TradePlan, limit_price: float | None, client_order_id: str):
+    def _close_request(self, plan: TradePlan, limit_price: float | None, client_order_id: str,
+                       legs: list[dict] | None = None, sets: int | None = None):
         """Closing order (reverse all legs) at a POSITION-VALUE limit (signed,
         same axis as entry/TP/SL); None => market. The closing order has every
         leg reversed, so MLEG submits the NEGATION of the position-terms
-        limit; single-leg orders take the unsigned premium."""
-        legs = plan.legs
+        limit; single-leg orders take the unsigned premium.
+
+        `legs`/`sets` override the plan's own structure for a close that must
+        match what the broker still HOLDS (a leg the desk clipped out makes
+        the full-structure close unfillable); the limit must then be priced
+        on the same reduced structure by the caller."""
+        legs = legs if legs is not None else plan.legs
+        sets = sets if sets is not None else plan.effective_qty
         if plan.asset_class == "equity":
             # Reverse the single share leg. extended_hours propagates so a
             # closing limit works the 24/5 book too (a resting equity TP
@@ -1032,7 +1039,7 @@ class TradeService:
             leg = legs[0]
             common = dict(
                 symbol=leg["symbol"],
-                qty=plan.effective_qty * leg.get("ratio", 1),
+                qty=sets * leg.get("ratio", 1),
                 side=OrderSide.SELL if leg["side"] > 0 else OrderSide.BUY,
                 time_in_force=TimeInForce.DAY,
                 client_order_id=client_order_id,
@@ -1047,7 +1054,7 @@ class TradeService:
             leg = legs[0]
             common = dict(
                 symbol=leg["symbol"],
-                qty=plan.effective_qty * leg.get("ratio", 1),
+                qty=sets * leg.get("ratio", 1),
                 side=OrderSide.SELL if leg["side"] > 0 else OrderSide.BUY,
                 position_intent=(
                     PositionIntent.SELL_TO_CLOSE if leg["side"] > 0 else PositionIntent.BUY_TO_CLOSE
@@ -1075,7 +1082,7 @@ class TradeService:
         ]
         common = dict(
             order_class=OrderClass.MLEG,
-            qty=plan.effective_qty,
+            qty=sets,
             time_in_force=TimeInForce.DAY,
             client_order_id=client_order_id,
             legs=mleg_legs,
@@ -1087,10 +1094,18 @@ class TradeService:
         )
 
     async def submit_exit(self, plan: TradePlan, reason: str, limit_price: float | None,
-                          attempt_key: str = "0") -> None:
+                          attempt_key: str = "0",
+                          close_legs: list[dict] | None = None,
+                          close_sets: int | None = None) -> None:
         """Submit closing order. attempt_key names the escalation rung
         (r0/r1/mkt/v3...) so each rung's submit is idempotent: an ambiguous
         failure recovers the SAME order rather than stacking a second close.
+
+        close_legs/close_sets: close a REDUCED structure when the broker's
+        holds diverged from the plan (a leg clipped by the desk); the caller
+        prices limit_price on the same reduced legs. The plan's realized P/L
+        will then cover only this close — external fills on the clipped legs
+        are noted, not folded in.
         """
         if not self.alpaca.configured:
             # Keyless: there is no broker to route to. Simulate the fill at
@@ -1101,15 +1116,22 @@ class TradeService:
             await self._simulate_exit_fill(plan, reason, limit_price)
             return
         client_order_id = f"{plan.id}-x{attempt_key}"
-        request = self._close_request(plan, limit_price, client_order_id)
+        request = self._close_request(plan, limit_price, client_order_id,
+                                      legs=close_legs, sets=close_sets)
         # Snapshot the book NOW (before the submit): each escalation rung
         # re-snapshots, so the filling order is measured against the market
         # it was actually submitted into.
-        snap = self._quality_snapshot(plan.legs, "exit")
+        snap = self._quality_snapshot(close_legs or plan.legs, "exit")
         order = await self._submit_idempotent(request, client_order_id)
         fields: dict = {}
         if snap is not None:
             fields["exec_quality"] = {**(plan.exec_quality or {}), **snap}
+        if close_legs is not None and "close reduced" not in (plan.notes or ""):
+            fields["notes"] = (
+                ((plan.notes + " | ") if plan.notes else "")
+                + f"close reduced to {len(close_legs)}/{len(plan.legs)} held legs; "
+                "external fills on clipped legs not in realized"
+            )
         await self.fsm.apply(
             plan.id,
             PlanEvent.EXIT_SUBMITTED,

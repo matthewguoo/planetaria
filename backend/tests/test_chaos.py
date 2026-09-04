@@ -260,8 +260,11 @@ async def make_plan(db, *, status="filled", symbol=SYM, tp=4.0, sl=1.0,
     plan = TradePlan(
         underlying="SPY",
         strategy="long_call",
+        # Far-future expiry: parking an exit is only legal for legs with a
+        # session ahead of them — an expired-leg plan settles instead (see
+        # test_expiry_settlement.py), which is not what these suites test.
         legs=[{"symbol": symbol, "right": "C", "strike": 450.0,
-               "expiry": "2026-07-31", "side": 1, "ratio": 1, "entry": entry, "iv": 0.2}],
+               "expiry": "2030-12-20", "side": 1, "ratio": 1, "entry": entry, "iv": 0.2}],
         qty=1,
         entry_limit=entry,
         tp_premium=tp,
