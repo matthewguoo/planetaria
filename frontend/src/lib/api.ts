@@ -325,6 +325,10 @@ export type HoldingDetail = {
   };
   underlying: { symbol: string; spot: number | null };
 };
+/** A holding detail also says when the holding was opened (from the broker's
+ * fills; null when older than the order history) — the chart's anchor. */
+export type HoldingDetailWithEntry = HoldingDetail & { entered_at?: string | null };
+
 export const getHoldingDetail = (symbol: string) =>
   api.get<HoldingDetail>(`/api/holdings/${encodeURIComponent(symbol)}`).then((r) => r.data);
 export const replaceOpenOrder = (orderId: string, patch: { limit_price?: number; qty?: number }) =>

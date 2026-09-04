@@ -1,44 +1,52 @@
 /**
- * Adopt an untracked broker position into the enforcer: stop %, target %,
- * time stop days. Shares always send explicit values (the option-sized
- * server defaults would be a same-day forced sale); options may adopt with
- * a 0% stop — the premium is the stop, the time stop is the expiry cutoff.
- * Shared by the phone sheet and the desktop position panel.
+ * Adopt an untracked broker position into the enforcer. The exits are
+ * PRICES — typed here or dragged on the chart (one shared draft): a stop,
+ * an optional target, an exit day for shares. Options may adopt with no
+ * stop at all: the premium is the stop, the time stop is the expiry cutoff.
+ * Shares always send an explicit stop and a dated time stop (the
+ * option-sized server defaults would be a same-day forced sale).
  */
 
 import { useState } from "react";
 import { adoptPositions, apiError, type UntrackedPosition } from "../../lib/api";
 import { tradingDateAhead } from "../../lib/equityMath";
 import { etWallToUtcIso } from "../../lib/et";
+import { adoptSeed } from "../../lib/positionView";
+import { untrackedDraftKey, useExitDraft } from "../../lib/useExitDraft";
 import { useAccountStore, useTradingMode } from "../../store/accountStore";
-import { Btn, Stepper } from "../Mobile/MobileUi";
+import { Btn } from "../Mobile/MobileUi";
+import { ExitFields } from "./ExitFields";
 
 export function AdoptForm({ pos, onDone, touch = false }: { pos: UntrackedPosition; onDone?: () => void; touch?: boolean }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const risk = useAccountStore((s) => s.account?.risk);
+  const defaultSl = useAccountStore((s) => s.account?.risk?.default_sl_pct) ?? 0.5;
   const refreshPositions = useAccountStore((s) => s.refreshPositions);
   const { live } = useTradingMode();
   const stock = pos.asset_class === "stock";
-  const [slPct, setSlPct] = useState(stock ? 10 : Math.round((risk?.default_sl_pct ?? 0.5) * 100));
-  const [tpPct, setTpPct] = useState(0);
-  const [days, setDays] = useState(30);
-
-  const basis = pos.avg_entry_price;
-  const mult = stock ? 1 : 100;
+  const side: 1 | -1 = pos.qty >= 0 ? 1 : -1;
+  const basis = Math.abs(pos.avg_entry_price);
   const units = Math.floor(Math.abs(pos.qty));
-  const intrinsic = !stock && slPct === 0;
-  const stopPrice = basis * (1 - slPct / 100);
-  const lossAtStop = intrinsic ? basis * mult * units : (basis - stopPrice) * mult * units;
+  const { draft, set } = useExitDraft(untrackedDraftKey(pos.symbol), adoptSeed(pos, defaultSl));
+
+  const slAbs = draft.sl == null ? null : Math.abs(draft.sl);
+  const tpAbs = draft.tp == null ? null : Math.abs(draft.tp);
+  const intrinsic = !stock && slAbs == null;
+  // Percent distances the server sizes the plan from (side-aware).
+  const slPct = slAbs == null ? 0 : Math.max((side * (basis - slAbs)) / basis, 0);
+  const tpPct = tpAbs == null ? null : Math.max((side * (tpAbs - basis)) / basis, 0);
+  const valid = basis > 0 && (intrinsic || (slAbs != null && slPct > 0 && slPct <= 0.95)) && (tpPct == null || tpPct > 0);
 
   const adopt = async () => {
     setBusy(true);
     setError(null);
     try {
       await adoptPositions([pos.symbol], {
-        sl_pct: slPct / 100,
-        ...(stock ? (tpPct > 0 ? { tp_pct: tpPct / 100 } : { tp_pct: 10 }) : {}),
-        ...(stock ? { time_stop_utc: etWallToUtcIso(tradingDateAhead(days), "15:55") } : {}),
+        sl_pct: Number(slPct.toFixed(6)),
+        ...(tpPct != null && tpPct > 0 ? { tp_pct: Number(Math.min(tpPct, 10).toFixed(6)) } : stock ? { tp_pct: 10 } : {}),
+        ...(stock
+          ? { time_stop_utc: draft.timeStopUtc ?? etWallToUtcIso(tradingDateAhead(30), "15:55") }
+          : draft.timeStopUtc ? { time_stop_utc: draft.timeStopUtc } : {}),
       });
       await refreshPositions();
       onDone?.();
@@ -54,18 +62,20 @@ export function AdoptForm({ pos, onDone, touch = false }: { pos: UntrackedPositi
       {stock && Math.abs(pos.qty) % 1 !== 0 && (
         <div data-numeric className="text-[11px] text-bb-muted">{units} whole shares adopt · the fraction stays untracked</div>
       )}
-      <Stepper touch={touch} label={stock ? "STOP %" : "STOP % (0 = premium)"} value={slPct} set={setSlPct} step={stock ? 1 : 5} unit="%" min={stock ? 1 : 0} max={95} />
-      {stock && <Stepper touch={touch} label="TARGET % (0 = run)" value={tpPct} set={setTpPct} step={5} unit="%" min={0} max={1000} />}
-      {stock && <Stepper touch={touch} label="DAYS" value={days} set={setDays} step={5} unit="d" min={5} max={365} />}
-      <div data-numeric className={"text-bb-muted " + (touch ? "text-[12px]" : "text-[11px]")}>
-        {intrinsic ? (
-          <>max loss <span className="text-bb-loss">-${lossAtStop.toFixed(0)}</span> · out at the expiry cutoff</>
-        ) : (
-          <>stop <span className="text-bb-loss">{stopPrice.toFixed(2)}</span> · <span className="text-bb-loss">-${lossAtStop.toFixed(0)}</span></>
-        )}
-      </div>
-      <Btn kind={live ? "danger" : "primary"} disabled={busy} touch={touch} onClick={() => void adopt()}>
-        {busy ? "…" : intrinsic ? `ADOPT · PREMIUM IS THE STOP${live ? " · LIVE" : ""}` : `ADOPT · ${slPct}% STOP${live ? " · LIVE" : ""}`}
+      <ExitFields
+        kind={stock ? "stock" : "option"}
+        side={side}
+        basis={basis}
+        mult={stock ? 1 : 100}
+        units={units}
+        draft={draft}
+        set={set}
+        touch={touch}
+        stopRequired={stock}
+        timeStop={stock ? "date" : "fixed"}
+      />
+      <Btn kind={live ? "danger" : "primary"} disabled={busy || !valid} touch={touch} onClick={() => void adopt()}>
+        {busy ? "…" : intrinsic ? `ADOPT · PREMIUM IS THE STOP${live ? " · LIVE" : ""}` : `ADOPT · STOP ${(slAbs ?? 0).toFixed(2)}${live ? " · LIVE" : ""}`}
       </Btn>
       {error && <div className="text-[11px] text-bb-loss">✗ {error}</div>}
     </div>

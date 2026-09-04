@@ -5,16 +5,14 @@
  */
 
 import type { OpenOrder, Plan } from "../../lib/api";
-import { getHoldingDetail, type HoldingDetail } from "../../lib/api";
 import { fmtUsd, pnlCls } from "../../lib/format";
 import { contractLabel, heldQty, protection } from "../../lib/positionDetail";
-import { usePoll } from "../../lib/usePoll";
+import { useHoldingDetail } from "../../lib/useHoldingDetail";
 import { useAccountStore } from "../../store/accountStore";
 import { PositionCloseAdd, PositionAutomation } from "../Position/PositionActions";
 import { PositionDetails } from "../Position/PositionDetails";
 import { ProtectionDot } from "./MobileUi";
 import { Sheet } from "./Sheet";
-import { useState } from "react";
 
 export function PositionSheet({
   plan, orders, monitored, onClose, onChart, onAdd,
@@ -27,7 +25,6 @@ export function PositionSheet({
   onAdd: (plan: Plan) => void;
 }) {
   const equity = useAccountStore((s) => s.account?.equity);
-  const [detail, setDetail] = useState<HoldingDetail | null>(null);
   const single = plan.legs.length === 1;
   const leg = plan.legs[0];
   const held = heldQty(plan);
@@ -36,16 +33,7 @@ export function PositionSheet({
   const pnl = plan.unrealized_pnl;
   const costBasis = Math.abs(basis) * mult * held;
   const pnlPct = pnl != null && costBasis >= 1 ? (pnl / costBasis) * 100 : null;
-
-  usePoll(async (alive) => {
-    if (!single) return;
-    try {
-      const d = await getHoldingDetail(leg.symbol);
-      if (alive()) setDetail(d);
-    } catch {
-      /* the sheet still shows what the plan knows */
-    }
-  }, 5_000, [leg.symbol]);
+  const detail = useHoldingDetail(single ? leg.symbol : null);
 
   return (
     <Sheet

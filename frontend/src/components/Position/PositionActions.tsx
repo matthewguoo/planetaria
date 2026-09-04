@@ -8,8 +8,11 @@
 import { useState } from "react";
 import { apiError, cancelOpenOrder, closePosition, tightenExits, type OpenOrder, type Plan } from "../../lib/api";
 import { closeSentence, heldQty } from "../../lib/positionDetail";
+import { planExits } from "../../lib/positionView";
+import { planDraftKey, useExitDraft } from "../../lib/useExitDraft";
 import { useAccountStore, useTradingMode } from "../../store/accountStore";
 import { Btn, Seg, Stepper } from "../Mobile/MobileUi";
+import { ExitFields } from "./ExitFields";
 
 type Mode = null | "close" | "exits";
 
@@ -114,16 +117,21 @@ export function PositionAutomation({ plan, orders, monitored, touch = false }: {
   const option = plan.asset_class !== "equity";
   const held = heldQty(plan);
   const basis = plan.fill_premium ?? plan.entry_limit;
+  const side: 1 | -1 = basis >= 0 ? 1 : -1;
   const mult = option ? 100 : 1;
-  const seedSl = plan.sl_premium ?? Number((basis - Math.abs(basis) * (option ? defaultSl : 0.1)).toFixed(2));
-  const [sl, setSl] = useState(seedSl);
-  const [tp, setTp] = useState(plan.tp_premium ?? 0);
-  const step = Math.max(0.01, Math.abs(basis) * 0.01);
+  // The draft the chart draws and this editor types into; seeded from the
+  // plan's own exits so an untouched draft IS the plan.
+  const { draft, set, reset, dirty } = useExitDraft(planDraftKey(plan.id), planExits(plan, null));
+  const proposedSl = Number((basis - Math.abs(basis) * (option ? defaultSl : 0.1)).toFixed(2));
+  const sl = draft.sl;
+  const tp = draft.tp;
   const exitsPatch = () => ({
-    ...(plan.sl_premium == null || sl !== plan.sl_premium ? { sl_premium: Number(sl.toFixed(2)) } : {}),
-    ...(tp > 0 && tp !== plan.tp_premium ? { tp_premium: Number(tp.toFixed(2)) } : {}),
+    ...(sl != null && (plan.sl_premium == null || Math.abs(sl - plan.sl_premium) >= 0.005) ? { sl_premium: Number(sl.toFixed(2)) } : {}),
+    ...(tp != null && Math.abs(tp) > 0 && (plan.tp_premium == null || Math.abs(tp - plan.tp_premium) >= 0.005) ? { tp_premium: Number(tp.toFixed(2)) } : {}),
+    ...(draft.timeStopUtc && draft.timeStopUtc !== plan.time_stop_utc ? { time_stop_utc: draft.timeStopUtc } : {}),
   });
   const editable = ["partially_filled", "filled"].includes(plan.status);
+  const editing = open || dirty;
   const txt = touch ? "text-[12px]" : "text-[10px]";
 
   return (
@@ -137,8 +145,22 @@ export function PositionAutomation({ plan, orders, monitored, touch = false }: {
         {monitored === true && <span className="text-bb-profit">● ENFORCER</span>}
       </div>
       <div className="flex gap-1">
-        <Btn className="flex-1" disabled={!editable} touch={touch} onClick={() => setOpen(!open)}>
-          {plan.sl_premium == null ? "ADD STOP" : "EDIT EXITS"}
+        <Btn
+          className="flex-1"
+          disabled={!editable}
+          touch={touch}
+          onClick={() => {
+            if (editing) {
+              reset();
+              setOpen(false);
+            } else {
+              // A stopless plan opens with a proposed stop on the chart.
+              if (plan.sl_premium == null) set({ sl: proposedSl });
+              setOpen(true);
+            }
+          }}
+        >
+          {editing ? "CANCEL" : plan.sl_premium == null ? "ADD STOP" : "EDIT EXITS"}
         </Btn>
         {plan.sl_premium != null && (
           <Btn className="flex-1" disabled={!editable || busy} touch={touch} onClick={() => act(() => tightenExits(plan.id, { sl_premium: Number((((plan.sl_premium ?? 0) + (plan.mark ?? basis)) / 2).toFixed(2)) }))}>
@@ -146,16 +168,24 @@ export function PositionAutomation({ plan, orders, monitored, touch = false }: {
           </Btn>
         )}
       </div>
-      {open && (
+      {editing && (
         <div className="flex flex-col gap-2 border border-bb-border p-2">
-          <Stepper touch={touch} label="STOP" value={sl} set={setSl} step={step} min={0} format={(v) => Math.abs(v).toFixed(2)} />
-          <Stepper touch={touch} label="TARGET (0 = none)" value={tp} set={setTp} step={step} min={0} format={(v) => (v > 0 ? Math.abs(v).toFixed(2) : "—")} />
-          <div data-numeric className="text-[11px] text-bb-muted">
-            at stop <span className="text-bb-loss">-${(Math.max(basis - sl, 0) * mult * held).toFixed(0)}</span>
-            {plan.sl_premium == null && <span className="ml-2 text-bb-amber">adds a stop · only tightens from here</span>}
-          </div>
+          <ExitFields
+            kind={option ? "option" : "stock"}
+            side={side}
+            basis={Math.abs(basis)}
+            mult={mult}
+            units={held}
+            draft={draft}
+            set={set}
+            touch={touch}
+            stopRequired={plan.sl_premium != null || !option}
+            targetRemovable={plan.tp_premium == null}
+            timeStop={option ? "fixed" : "date"}
+          />
+          {plan.sl_premium == null && sl != null && <div className="text-[11px] text-bb-amber">adds a stop · only tightens from here</div>}
           <Btn kind="primary" disabled={busy || Object.keys(exitsPatch()).length === 0} touch={touch} onClick={() => act(() => tightenExits(plan.id, exitsPatch()), () => setOpen(false))}>
-            {busy ? "…" : plan.sl_premium == null ? `ADD STOP ${Math.abs(sl).toFixed(2)}` : "APPLY"}
+            {busy ? "…" : plan.sl_premium == null && sl != null ? `ADD STOP ${Math.abs(sl).toFixed(2)}` : "APPLY"}
           </Btn>
         </div>
       )}

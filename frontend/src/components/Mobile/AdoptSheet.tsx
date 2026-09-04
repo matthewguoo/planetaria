@@ -3,24 +3,15 @@
  * adopt form; CHART opens the underlying in its own mode.
  */
 
-import { useState } from "react";
-import { getHoldingDetail, type HoldingDetail, type UntrackedPosition } from "../../lib/api";
+import type { UntrackedPosition } from "../../lib/api";
 import { occLabel } from "../../lib/positionDetail";
-import { usePoll } from "../../lib/usePoll";
+import { useHoldingDetail } from "../../lib/useHoldingDetail";
 import { AdoptForm } from "../Position/AdoptForm";
 import { PositionDetails } from "../Position/PositionDetails";
 import { Sheet } from "./Sheet";
 
 export function AdoptSheet({ pos, onClose, onChart }: { pos: UntrackedPosition; onClose: () => void; onChart?: (pos: UntrackedPosition) => void }) {
-  const [detail, setDetail] = useState<HoldingDetail | null>(null);
-  usePoll(async (alive) => {
-    try {
-      const d = await getHoldingDetail(pos.symbol);
-      if (alive()) setDetail(d);
-    } catch {
-      /* details are decoration here */
-    }
-  }, 5_000, [pos.symbol]);
+  const detail = useHoldingDetail(pos.symbol);
 
   return (
     <Sheet

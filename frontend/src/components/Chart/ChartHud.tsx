@@ -26,7 +26,10 @@ import { bsThetaPerDay, structuralMaxLoss, TRADING_HOURS_PER_YEAR } from "../../
 import { useCapabilities } from "../../lib/capabilities";
 import { useMonteCarlo, type McInputs } from "../../lib/useMonteCarlo";
 import type { Designer } from "../../lib/useDesigner";
+import { occLabel } from "../../lib/positionDetail";
+import { untrackedDraftKey } from "../../lib/useExitDraft";
 import { useAccountStore } from "../../store/accountStore";
+import { useExitDraftStore } from "../../store/exitDraftStore";
 import { THETA_TEMPLATES, useStrategyStore } from "../../store/strategyStore";
 import { TF_MS, useTradingStore } from "../../store/tradingStore";
 import { useUiStore } from "../../store/uiStore";
@@ -43,6 +46,32 @@ const TOGGLES = [
   { key: "rsi", label: "RSI", title: "RSI 14 — oscillator pane under the price" },
   { key: "macd", label: "MACD", title: "MACD 12·26·9 — oscillator pane under the price" },
 ] as const;
+
+/** An UNTRACKED broker position on the chart: what it is, the exits being
+ * drafted for it (the lines on the chart), and that nothing enforces them
+ * until ADOPT. */
+function UntrackedBlock({ symbol }: { symbol: string }) {
+  const pos = useAccountStore((s) => s.untracked.find((u) => u.symbol === symbol) ?? null);
+  const draft = useExitDraftStore((s) => (s.key === untrackedDraftKey(symbol) ? s.draft : null));
+  if (!pos) return null;
+  const stock = pos.asset_class === "stock";
+  return (
+    <div
+      className="pointer-events-none flex flex-col gap-0.5 border border-bb-orange/60 bg-black/75 px-1.5 py-1"
+      title="A broker position no plan protects. The stop / target lines are the adopt draft: drag them or type them below, then ADOPT."
+    >
+      <StatRow label="UNTRACKED" value={`${occLabel(pos)} ×${Math.abs(pos.qty)}`} cls="text-bb-orange" />
+      <StatRow label="ENTRY" value={pos.avg_entry_price.toFixed(2)} />
+      <StatRow
+        label="STOP"
+        value={draft?.sl != null ? Math.abs(draft.sl).toFixed(2) : stock ? "—" : "premium"}
+        cls={draft?.sl != null ? "text-bb-loss" : "text-bb-muted"}
+      />
+      <StatRow label="TARGET" value={draft?.tp != null ? Math.abs(draft.tp).toFixed(2) : "—"} cls={draft?.tp != null ? "text-bb-profit" : "text-bb-muted"} />
+      <StatRow label="ENFORCER" value="none until ADOPT" cls="text-bb-orange" />
+    </div>
+  );
+}
 
 function StatRow({ label, value, cls }: { label: string; value: string; cls?: string }) {
   return (
@@ -358,6 +387,7 @@ export function ChartHud({
   const assetMode = useTradingStore((s) => s.assetMode);
   const equityMode = assetMode === "equity";
   const viewingPlanId = useUiStore((s) => s.viewingPlanId);
+  const viewingUntracked = useUiStore((s) => s.viewingUntracked);
   const viewedHistorical = useUiStore((s) => s.viewedHistorical);
   const tf = useTradingStore((s) => s.tf);
   const volShift = useStrategyStore((s) => s.volShift);
@@ -488,6 +518,7 @@ export function ChartHud({
       ) : (
         viewingPlanId && <EnforcerBlock planId={viewingPlanId} />
       )}
+      {!viewingPlanId && viewingUntracked && <UntrackedBlock symbol={viewingUntracked} />}
 
       {variant !== "readout" && indicators.theta && <ThetaBlock designer={designer} />}
 

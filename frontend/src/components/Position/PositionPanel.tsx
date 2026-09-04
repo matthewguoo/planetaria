@@ -8,8 +8,9 @@
  */
 
 import { useState } from "react";
-import { getHoldingDetail, getOpenOrders, type HoldingDetail, type OpenOrder, type Plan } from "../../lib/api";
+import { getOpenOrders, type OpenOrder, type Plan } from "../../lib/api";
 import { contractLabel, groupOrdersByPlan, occLabel, protection } from "../../lib/positionDetail";
+import { useHoldingDetail } from "../../lib/useHoldingDetail";
 import { useMonitored } from "../../lib/useMonitored";
 import { usePoll } from "../../lib/usePoll";
 import { useAccountStore } from "../../store/accountStore";
@@ -18,20 +19,6 @@ import { ProtectionDot } from "../Mobile/MobileUi";
 import { AdoptForm } from "./AdoptForm";
 import { PositionCloseAdd, PositionAutomation } from "./PositionActions";
 import { PositionDetails } from "./PositionDetails";
-
-function useDetail(symbol: string | null): HoldingDetail | null {
-  const [detail, setDetail] = useState<HoldingDetail | null>(null);
-  usePoll(async (alive) => {
-    if (!symbol) return;
-    try {
-      const d = await getHoldingDetail(symbol);
-      if (alive()) setDetail(d);
-    } catch {
-      /* the panel still shows what the plan knows */
-    }
-  }, 5_000, [symbol]);
-  return symbol ? detail : null;
-}
 
 function useOrders(): OpenOrder[] {
   const [orders, setOrders] = useState<OpenOrder[]>([]);
@@ -74,7 +61,7 @@ export function PositionPanel({ onAdd }: { onAdd: (plan: Plan) => void }) {
     : null;
   const pos = !plan && viewingUntracked ? untracked.find((u) => u.symbol === viewingUntracked) ?? null : null;
   const detailSymbol = plan ? (plan.legs.length === 1 ? plan.legs[0].symbol : null) : pos?.symbol ?? null;
-  const detail = useDetail(detailSymbol);
+  const detail = useHoldingDetail(detailSymbol);
   if (!plan && !pos) return null;
 
   const closed = plan ? ["closed", "cancelled", "rejected"].includes(plan.status) : false;
@@ -118,7 +105,7 @@ export function PositionPanel({ onAdd }: { onAdd: (plan: Plan) => void }) {
           </Panel>
         </>
       ) : (
-        <Panel title="ADOPT · PUT IT UNDER THE ENFORCER">
+        <Panel title="ADOPT" right={<span className="text-[9px] tracking-widest text-bb-orange">NOT UNDER THE ENFORCER</span>}>
           <div className="p-2">
             <AdoptForm pos={pos!} />
           </div>

@@ -151,8 +151,9 @@ describe("MobileHome", () => {
     fireEvent.click(screen.getByTestId(`position-${plan.id}`));
     await flush();
     fireEvent.click(screen.getByText("ADD STOP"));
-    // seeded at basis minus the account default (50%): 2.07 -> 1.03, one 2% step up
-    fireEvent.click(screen.getByLabelText("STOP up"));
+    // opens with a proposed stop at basis minus the account default (50%): 2.07 -> 1.03; typed to 1.05
+    expect((screen.getByLabelText("STOP") as HTMLInputElement).value).toBe("1.03");
+    fireEvent.change(screen.getByLabelText("STOP"), { target: { value: "1.05" } });
     await act(async () => {
       fireEvent.click(screen.getByText(/ADD STOP 1\.05/));
     });
@@ -163,10 +164,10 @@ describe("MobileHome", () => {
     render(<MobileHome onChart={() => {}} onChartUntracked={() => {}} onAdd={() => {}} onAccount={() => {}} />);
     await flush();
     fireEvent.click(screen.getByTestId("untracked-PLTZ"));
-    fireEvent.click(screen.getByLabelText("STOP % up"));
-    fireEvent.click(screen.getByLabelText("STOP % up"));
+    // the stop is a price: 12% under the 9.03 basis
+    fireEvent.change(screen.getByLabelText("STOP"), { target: { value: "7.9464" } });
     await act(async () => {
-      fireEvent.click(screen.getByText(/ADOPT · 12% STOP/));
+      fireEvent.click(screen.getByText(/ADOPT · STOP 7\.95/));
     });
     const [symbols, opts] = vi.mocked(adoptPositions).mock.calls[0];
     expect(symbols).toEqual(["PLTZ"]);

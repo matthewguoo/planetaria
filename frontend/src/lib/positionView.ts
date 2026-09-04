@@ -11,7 +11,7 @@
  * the surface is anchored at ENTRY TIME, spanning entry -> expiry.
  */
 
-import type { Plan } from "./api";
+import type { Plan, UntrackedPosition } from "./api";
 import {
   positionValue,
   TRADING_HOURS_PER_YEAR,
@@ -19,8 +19,13 @@ import {
   type Leg,
   type Smiles,
 } from "./optionsMath";
+import { tradingDateAhead } from "./equityMath";
+import { etWallToUtcIso } from "./et";
+import { contractLabel, heldQty, occLabel } from "./positionDetail";
+import { tradingHoursBetween } from "./tradingTime";
 import type { Chain } from "../store/strategyStore";
 import { smileFromChain } from "../store/strategyStore";
+import type { ExitDraft } from "../store/exitDraftStore";
 
 export type PositionView = {
   legs: (Leg & { symbol: string })[];
@@ -59,10 +64,16 @@ export type PositionView = {
 
 type OptionPlanLeg = Plan["legs"][number] & { right: "C" | "P"; strike: number; expiry: string };
 
+/** The exits a plan draws: its own rules, or the draft being edited. */
+export function planExits(plan: Plan, draft: ExitDraft | null): ExitDraft {
+  return draft ?? { sl: plan.sl_premium, tp: plan.tp_premium, timeStopUtc: plan.time_stop_utc };
+}
+
 export function buildPositionView(
   plan: Plan,
   chain: Chain | null,
   mode: "entry" | "live",
+  draft: ExitDraft | null = null,
 ): PositionView | null {
   if (!plan.legs.length) return null;
   // Equity plans (share legs: no right/strike/expiry) have no options
@@ -98,8 +109,9 @@ export function buildPositionView(
   });
 
   const entryBasis = plan.fill_premium ?? plan.entry_limit;
+  const exits = planExits(plan, draft);
   const hoursTotal = tradingHoursToExpiry(expiry, anchorMs);
-  const stopMs = plan.time_stop_utc ? Date.parse(plan.time_stop_utc) : NaN;
+  const stopMs = exits.timeStopUtc ? Date.parse(exits.timeStopUtc) : NaN;
   const timeStopHours = Number.isFinite(stopMs)
     ? Math.max(hoursTotal - tradingHoursToExpiry(expiry, stopMs), 0)
     : hoursTotal;
@@ -112,8 +124,8 @@ export function buildPositionView(
   return {
     legs,
     entryBasis,
-    tpPremium: plan.tp_premium,
-    slPremium: plan.sl_premium,
+    tpPremium: exits.tp,
+    slPremium: exits.sl,
     anchorMs,
     hoursTotal,
     timeStopHours: Math.min(timeStopHours, hoursTotal),
@@ -147,6 +159,148 @@ export function buildPositionView(
         };
       })
       .filter((e): e is { hours: number; premium: number; qty: number } => e !== null),
+  };
+}
+
+/** The exit draft an untracked row starts from: shares get a 10% stop and
+ * a 30-trading-day exit; options the account's default stop distance (0 =
+ * no stop, the premium is the stop). Signed like the plan fields. */
+export function adoptSeed(pos: UntrackedPosition, defaultSlPct: number, now: Date = new Date()): ExitDraft {
+  const side: 1 | -1 = pos.qty >= 0 ? 1 : -1;
+  const basis = Math.abs(pos.avg_entry_price);
+  if (pos.asset_class === "stock") {
+    return {
+      sl: Number((side * basis * (1 - side * 0.1)).toFixed(4)),
+      tp: null,
+      timeStopUtc: etWallToUtcIso(tradingDateAhead(30, now), "15:55"),
+    };
+  }
+  const pct = Math.min(Math.max(defaultSlPct, 0), 0.95);
+  return { sl: pct > 0 ? Number((side * basis * (1 - side * pct)).toFixed(4)) : null, tp: null, timeStopUtc: null };
+}
+
+/** The chart-view model for an UNTRACKED single-leg option: the broker row
+ * is the whole story (no plan, no fill IV), so the leg is marked at the
+ * given IV (the contract's live IV; a flat 20% when unknown), P/L is
+ * measured against the broker's average entry, and the surface anchors at
+ * the entry time the broker's fills gave (now, when unknown). The exits
+ * come from the adopt draft — null stop = the premium is the stop. */
+export function buildUntrackedView(
+  pos: UntrackedPosition,
+  opts: { iv: number | null; enteredAt: string | null; exits: ExitDraft; nowMs?: number },
+): PositionView | null {
+  const occ = pos.occ;
+  if (!occ || pos.qty === 0) return null;
+  const side: 1 | -1 = pos.qty > 0 ? 1 : -1;
+  const iv = opts.iv && opts.iv > 0 ? opts.iv : 0.2;
+  const entry = Math.abs(pos.avg_entry_price);
+  const legs: (Leg & { symbol: string })[] = [
+    { symbol: pos.symbol, right: occ.right, strike: occ.strike, qty: 1, side, entry, iv },
+  ];
+  const now = opts.nowMs ?? Date.now();
+  const entered = opts.enteredAt ? Date.parse(opts.enteredAt) : NaN;
+  const anchorMs = Number.isFinite(entered) && entered < now ? entered : now;
+  const hoursTotal = tradingHoursToExpiry(occ.expiry, anchorMs);
+  const stopMs = opts.exits.timeStopUtc ? Date.parse(opts.exits.timeStopUtc) : NaN;
+  const timeStopHours = Number.isFinite(stopMs)
+    ? Math.min(Math.max(hoursTotal - tradingHoursToExpiry(occ.expiry, stopMs), 0), hoursTotal)
+    : hoursTotal;
+  return {
+    legs,
+    entryBasis: side * entry,
+    tpPremium: opts.exits.tp,
+    slPremium: opts.exits.sl,
+    anchorMs,
+    hoursTotal,
+    timeStopHours,
+    smiles: null,
+    strikeSides: [side],
+    strikeRights: [occ.right],
+    ratios: [1],
+    strikes: [occ.strike],
+    qty: Math.floor(Math.abs(pos.qty)),
+    label: `${occLabel(pos)} ×${Math.floor(Math.abs(pos.qty))}`,
+    expiry: occ.expiry,
+    closed: false,
+    exitMs: null,
+    exitHours: null,
+    exitPremium: null,
+    exitReason: null,
+    realizedPnl: null,
+    exitEvents: [],
+  };
+}
+
+/** The chart-view model for a SHARE position (a managed equity plan or an
+ * untracked stock row): entry price and time, the stop / target as prices,
+ * the exit day. `editable` = the lines drag (open plan or untracked). */
+export type EquityPosition = {
+  key: string;
+  label: string;
+  side: 1 | -1;
+  shares: number;
+  entryPx: number;
+  /** Absolute prices; null = none. */
+  sl: number | null;
+  tp: number | null;
+  anchorMs: number;
+  timeStopMs: number | null;
+  /** Trading hours from entry to the exit day (null = no time stop). */
+  timeStopHours: number | null;
+  editable: boolean;
+};
+
+function shareExits(exits: ExitDraft, side: 1 | -1) {
+  // Plan convention: signed on the value axis (side * price).
+  const abs = (v: number | null) => (v == null ? null : Math.abs(v));
+  void side;
+  return { sl: abs(exits.sl), tp: abs(exits.tp) };
+}
+
+export function equityPositionOfPlan(plan: Plan, draft: ExitDraft | null, nowMs = Date.now()): EquityPosition | null {
+  if (plan.asset_class !== "equity" || !plan.legs.length) return null;
+  const leg = plan.legs[0];
+  const side: 1 | -1 = leg.side >= 0 ? 1 : -1;
+  const anchorMs = Date.parse(plan.entered_at ?? plan.created_at);
+  if (!Number.isFinite(anchorMs)) return null;
+  const exits = planExits(plan, draft);
+  const closed = ["closed", "cancelled", "rejected"].includes(plan.status);
+  const stopMs = exits.timeStopUtc ? Date.parse(exits.timeStopUtc) : NaN;
+  return {
+    key: plan.id,
+    label: contractLabel(plan.legs, plan.underlying),
+    side,
+    shares: heldQty(plan),
+    entryPx: Math.abs(plan.fill_premium ?? plan.entry_limit),
+    ...shareExits(exits, side),
+    anchorMs,
+    timeStopMs: Number.isFinite(stopMs) ? stopMs : null,
+    timeStopHours: Number.isFinite(stopMs) ? tradingHoursBetween(anchorMs, stopMs) : null,
+    editable: !closed && ["partially_filled", "filled"].includes(plan.status) && nowMs > 0,
+  };
+}
+
+export function equityPositionOfUntracked(
+  pos: UntrackedPosition,
+  opts: { enteredAt: string | null; exits: ExitDraft; nowMs?: number },
+): EquityPosition | null {
+  if (pos.occ || pos.asset_class !== "stock" || pos.qty === 0) return null;
+  const side: 1 | -1 = pos.qty > 0 ? 1 : -1;
+  const now = opts.nowMs ?? Date.now();
+  const entered = opts.enteredAt ? Date.parse(opts.enteredAt) : NaN;
+  const anchorMs = Number.isFinite(entered) && entered < now ? entered : now;
+  const stopMs = opts.exits.timeStopUtc ? Date.parse(opts.exits.timeStopUtc) : NaN;
+  return {
+    key: pos.symbol,
+    label: pos.symbol,
+    side,
+    shares: Math.floor(Math.abs(pos.qty)),
+    entryPx: Math.abs(pos.avg_entry_price),
+    ...shareExits(opts.exits, side),
+    anchorMs,
+    timeStopMs: Number.isFinite(stopMs) ? stopMs : null,
+    timeStopHours: Number.isFinite(stopMs) ? tradingHoursBetween(anchorMs, stopMs) : null,
+    editable: true,
   };
 }
 

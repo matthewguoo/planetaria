@@ -17,8 +17,10 @@ import time
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from alpaca.trading.enums import OrderClass, OrderSide, PositionIntent, TimeInForce
+from alpaca.common.enums import Sort
+from alpaca.trading.enums import OrderClass, OrderSide, PositionIntent, QueryOrderStatus, TimeInForce
 from alpaca.trading.requests import (
+    GetOrdersRequest,
     LimitOrderRequest,
     MarketOrderRequest,
     OptionLegRequest,
@@ -164,6 +166,35 @@ def mark_with_fallback(
     return (mid, "broker") if mid is not None else (None, None)
 
 
+def entry_time_from_orders(fills: list[dict]) -> str | None:
+    """When the CURRENT holding was opened, replayed from its fills.
+
+    `fills` rows carry ``filled_at`` (datetime or ISO string), ``filled_qty``
+    and ``side`` ("buy"/"sell"). Oldest-first, the running quantity is
+    tracked; the answer is the LAST fill at which it left zero (or crossed
+    it — a flip from short to long is a new position). Unfilled rows are
+    skipped. None when nothing filled: the holding predates the history."""
+    rows: list[tuple[datetime, float]] = []
+    for f in fills:
+        qty = float(f.get("filled_qty") or 0)
+        at = f.get("filled_at")
+        if qty <= 0 or not at:
+            continue
+        if isinstance(at, str):
+            at = datetime.fromisoformat(at.replace("Z", "+00:00"))
+        side = str(f.get("side") or "buy").lower()
+        rows.append((as_utc(at), -qty if side.endswith("sell") else qty))
+    rows.sort(key=lambda r: r[0])
+    running = 0.0
+    entry: datetime | None = None
+    for at, signed in rows:
+        before = running
+        running = round(running + signed, 6)
+        if (before == 0 and running != 0) or before * running < 0:
+            entry = at
+    return entry.isoformat() if entry else None
+
+
 def merge_holdings(positions: list[dict], plans: list[dict]) -> list[dict]:
     """Broker positions × open plans by leg symbol. A position managed by a
     plan carries that plan's id and exits (`protected` = it has a stop);
@@ -203,6 +234,7 @@ class TradeService:
         self.capabilities = None  # CapabilitiesService, attached by bootstrap
         self._account_cache: tuple[float, dict] | None = None
         self._positions_cache: tuple[float, list[dict]] | None = None
+        self._entered_at_cache: dict[str, tuple[float, str | None]] = {}
         self._shortable_cache: dict[str, tuple[float, bool]] = {}
 
     # ------------------------------------------------------------- account
@@ -244,6 +276,33 @@ class TradeService:
         return out
 
     # ---------------------------------------------------- broker positions
+
+    async def entered_at(self, symbol: str, max_age_s: float = 300.0) -> str | None:
+        """When the current holding in `symbol` was opened (ISO), from the
+        broker's closed orders — an Alpaca position carries no entry time.
+        None when the fills that built it are older than the 500 most
+        recent orders. Cached: the answer changes only on a new fill."""
+        cached = self._entered_at_cache.get(symbol)
+        if cached and time.monotonic() - cached[0] < max_age_s:
+            return cached[1]
+        if not self.alpaca.configured:
+            return None
+        req = GetOrdersRequest(
+            status=QueryOrderStatus.CLOSED, symbols=[symbol], limit=500, direction=Sort.DESC,
+        )
+        orders = await self.alpaca.call(self.alpaca.trading.get_orders, req, retries=1)
+        fills = [
+            {
+                "filled_at": getattr(o, "filled_at", None),
+                "filled_qty": getattr(o, "filled_qty", None),
+                "side": getattr(getattr(o, "side", None), "value", getattr(o, "side", None)),
+            }
+            for o in orders
+            if getattr(o, "symbol", None) == symbol
+        ]
+        value = entry_time_from_orders(fills)
+        self._entered_at_cache[symbol] = (time.monotonic(), value)
+        return value
 
     async def broker_positions(self, max_age_s: float = 5.0) -> list[dict]:
         """Live positions straight from the Alpaca account, normalized.

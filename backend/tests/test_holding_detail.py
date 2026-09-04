@@ -98,6 +98,9 @@ def _app(plans, holdings, orders):
         async def holdings(self, plans):
             return holdings
 
+        async def entered_at(self, symbol):
+            return "2026-09-01T14:32:05+00:00" if symbol == OCC else None
+
     class Market:
         def latest_quote(self, s):
             return {"bid": 22.9, "ask": 23.0, "mid": 22.95}
@@ -150,6 +153,36 @@ def test_holding_detail_option_and_stock():
     d = client.get(f"/api/holdings/{OCC}").json()
     assert d["position"]["symbol"] == OCC and d["contract"]["open_interest"] == 4635
     assert d["quote"]["last"] == 6.25 and d["underlying"] == {"symbol": "NVDA", "spot": 22.95}
+    assert d["entered_at"] == "2026-09-01T14:32:05+00:00"
     s = client.get("/api/holdings/avgg").json()
-    assert s["contract"] is None and s["quote"]["bid"] == 22.9
+    assert s["contract"] is None and s["quote"]["bid"] == 22.9 and s["entered_at"] is None
     assert client.get("/api/holdings/NOPE").status_code == 404
+
+
+# ------------------------------------------------------- entry time
+
+
+def _fill(day, hour, qty, side, filled_qty=None):
+    return {
+        "filled_at": datetime(2026, 9, day, hour, 0, tzinfo=timezone.utc),
+        "filled_qty": qty if filled_qty is None else filled_qty,
+        "side": side,
+    }
+
+
+def test_entry_time_is_the_last_time_the_position_left_flat():
+    from app.services.trade_service import entry_time_from_orders
+
+    # open 2, add 3, trim 1: the entry is the first buy; the add is not a new position
+    fills = [_fill(1, 14, 2, "buy"), _fill(2, 15, 3, "buy"), _fill(3, 15, 1, "sell")]
+    assert entry_time_from_orders(fills) == "2026-09-01T14:00:00+00:00"
+    # fully closed, then re-entered: the re-entry wins; order of the list is irrelevant
+    fills += [_fill(3, 16, 4, "sell"), _fill(8, 14, 1, "buy")]
+    assert entry_time_from_orders(list(reversed(fills))) == "2026-09-08T14:00:00+00:00"
+    # a short is a position too; a flip through zero starts a new one
+    assert entry_time_from_orders([_fill(1, 14, 1, "sell")]) == "2026-09-01T14:00:00+00:00"
+    assert entry_time_from_orders([_fill(1, 14, 1, "sell"), _fill(2, 14, 3, "buy")]) == "2026-09-02T14:00:00+00:00"
+    # unfilled rows and ISO strings; nothing filled -> None
+    assert entry_time_from_orders([_fill(1, 14, 1, "buy", filled_qty="0")]) is None
+    assert entry_time_from_orders([{"filled_at": "2026-09-01T14:00:00Z", "filled_qty": "1", "side": "OrderSide.BUY"}]) == "2026-09-01T14:00:00+00:00"
+    assert entry_time_from_orders([]) is None

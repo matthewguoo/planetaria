@@ -20,7 +20,19 @@ import {
 } from "../../lib/optionsMath";
 import { etMinutes, etOffsetMinutes } from "../../lib/et";
 import { computeBollinger, computeEma, computeMacd, computeRsi, computeSma, computeVwap } from "../../lib/indicators";
-import { buildPositionView } from "../../lib/positionView";
+import {
+  adoptSeed,
+  buildPositionView,
+  buildUntrackedView,
+  equityPositionOfPlan,
+  equityPositionOfUntracked,
+  type EquityPosition,
+  type PositionView,
+} from "../../lib/positionView";
+import { addTradingHours, shareExitDayIso } from "../../lib/tradingTime";
+import { planDraftKey, untrackedDraftKey } from "../../lib/useExitDraft";
+import { useHoldingDetail } from "../../lib/useHoldingDetail";
+import { useExitDraftStore } from "../../store/exitDraftStore";
 import type { Designer } from "../../lib/useDesigner";
 import { ChartHud } from "./ChartHud";
 import { publishScale, sharedBars } from "../../lib/chartShared";
@@ -124,6 +136,9 @@ type StrategyOverlay = {
   model: ScenarioModel;
   /** Position view: overlay is a live plan, not the designer — no editing. */
   readOnly: boolean;
+  /** Position view of an OPEN position: the TP / SL contours and the time
+   * stop drag into the exit draft (adopt / move exits); strikes stay put. */
+  exitsEditable: boolean;
   /** Position view: surface time anchor (entry timestamp, ms); null = now. */
   anchorMs: number | null;
   /** Position view: P/L basis (actual fill premium); null = leg net entry. */
@@ -144,9 +159,13 @@ type StrategyOverlay = {
 /** Bar index the surface's t=0 column maps to: entry bar for a position
  * view (clamped into the loaded range), else the latest bar. */
 function anchorIndexFor(bars: Bars, overlay: StrategyOverlay | null): number {
+  return anchorIndexForMs(bars, overlay?.anchorMs ?? null);
+}
+
+function anchorIndexForMs(bars: Bars, anchorMs: number | null): number {
   const nowIdx = Math.max(bars.n - 1, 0);
-  if (!overlay || overlay.anchorMs === null || !bars.n) return nowIdx;
-  const target = overlay.anchorMs;
+  if (anchorMs === null || !bars.n) return nowIdx;
+  const target = anchorMs;
   if (target <= bars.t[0]) return 0;
   if (target >= bars.t[nowIdx]) return nowIdx;
   let lo = 0;
@@ -178,6 +197,11 @@ function oscCountOf(ind: IndicatorToggles): number {
 }
 
 /** Price levels an equity plan wants on screen (bounded by extendDomain). */
+function equityPositionLevels(pos: EquityPosition | null): number[] {
+  if (!pos) return [];
+  return [pos.entryPx, pos.sl, pos.tp].filter((v): v is number => v != null && v > 0);
+}
+
 function equityLevels(eq: EquityPlan | null): number[] {
   if (!eq || eq.price <= 0) return [];
   const levels = [Math.abs(eq.exits.entry), Math.abs(eq.exits.sl)];
@@ -317,71 +341,104 @@ export function CandlePane({
   // ------------------------------------------------- strategy derivations
 
   const viewingPlanId = useUiStore((s) => s.viewingPlanId);
+  const viewingUntracked = useUiStore((s) => s.viewingUntracked);
   const viewedHistorical = useUiStore((s) => s.viewedHistorical);
   const pnlMode = useUiStore((s) => s.pnlMode);
   const positions = useAccountStore((s) => s.positions);
+  const untrackedRows = useAccountStore((s) => s.untracked);
   const account = useAccountStore((s) => s.account);
   const eqTicket = useEquityTicketStore();
   const viewingPlan = viewingPlanId
     ? positions.find((p) => p.id === viewingPlanId) ??
       (viewedHistorical?.id === viewingPlanId ? viewedHistorical : null)
     : null;
+  const untrackedPos = !viewingPlan && viewingUntracked
+    ? untrackedRows.find((u) => u.symbol === viewingUntracked) ?? null
+    : null;
+  const planClosed = viewingPlan ? ["closed", "cancelled", "rejected"].includes(viewingPlan.status) : false;
+  const planEditable = viewingPlan ? ["partially_filled", "filled"].includes(viewingPlan.status) : false;
+  // The holding's detail row (live IV, entry time) for the position in view.
+  const detailSymbol = viewingPlan
+    ? viewingPlan.legs.length === 1 ? viewingPlan.legs[0].symbol : null
+    : untrackedPos?.symbol ?? null;
+  const detail = useHoldingDetail(detailSymbol);
+  const enteredAt = detail?.entered_at ?? null;
+  const detailIv = detail?.quote?.iv ?? null;
+  const defaultSl = account?.risk?.default_sl_pct ?? 0.5;
+  // The exit draft (chart drag <-> panel fields) for the position in view.
+  const draftKey = viewingPlan ? planDraftKey(viewingPlan.id) : untrackedPos ? untrackedDraftKey(untrackedPos.symbol) : null;
+  const storeKey = useExitDraftStore((s) => s.key);
+  const storeDraft = useExitDraftStore((s) => s.draft);
+  const draft = draftKey !== null && storeKey === draftKey ? storeDraft : null;
 
   const overlay: StrategyOverlay | null = useMemo(() => {
     // EQUITY mode: the options designer's payoff/TP/SL overlay is not this
     // ticket's model — plain candles (position views still draw, they carry
     // their own plan's rules).
-    if (assetMode === "equity" && !viewingPlan) return null;
+    if (assetMode === "equity" && !viewingPlan && !untrackedPos?.occ) return null;
     // POSITION VIEW: chart inspects a live plan (legs + rules), read-only,
     // anchored at entry, P/L measured against the actual fill premium.
+    const fromView = (positionView: PositionView, exitsEditable: boolean): StrategyOverlay => {
+      const spot = freshSpot(quote, chain?.spot ?? 0);
+      const live = pnlMode === "live";
+      const entry = positionView.entryBasis;
+      const shift = live ? volShift : 0;
+      const beta = live ? skewBeta : false;
+      return {
+        legs: positionView.legs,
+        strikes: positionView.strikes,
+        strikeSides: positionView.strikeSides,
+        strikeRights: positionView.strikeRights,
+        ratios: positionView.ratios,
+        snapStrikes: [],
+        hoursToExpiry: positionView.hoursTotal,
+        timeStopHours: positionView.timeStopHours,
+        tpPremium: positionView.tpPremium,
+        slPremium: positionView.slPremium,
+        tpPct:
+          positionView.tpPremium !== null && Math.abs(entry) >= 0.01
+            ? (positionView.tpPremium - entry) / Math.abs(entry)
+            : 0,
+        slPct:
+          positionView.slPremium !== null && Math.abs(entry) >= 0.01
+            ? (entry - positionView.slPremium) / Math.abs(entry)
+            : 0,
+        entry,
+        sigma: positionIv(positionView.legs),
+        spot,
+        smiles: positionView.smiles,
+        volShift: shift,
+        skewBeta: beta,
+        model: makeScenarioModel(positionView.smiles, spot, shift, beta),
+        readOnly: true,
+        exitsEditable,
+        anchorMs: positionView.anchorMs,
+        entryBasis: entry,
+        breakevens:
+          spot > 0
+            ? breakevensForBasis(positionView.legs, entry, spot * 0.7, spot * 1.3)
+            : [],
+        exitHours: positionView.exitHours,
+        exitPremium: positionView.exitPremium,
+        exitReason: positionView.exitReason,
+        realizedPnl: positionView.realizedPnl,
+        exitEvents: positionView.exitEvents,
+      };
+    };
     if (viewingPlan) {
-      const positionView = buildPositionView(viewingPlan, chain, pnlMode);
-      if (positionView) {
-        const spot = freshSpot(quote, chain?.spot ?? 0);
-        const live = pnlMode === "live";
-        const entry = positionView.entryBasis;
-        const shift = live ? volShift : 0;
-        const beta = live ? skewBeta : false;
-        return {
-          legs: positionView.legs,
-          strikes: positionView.strikes,
-          strikeSides: positionView.strikeSides,
-          strikeRights: positionView.strikeRights,
-          ratios: positionView.ratios,
-          snapStrikes: [],
-          hoursToExpiry: positionView.hoursTotal,
-          timeStopHours: positionView.timeStopHours,
-          tpPremium: positionView.tpPremium,
-          slPremium: positionView.slPremium,
-          tpPct:
-            positionView.tpPremium !== null && Math.abs(entry) >= 0.01
-              ? (positionView.tpPremium - entry) / Math.abs(entry)
-              : 0,
-          slPct:
-            positionView.slPremium !== null && Math.abs(entry) >= 0.01
-              ? (entry - positionView.slPremium) / Math.abs(entry)
-              : 0,
-          entry,
-          sigma: positionIv(positionView.legs),
-          spot,
-          smiles: positionView.smiles,
-          volShift: shift,
-          skewBeta: beta,
-          model: makeScenarioModel(positionView.smiles, spot, shift, beta),
-          readOnly: true,
-          anchorMs: positionView.anchorMs,
-          entryBasis: entry,
-          breakevens:
-            spot > 0
-              ? breakevensForBasis(positionView.legs, entry, spot * 0.7, spot * 1.3)
-              : [],
-          exitHours: positionView.exitHours,
-          exitPremium: positionView.exitPremium,
-          exitReason: positionView.exitReason,
-          realizedPnl: positionView.realizedPnl,
-          exitEvents: positionView.exitEvents,
-        };
-      }
+      // The draft's exits draw while the plan is open (an edit in progress
+      // is a line on the chart); a closed plan is a frozen fact.
+      const positionView = buildPositionView(viewingPlan, chain, pnlMode, planClosed ? null : draft);
+      if (positionView) return fromView(positionView, !planClosed && planEditable);
+    } else if (untrackedPos?.occ) {
+      // UNTRACKED option: the broker row marked at its live IV, anchored at
+      // the fill the broker's orders gave, exits from the adopt draft.
+      const positionView = buildUntrackedView(untrackedPos, {
+        iv: detailIv,
+        enteredAt,
+        exits: draft ?? adoptSeed(untrackedPos, defaultSl),
+      });
+      if (positionView) return fromView(positionView, true);
     }
     const legs = buildLegs({
       chain, expiry, kind, strikes, ratios, rights: legRights, sides: legSides,
@@ -415,6 +472,7 @@ export function CandlePane({
       skewBeta,
       model: makeScenarioModel(smileFromChain(chain, expiry), spot, volShift, skewBeta),
       readOnly: false,
+      exitsEditable: false,
       anchorMs: null,
       entryBasis: null,
       breakevens:
@@ -425,9 +483,22 @@ export function CandlePane({
       realizedPnl: null,
       exitEvents: [],
     };
-  }, [chain, expiry, kind, strikes, ratios, legRights, legSides, tpPct, slPct, timeStopEt, quote, volShift, skewBeta, viewingPlan, pnlMode, assetMode]);
+  }, [chain, expiry, kind, strikes, ratios, legRights, legSides, tpPct, slPct, timeStopEt, quote, volShift, skewBeta, viewingPlan, pnlMode, assetMode, untrackedPos, planClosed, planEditable, draft, detailIv, enteredAt, defaultSl]);
 
   overlayRef.current = overlay;
+
+  // SHARE position view (a managed equity plan or an untracked stock row):
+  // entry price + time, stop / target as prices, the exit day — from the
+  // draft while open, so a drag or a typed price is a line immediately.
+  const eqPosition: EquityPosition | null = useMemo(() => {
+    if (viewingPlan) return equityPositionOfPlan(viewingPlan, planClosed ? null : draft);
+    if (untrackedPos && !untrackedPos.occ) {
+      return equityPositionOfUntracked(untrackedPos, { enteredAt, exits: draft ?? adoptSeed(untrackedPos, defaultSl) });
+    }
+    return null;
+  }, [viewingPlan, planClosed, draft, untrackedPos, enteredAt, defaultSl]);
+  const eqPosRef = useRef<EquityPosition | null>(null);
+  eqPosRef.current = eqPosition;
 
   // EQUITY plan overlay: derived per draw (it reads the live bars for the
   // vol horizon), from a ref of the latest ticket/quote/account inputs.
@@ -453,7 +524,7 @@ export function CandlePane({
       ? deriveEquityPlan({ ticket: inp.ticket, quote: inp.quote, bars: barsRef.current, tf: inp.tf, account: inp.account })
       : null;
     eqPlanRef.current = plan;
-    eqLevelsRef.current = equityLevels(plan);
+    eqLevelsRef.current = plan ? equityLevels(plan) : equityPositionLevels(eqPosRef.current);
     return plan;
   }, []);
 
@@ -504,6 +575,7 @@ export function CandlePane({
         liveTickRef.current,
         showEthRef.current,
         eqPlan,
+        eqPosRef.current,
       );
       // Feed HTML layers outside the canvas (sidebar HUD, leg rail).
       sharedBars.current = barsRef.current;
@@ -527,6 +599,10 @@ export function CandlePane({
   useEffect(() => {
     draw();
   }, [eqTicket, account, assetMode, draw]);
+  // So does a share position's draft (typed price, dragged line).
+  useEffect(() => {
+    draw();
+  }, [eqPosition, draw]);
 
   // Surface recompute (worker). The grid follows the QUANTIZED visible
   // window (dense vertical sampling at any zoom — see useHeatmap); pans
@@ -716,7 +792,7 @@ export function CandlePane({
     const overlayNow = overlayRef.current;
     const surface = surfaceRef.current;
     const wrap = wrapRef.current;
-    if (!overlayNow?.legs || overlayNow.readOnly || !surface || !wrap) return null;
+    if (!overlayNow?.legs || (overlayNow.readOnly && !overlayNow.exitsEditable) || !surface || !wrap) return null;
     const layout = computeLayout(wrap.clientWidth, wrap.clientHeight, oscCountOf(indicatorsRef.current));
     const domain = currentDomain(barsRef.current, viewRef.current, overlayNow, surfaceRef.current, eqLevelsRef.current);
     const view = viewRef.current;
@@ -743,8 +819,25 @@ export function CandlePane({
 
   /** Equity plan lines: stop / target horizontals, exit-day vertical. */
   const hitTestEquity = useCallback((x: number, y: number, tol = 6): "eqsl" | "eqtp" | "eqts" | null => {
-    const eq = eqPlanRef.current;
     const wrap = wrapRef.current;
+    const pos = eqPosRef.current;
+    if (pos && wrap) {
+      // Share position view: its lines drag into the exit draft.
+      if (!pos.editable) return null;
+      const layout = computeLayout(wrap.clientWidth, wrap.clientHeight, oscCountOf(indicatorsRef.current));
+      if (y > layout.volTop) return null;
+      const domain = currentDomain(barsRef.current, viewRef.current, null, null, eqLevelsRef.current);
+      if (pos.timeStopHours != null) {
+        const tfMinutes = TF_MS[useTradingStore.getState().tf] / 60000;
+        const anchorIdx = anchorIndexForMs(barsRef.current, pos.anchorMs);
+        const xTs = indexToX(futureIndex(pos.timeStopHours, anchorIdx, tfMinutes), viewRef.current, layout);
+        if (Math.abs(x - xTs) <= tol) return "eqts";
+      }
+      if (pos.sl != null && Math.abs(priceToY(pos.sl, domain, layout) - y) <= tol) return "eqsl";
+      if (pos.tp != null && Math.abs(priceToY(pos.tp, domain, layout) - y) <= tol) return "eqtp";
+      return null;
+    }
+    const eq = eqPlanRef.current;
     if (!eq || eq.price <= 0 || !wrap) return null;
     const layout = computeLayout(wrap.clientWidth, wrap.clientHeight, oscCountOf(indicatorsRef.current));
     if (y > layout.volTop) return null;
@@ -937,7 +1030,30 @@ export function CandlePane({
         const target = dragTargetRef.current;
         const overlayNow = overlayRef.current;
         const eq = eqPlanRef.current;
-        if ((target.kind === "eqsl" || target.kind === "eqtp" || target.kind === "eqts") && eq) {
+        const eqPos = eqPosRef.current;
+        if ((target.kind === "eqsl" || target.kind === "eqtp" || target.kind === "eqts") && eqPos) {
+          // Share POSITION lines write the exit draft as absolute prices /
+          // an absolute exit day (the plan convention: signed by side).
+          const store = useExitDraftStore.getState();
+          const domain = currentDomain(barsRef.current, viewRef.current, null, null, eqLevelsRef.current);
+          if (target.kind === "eqts") {
+            const tfMinutes = TF_MS[useTradingStore.getState().tf] / 60000;
+            const anchorIdx = anchorIndexForMs(barsRef.current, eqPos.anchorMs);
+            const idx = xToIndex(x, viewRef.current, layout);
+            const hours = Math.max(0, ((idx - anchorIdx) * tfMinutes) / 60);
+            const at = Math.max(Date.parse(addTradingHours(eqPos.anchorMs, hours)), Date.now());
+            const iso = shareExitDayIso(at);
+            if (iso !== store.draft.timeStopUtc) store.set({ timeStopUtc: iso });
+          } else {
+            const price = Math.round(yToPrice(y, domain, layout) * 100) / 100;
+            if (price > 0) {
+              const ok = target.kind === "eqsl"
+                ? eqPos.side * (eqPos.entryPx - price) > 0
+                : eqPos.side * (price - eqPos.entryPx) > 0;
+              if (ok) store.set(target.kind === "eqsl" ? { sl: eqPos.side * price } : { tp: eqPos.side * price });
+            }
+          }
+        } else if ((target.kind === "eqsl" || target.kind === "eqtp" || target.kind === "eqts") && eq) {
           // Share plan lines write straight into the ticket store, as %
           // of the entry price (the store's own units); the ticket, the
           // next draw and the order payload all follow from there.
@@ -972,6 +1088,17 @@ export function CandlePane({
                 setStrike(target.i, snapped);
               }
             }
+          } else if (target.kind === "timestop" && overlayNow.exitsEditable && overlayNow.anchorMs !== null) {
+            // Position view: the exit instant is absolute — trading hours
+            // after the entry anchor, never in the past, never past expiry.
+            const anchorIdx = anchorIndexFor(barsRef.current, overlayNow);
+            const tfMinutes = TF_MS[useTradingStore.getState().tf] / 60000;
+            const idx = xToIndex(x, viewRef.current, layout);
+            const hours = Math.max(0, Math.min(((idx - anchorIdx) * tfMinutes) / 60, overlayNow.hoursToExpiry));
+            const at = Math.max(Date.parse(addTradingHours(overlayNow.anchorMs, hours)), Date.now() + 5 * 60_000);
+            const iso = new Date(at).toISOString();
+            const store = useExitDraftStore.getState();
+            if (iso !== store.draft.timeStopUtc) store.set({ timeStopUtc: iso });
           } else if (target.kind === "timestop") {
             // Drag the force-exit time horizontally; snapped to 5 minutes,
             // clamped inside [now+5m, 15:55 ET] and before expiry.
@@ -1002,7 +1129,18 @@ export function CandlePane({
             if (price > 0) {
               const premium = positionValueModel(overlayNow.legs, price, tau, overlayNow.model);
               const entry = overlayNow.entry;
-              if (target.kind === "tp") {
+              if (overlayNow.exitsEditable) {
+                // Position view: the level IS the draft's premium. A target
+                // stays on the profit side of entry, a stop on the loss side
+                // (credit structures: the axis is signed, 0 is the ceiling).
+                const p = Math.round(premium * 100) / 100;
+                const store = useExitDraftStore.getState();
+                if (target.kind === "tp") {
+                  if (p > entry + 0.005 && (entry > 0 || p < 0)) store.set({ tp: p });
+                } else if (p < entry - 0.005 && (entry < 0 || p > 0)) {
+                  store.set({ sl: p });
+                }
+              } else if (target.kind === "tp") {
                 setTpPct((premium - entry) / Math.abs(entry));
               } else {
                 setSlPct((entry - premium) / Math.abs(entry));
@@ -1184,6 +1322,7 @@ function render(
   liveTick: { mid: number; ts: number } | null = null,
   showEth = false,
   equity: EquityPlan | null = null,
+  eqPos: EquityPosition | null = null,
 ) {
   const draggingStrike = dragTarget?.kind === "strike" ? dragTarget.i : null;
   ctx.fillStyle = COLORS.bg;
@@ -1271,10 +1410,12 @@ function render(
   if (equity && equity.price > 0) {
     drawEquityPlan(ctx, layout, domain, view, bars, equity, tfMinutes, dragTarget);
   }
+  if (eqPos) drawEquityPosition(ctx, layout, domain, view, bars, eqPos, tfMinutes, dragTarget);
   ctx.restore();
   if (layout.oscCount) drawOscillators(ctx, layout, bars, view, first, last, indicators);
   // Axis badges (TP/SL/BE, last price) live in the axis column: unclipped.
   if (equity && equity.price > 0) drawEquityBadges(ctx, layout, domain, equity);
+  if (eqPos) drawEquityPositionBadges(ctx, layout, domain, eqPos);
   if (overlay?.legs && surface) drawExitLevels(ctx, layout, domain, surface, overlay);
   drawLastPrice(ctx, layout, bars, domain, live?.c);
   if (mouse && mouse.x <= layout.plotW && mouse.y <= layout.plotH) {
@@ -1510,7 +1651,7 @@ function drawHeatmap(
   vline(
     xTs,
     COLORS.timeStop,
-    overlay.readOnly ? "TIME STOP" : "⇔ TIME STOP",
+    overlay.readOnly && !overlay.exitsEditable ? "TIME STOP" : "⇔ TIME STOP",
     dragTarget?.kind === "timestop" ? 2.4 : 1.2,
   );
   if (overlay.readOnly) vline(x0, "#9c8cff", "ENTRY", 1.2);
@@ -2098,6 +2239,125 @@ function drawEquityBadges(
   };
   badge(Math.abs(eq.exits.sl), COLORS.sl, "SL");
   if (eq.exits.tp != null) badge(Math.abs(eq.exits.tp), COLORS.tp, "TP");
+}
+
+/** A SHARE POSITION on the chart: the entry (price line + the purple ENTRY
+ * vertical at the fill time), the open P/L shaded from entry to the last
+ * close over the holding window, the stop / target with their % and $ at
+ * the position's size, and the exit day. Editable lines carry ⇕ / ⇔. */
+function drawEquityPosition(
+  ctx: CanvasRenderingContext2D,
+  layout: Layout,
+  domain: [number, number],
+  view: ViewState,
+  bars: Bars,
+  pos: EquityPosition,
+  tfMinutes: number,
+  dragTarget: DragTarget | null,
+) {
+  const anchorIdx = anchorIndexForMs(bars, pos.anchorMs);
+  const x0 = indexToX(anchorIdx, view, layout);
+  const lastIdx = Math.max(bars.n - 1, 0);
+  const xNow = indexToX(lastIdx, view, layout);
+  const last = bars.c[lastIdx];
+  if (last > 0 && xNow > x0) {
+    const yE = priceToY(pos.entryPx, domain, layout);
+    const yL = priceToY(last, domain, layout);
+    const win = pos.side * (last - pos.entryPx) >= 0;
+    ctx.fillStyle = win ? "rgba(0,200,120,0.10)" : "rgba(255,70,70,0.10)";
+    const left = Math.max(x0, 0);
+    ctx.fillRect(left, Math.min(yE, yL), Math.min(xNow, layout.plotW) - left, Math.abs(yL - yE));
+  }
+  ctx.font = "11px 'SF Mono', Consolas, monospace";
+  const line = (price: number, color: string, label: string, heavy: boolean, dash: number[]) => {
+    const y = priceToY(price, domain, layout);
+    if (y < 0 || y > layout.volTop) return;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = heavy ? 2 : 1;
+    ctx.setLineDash(dash);
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(layout.plotW, y);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    const w = ctx.measureText(label).width + 10;
+    const ly = Math.max(9, Math.min(layout.volTop - 9, y - 10));
+    ctx.fillStyle = "rgba(0,0,0,0.85)";
+    ctx.fillRect(6, ly - 8, w, 16);
+    ctx.fillStyle = color;
+    ctx.textAlign = "left";
+    ctx.textBaseline = "middle";
+    ctx.fillText(label, 11, ly);
+  };
+  const pctOf = (px: number) =>
+    `${pos.side * (px - pos.entryPx) >= 0 ? "+" : "−"}${((Math.abs(px - pos.entryPx) / pos.entryPx) * 100).toFixed(1)}%`;
+  const dollars = (px: number) => {
+    const v = pos.side * (px - pos.entryPx) * pos.shares;
+    return `${v >= 0 ? "+" : "−"}$${Math.abs(v).toFixed(0)}`;
+  };
+  const drag = pos.editable ? " ⇕" : "";
+  line(pos.entryPx, COLORS.last, `ENTRY ${fmtPrice(pos.entryPx)} · ${pos.side > 0 ? "" : "SHORT "}${pos.shares} sh`, false, [6, 4]);
+  if (pos.sl != null) {
+    line(pos.sl, COLORS.sl, `STOP ${fmtPrice(pos.sl)} · ${pctOf(pos.sl)} · ${dollars(pos.sl)}${drag}`, dragTarget?.kind === "eqsl", [2, 3]);
+  }
+  if (pos.tp != null) {
+    line(pos.tp, COLORS.tp, `TARGET ${fmtPrice(pos.tp)} · ${pctOf(pos.tp)} · ${dollars(pos.tp)}${drag}`, dragTarget?.kind === "eqtp", [2, 3]);
+  }
+  const vline = (x: number, color: string, text: string, width: number) => {
+    if (x < 0 || x > layout.plotW) {
+      if (x > layout.plotW) {
+        ctx.fillStyle = color;
+        ctx.textAlign = "right";
+        ctx.textBaseline = "middle";
+        ctx.fillText(`${text} →`, layout.plotW - 4, 12);
+      }
+      return;
+    }
+    ctx.strokeStyle = color;
+    ctx.lineWidth = width;
+    ctx.setLineDash([4, 4]);
+    ctx.beginPath();
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x, layout.volTop);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    const w = ctx.measureText(text).width + 10;
+    const lx = Math.min(x + 4, layout.plotW - w - 2);
+    ctx.fillStyle = "rgba(0,0,0,0.85)";
+    ctx.fillRect(lx, 4, w, 16);
+    ctx.fillStyle = color;
+    ctx.textAlign = "left";
+    ctx.textBaseline = "middle";
+    ctx.fillText(text, lx + 5, 12);
+  };
+  vline(x0, "#9c8cff", `ENTRY ${fmtDayET(pos.anchorMs)} ${fmtTimeET(pos.anchorMs)}`, 1.2);
+  if (pos.timeStopHours != null && pos.timeStopMs != null) {
+    const xTs = indexToX(futureIndex(pos.timeStopHours, anchorIdx, tfMinutes), view, layout);
+    vline(xTs, COLORS.timeStop, `${pos.editable ? "⇔ " : ""}EXIT ${fmtDayET(pos.timeStopMs)}`, dragTarget?.kind === "eqts" ? 2.4 : 1.2);
+  }
+}
+
+function drawEquityPositionBadges(
+  ctx: CanvasRenderingContext2D,
+  layout: Layout,
+  domain: [number, number],
+  pos: EquityPosition,
+) {
+  const badge = (price: number, color: string, tag: string) => {
+    const y = priceToY(price, domain, layout);
+    const onScreen = y >= 0 && y <= layout.volTop;
+    const by = Math.max(8, Math.min(layout.volTop - 8, y));
+    ctx.fillStyle = color;
+    ctx.fillRect(layout.plotW, by - 8, layout.axisW, 16);
+    ctx.fillStyle = COLORS.bg;
+    ctx.textAlign = "left";
+    ctx.textBaseline = "middle";
+    ctx.font = "11px 'SF Mono', Consolas, monospace";
+    ctx.fillText(onScreen ? `${tag} ${fmtPrice(price)}` : `${tag} ${y < 0 ? "↑" : "↓"}`, layout.plotW + 4, by);
+  };
+  badge(pos.entryPx, COLORS.last, "IN");
+  if (pos.sl != null) badge(pos.sl, COLORS.sl, "SL");
+  if (pos.tp != null) badge(pos.tp, COLORS.tp, "TP");
 }
 
 function niceStep(span: number, maxTicks: number): number {

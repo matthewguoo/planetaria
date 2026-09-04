@@ -414,7 +414,17 @@ async def holding_detail(request: Request, symbol: str) -> dict:
             spot = app.state.market.spot(underlying)
         except Exception:
             spot = None
-    return {"position": row, **detail, "underlying": {"symbol": underlying, "spot": spot}}
+    entered_at = None
+    try:
+        entered_at = await app.state.trade.entered_at(symbol)
+    except Exception:  # noqa: BLE001 - the entry time is decoration on the page
+        entered_at = None
+    return {
+        "position": row,
+        **detail,
+        "underlying": {"symbol": underlying, "spot": spot},
+        "entered_at": entered_at,
+    }
 
 
 @router.delete("/orders/{order_id}")
