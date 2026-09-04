@@ -70,6 +70,7 @@ def is_transient(exc: BaseException) -> bool:
 
 IDLE_POLL_S = 0.5          # how often an unsubscribed stream checks for handlers
 REFUSAL_BACKOFF_MAX_S = 60.0
+HEALTHY_SESSION_S = 30.0    # a connection that lived this long resets the backoff
 
 
 class _PatientStreamMixin:
@@ -99,6 +100,7 @@ class _PatientStreamMixin:
         self._should_run = True
         self._running = False
         refusals = 0
+        connected_at = 0.0
         while True:
             try:
                 if not self._should_run:
@@ -109,7 +111,7 @@ class _PatientStreamMixin:
                     await self._start_ws()
                     await self._send_subscribe_msg()
                     self._running = True
-                    refusals = 0
+                    connected_at = time.monotonic()
                 await self._consume()
             except websockets.WebSocketException as wse:
                 await self.close()
@@ -135,6 +137,10 @@ class _PatientStreamMixin:
                 # that is the same 100%-CPU class as the two cases above.
                 # Reconnect with the refusal backoff, resetting the client
                 # so the next pass builds a fresh connection.
+                # A session that stayed up counts as recovery; one that
+                # connected and died at once does not reset the backoff.
+                if time.monotonic() - connected_at > HEALTHY_SESSION_S:
+                    refusals = 0
                 refusals += 1
                 delay = min(REFUSAL_BACKOFF_MAX_S, 2.0 ** refusals)
                 log.exception("%s stream error (%s) - reconnecting in %.0fs",
