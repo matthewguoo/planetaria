@@ -61,7 +61,7 @@ if (-not (Test-Path "$root\.env")) { throw "no .env - the live keys live there (
 # the same positions and both try to close them. Refuse unless the peer is
 # unreachable (and even then: be sure it is actually down, not just off the
 # tailnet). Override only with -Force when you have stopped the peer.
-$peer = if ($env:LIVE_PEER_URL) { $env:LIVE_PEER_URL } else { "https://mikoyae-kojiki.tail6d5ddc.ts.net" }
+$peer = if ($env:LIVE_PEER_URL) { $env:LIVE_PEER_URL } else { "http://planetaria" }
 try {
     $h = (Invoke-WebRequest -UseBasicParsing -TimeoutSec 5 "$peer/api/health").Content
     if ($h -match '"mode":"live_manual"') {

@@ -82,14 +82,22 @@ Tailscale install. It ends by printing the manual steps:
 2. `sudo systemctl start planetaria-live` then
    `curl -s http://127.0.0.1:8001/api/health` →
    `"mode":"live_manual","paper":false,"alpaca_keys_configured":true`.
-3. `sudo tailscale up` (browser login), then
-   `sudo tailscale serve --bg --https=443 http://127.0.0.1:8001` and
-   `tailscale status` for the box's MagicDNS name.
+3. `sudo tailscale up` (browser login), then name the node and publish
+   the server on both a typeable plain-HTTP name and an HTTPS name (the
+   tailnet is WireGuard-encrypted, so HTTP inside it is fine; the phone's
+   "Add to Home screen" needs the HTTPS one):
+   `sudo tailscale set --operator=$USER --hostname planetaria`,
+   `tailscale serve --bg --http=80 http://127.0.0.1:8001`,
+   `tailscale serve --bg --https=443 http://127.0.0.1:8001`.
+   NOTE: `tailscale serve` config is keyed on the node's DNS name — after a
+   rename, `tailscale serve reset` and re-add, or every request 404s.
+   Result: **`http://planetaria`** from any tailnet device, and
+   `https://planetaria.tail6d5ddc.ts.net` for the phone app.
 4. From the Windows box (also on the tailnet):
-   `https://<box>.<tailnet>.ts.net/terminal` — the header badge must
+   `http://planetaria/terminal` — the header badge must
    read **LIVE in red**. (`/terminal.html` still works; `/terminal` is the
    clean path the backend serves for it.)
-   On the live server the ROOT `https://<box>.<tailnet>.ts.net/` is the
+   On the live server the ROOT `http://planetaria/` is the
    ACCOUNT OVERVIEW — equity big, today's move, holdings sortable by
    SIZE / EXPOSURE / MOVERS / P/L with each row's protection (STOP or NO
    STOP) and a tap into that symbol's trading interface. The ops console
@@ -280,7 +288,7 @@ position.
 - Paper: `0.0.0.0:8000` on the LAN for the phone. Acceptable for paper
   money; it should also move behind `tailscale serve` when convenient so
   there is one access model, not two.
-- Tailscale admin: disable key expiry on `mikoyae-kojiki` (a lapsed node
+- Tailscale admin: disable key expiry on `planetaria` (was mikoyae-kojiki) (a lapsed node
   key takes the enforcer's remote access down silently); ACL the box to
   your own user; keep the tailnet single-user.
 

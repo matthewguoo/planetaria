@@ -9,7 +9,7 @@ while the Windows paper engine held the connection). The dependency must
 point the safe way: **live owns the socket; paper consumes a copy.** Live
 never reads from paper, and a paper crash cannot touch live's quotes.
 
-Both servers live on the Linux box (`mikoyae-kojiki`) — the relay is a
+Both servers live on the Linux box (`planetaria`) — the relay is a
 Redis pub/sub channel on that box, so there is no network hop and no new
 process to supervise.
 
