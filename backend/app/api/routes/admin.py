@@ -121,7 +121,7 @@ async def admin_summary(request: Request) -> dict:
         pass
     calls = CALL_LOG.status()
     last_error = next((c for c in CALL_LOG.recent(None, 300) if not c["ok"]), None)
-    repo = Path(__file__).resolve().parents[3]
+    repo = Path(__file__).resolve().parents[4]  # backend/app/api/routes/admin.py -> repo root
     caps = getattr(st, "capabilities", None)
     return {
         "server": {

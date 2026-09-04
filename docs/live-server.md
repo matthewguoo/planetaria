@@ -156,6 +156,28 @@ What it does NOT do: deploy anything that isn't on `origin/main` (push is
 the human act that releases), touch `/etc/planetaria/live.env`, or run
 migrations by hand (the app auto-migrates at boot).
 
+## 2c. The administration window (on the box's own screen)
+
+Each engine has an instrument panel at `/admin` (`http://127.0.0.1:8001/admin`
+live, `:8000/admin` paper; also reachable over the tailnet): process CPU /
+RSS / tasks, stores, feed, broker clock, the enforcer (monitors, no-mid,
+parked, ghosts, reconcile age, every supervised task), the account and the
+verified capabilities on the left; **every call to Alpaca and the data
+sources as it happens** in the middle (last error pinned); the cross-plan
+plan journal and the engine log tail on the right. Read-only.
+
+`deploy/live/admin-window.sh PORT left|right` opens it as a chromeless
+browser app (Google Chrome `--app`, its own profile per port) sized to half
+the screen, after waiting for the engine to answer. To have both appear at
+every desktop login (XDG autostart, no sudo):
+
+```bash
+bash ~/planetaria/deploy/live/install-admin-window.sh --now
+```
+
+Live sits on the left half, paper on the right. Data: `/api/admin/summary`,
+`/api/admin/events`, `/api/admin/log`, `/api/monitor/calls`.
+
 ## 3. Files
 
 - `deploy/live/setup-linux.sh` — the setup above.

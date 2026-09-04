@@ -115,6 +115,11 @@ old LAN binding (`0.0.0.0`, no auth) is retired — the phone reaches paper
 the same way it reaches live, over the tailnet. Restart discipline is the
 same as live: outside 09:25–10:00 and 15:45–16:05 ET.
 
+## 5b. Its administration window
+
+`http://127.0.0.1:8000/admin` — same panel as the live one (docs/live-server.md
+§2c), right half of the box's screen via `deploy/live/install-admin-window.sh`.
+
 ## 6. Known interim degradation: the data socket
 
 Alpaca's free plan allows one data websocket per account login. Live holds
