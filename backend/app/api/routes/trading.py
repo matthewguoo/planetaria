@@ -64,7 +64,9 @@ async def account(request: Request) -> dict:
         raise HTTPException(502, f"account fetch failed: {exc}")
     risk = await request.app.state.risk.get_settings()
     realized = await request.app.state.risk.todays_realized_pnl()
-    return {**acct, "risk": risk, "day_realized_pnl": realized}
+    caps = getattr(request.app.state, "capabilities", None)
+    return {**acct, "risk": risk, "day_realized_pnl": realized,
+            "capabilities": caps.summary() if caps is not None else None}
 
 
 @router.get("/account/risk")

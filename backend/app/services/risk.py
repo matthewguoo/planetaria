@@ -50,12 +50,14 @@ DEFAULT_RISK = {
     # %-of-equity gates above bind at the right dollars by construction —
     # there is deliberately no virtual sub-account bookkeeping here.
     "manual_equity_require_stop": True,
-    # ACCOUNT CAPABILITIES — what this account is approved for, declared
-    # once here and honoured everywhere: the UI hides what the level cannot
-    # place, and place_trade refuses it. Alpaca levels: 0/1 = no long
-    # options here (covered calls / CSPs are not a manual-ticket shape),
-    # 2 = long single-leg calls/puts, 3 = spreads and every defined-risk
-    # structure. The live server additionally floors itself at 2.
+    # ACCOUNT CAPABILITIES — what this account is approved for, honoured
+    # everywhere: the UI hides what the level cannot place, and place_trade
+    # refuses it. Alpaca levels: 0/1 = no long options here (covered calls
+    # / CSPs are not a manual-ticket shape), 2 = long single-leg calls/puts,
+    # 3 = spreads and every defined-risk structure. This stored value is a
+    # PREFERENCE capped by the verified ceiling (services/capabilities.py):
+    # effective = min(stored, verified); the live server's unprobed floor
+    # is 2.
     "options_level": 3,
 }
 
@@ -65,8 +67,13 @@ RISK_KEY = "risk"
 class RiskService:
     def __init__(self, db):
         self.db = db
+        # CapabilitiesService, attached by bootstrap. Its ceiling narrows the
+        # stored capability settings (options_level, equity_long_only) to
+        # what the broker verified, so enforcement stays here, in one place.
+        self.capabilities = None
 
-    async def get_settings(self) -> dict:
+    async def get_stored_settings(self) -> dict:
+        """Defaults + the stored row, WITHOUT the capability ceiling."""
         async with self.db.session() as session:
             row = await session.get(AppSetting, RISK_KEY)
             merged = dict(DEFAULT_RISK)
@@ -77,6 +84,21 @@ class RiskService:
                 stored.pop("manual_book", None)
                 merged.update(stored)
             return merged
+
+    async def get_settings(self) -> dict:
+        """Effective settings: stored, capped by the verified capabilities.
+        options_level = min(stored, verified); equity_long_only is forced on
+        when shorting was refused at the broker. `capability_ceiling` is
+        read-only (update_settings rejects it as unknown)."""
+        merged = await self.get_stored_settings()
+        ceil = self.capabilities.ceiling() if self.capabilities is not None else None
+        if ceil:
+            if ceil.get("options_level") is not None:
+                merged["options_level"] = min(int(merged.get("options_level", 3)), int(ceil["options_level"]))
+            if ceil.get("equity_shorts") is False:
+                merged["equity_long_only"] = True
+            merged["capability_ceiling"] = ceil
+        return merged
 
     async def update_settings(self, patch: dict) -> dict:
         clean: dict = {}

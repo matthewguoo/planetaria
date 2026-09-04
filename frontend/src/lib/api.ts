@@ -54,11 +54,82 @@ export type RiskSettings = {
    * Capital separation is done with REAL accounts (one per book), so the
    * %-of-equity gates bind at the right dollars by construction. */
   manual_equity_require_stop: boolean;
-  /** Account capability: 0/1 none, 2 long single-leg, 3 spreads. */
+  /** Account capability: 0/1 none, 2 long single-leg, 3 spreads. The
+   * server reports the EFFECTIVE value: stored, capped by what the
+   * capabilities probe verified. */
   options_level: number;
+  /** Read-only: the verified ceiling the two values above are capped at. */
+  capability_ceiling?: { options_level?: number; equity_shorts?: boolean } | null;
 };
 
 export type TradingMode = "paper" | "live_manual";
+
+/** One probe check: what was tried, PASS/FAIL/SKIP/INFO, the broker's verbatim answer. */
+export type CapabilityCheck = {
+  name: string;
+  status: "PASS" | "FAIL" | "SKIP" | "INFO" | "RUNNING";
+  detail: string;
+  at: string;
+  symbol?: string;
+  order_ids?: string[];
+};
+
+export type CapabilitiesDerived = {
+  options_level?: number | null;
+  equity_shorts?: boolean | null;
+  equity_long?: boolean | null;
+  extended_hours?: boolean | null;
+  opg?: boolean | null;
+  cls?: boolean | null;
+  short_puts?: boolean | null;
+  naked_calls?: boolean | null;
+  covered_calls?: boolean | null;
+  fractional?: boolean | null;
+  cash_account?: boolean | null;
+};
+
+/** Embedded in GET /api/account. */
+export type CapabilitiesSummary = {
+  probed_at: string | null;
+  running: boolean;
+  derived: CapabilitiesDerived;
+  sources: Record<string, string>;
+  manual_action: string | null;
+  level_provenance: string;
+};
+
+export type CapabilitiesStatus = CapabilitiesSummary & {
+  account: string;
+  mode: TradingMode;
+  started_at: string | null;
+  progress: { done: number; total: number; current: string | null };
+  probe_session: string | null;
+  broker: {
+    fetched_at?: string;
+    status?: string;
+    trading_blocked?: boolean | null;
+    options_approved_level?: number | null;
+    options_trading_level?: number | null;
+    shorting_enabled?: boolean | null;
+    multiplier?: number | null;
+    pattern_day_trader?: boolean | null;
+    daytrade_count?: number | null;
+    config?: { no_shorting?: boolean | null; fractional_trading?: boolean | null; max_options_trading_level?: number | null } | null;
+    error?: string | null;
+  };
+  checks: CapabilityCheck[];
+  applied_to_risk_at: string | null;
+  ceiling: { options_level?: number; equity_shorts?: boolean } | null;
+  stored_risk?: { options_level: number; equity_long_only: boolean };
+  apply_pending?: boolean;
+};
+
+export const getCapabilities = () => api.get<CapabilitiesStatus>("/api/capabilities").then((r) => r.data);
+export const refreshCapabilities = () => api.post<CapabilitiesStatus>("/api/capabilities/refresh").then((r) => r.data);
+export const probeCapabilities = (body: { confirm?: string; only?: string[] }) =>
+  api.post<{ started: boolean }>("/api/capabilities/probe", body).then((r) => r.data);
+export const abortProbe = () => api.post<{ aborted: boolean }>("/api/capabilities/probe/abort").then((r) => r.data);
+export const applyCapabilities = () => api.post<CapabilitiesStatus>("/api/capabilities/apply").then((r) => r.data);
 
 export type Account = {
   equity: number;
@@ -72,6 +143,14 @@ export type Account = {
   mode: TradingMode;
   risk: RiskSettings;
   day_realized_pnl: number;
+  capabilities?: CapabilitiesSummary | null;
+  options_approved_level?: number | null;
+  options_trading_level?: number | null;
+  shorting_enabled?: boolean | null;
+  multiplier?: number | null;
+  pattern_day_trader?: boolean | null;
+  trading_blocked?: boolean | null;
+  non_marginable_buying_power?: number | null;
 };
 
 export type PlanLeg = {

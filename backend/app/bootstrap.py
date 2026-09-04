@@ -74,6 +74,15 @@ async def startup(app: FastAPI, settings: Settings) -> None:
     risk = RiskService(db)
     trade = TradeService(db, alpaca, market, risk)
     enforcer = ExitEnforcer(db, market, trade)
+    # Account capabilities: the verified ceiling every gate reads. Loaded
+    # before any request; broker flags refreshed in the background (read
+    # only - the probe itself is only ever a human click).
+    from app.services.capabilities import CapabilitiesService
+
+    capabilities = CapabilitiesService(db, alpaca, trade, enforcer.clock, settings)
+    await capabilities.load()
+    risk.capabilities = capabilities
+    trade.capabilities = capabilities
 
     app.state.settings = settings
     app.state.redis = redis
@@ -89,6 +98,11 @@ async def startup(app: FastAPI, settings: Settings) -> None:
     app.state.risk = risk
     app.state.trade = trade
     app.state.enforcer = enforcer
+    app.state.capabilities = capabilities
+    app.state.capabilities_refresh_task = (
+        asyncio.create_task(capabilities.refresh_broker(), name="capabilities-refresh")
+        if alpaca.configured else None
+    )
     from app.services.portfolio_accounts import PortfolioAccounts
     from app.services.portfolio_risk import PortfolioRisk
 
@@ -225,6 +239,15 @@ async def _reconcile_with_retry(enforcer: ExitEnforcer, attempts: int = 5) -> No
 
 async def shutdown(app: FastAPI) -> None:
     state = app.state
+    # A running capabilities probe must finish its cleanup while the broker
+    # client is still alive - before anything below stops.
+    if getattr(state, "capabilities", None) is not None:
+        try:
+            await state.capabilities.abort()
+        except Exception:  # noqa: BLE001
+            log.exception("capabilities probe abort failed on shutdown")
+    if getattr(state, "capabilities_refresh_task", None):
+        state.capabilities_refresh_task.cancel()
     # Order matters: stop generating intents (runner), then stop event intake
     # (feeds), THEN the enforcer — in-flight exits must finish enforced.
     if getattr(state, "breaker_loop_task", None):

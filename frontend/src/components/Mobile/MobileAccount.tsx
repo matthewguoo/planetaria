@@ -10,6 +10,7 @@ import { useCallback, useState } from "react";
 import { apiError, getAccountHistory, putRisk, type PortfolioHistory, type RiskSettings } from "../../lib/api";
 import { usePoll } from "../../lib/usePoll";
 import { useAccountStore, useTradingMode } from "../../store/accountStore";
+import { capabilitiesSummaryLine } from "../../lib/capabilities";
 import { EquityCurve } from "../Account/AccountPage";
 import { CapabilitiesPanel } from "../Account/CapabilitiesPanel";
 import { AccountsPanel } from "../System/SystemPanels";
@@ -107,6 +108,7 @@ function RiskRules() {
 
 export function MobileAccount() {
   const account = useAccountStore((s) => s.account);
+  const capsLine = capabilitiesSummaryLine(useAccountStore((s) => s.account?.capabilities));
   const { live } = useTradingMode();
   const [history, setHistory] = useState<PortfolioHistory | null>(null);
   const [period, setPeriod] = useState("1M");
@@ -144,7 +146,7 @@ export function MobileAccount() {
         </div>
       </div>
 
-      <Fold title="ACCOUNT CAPABILITIES" open>
+      <Fold title={"CAPABILITIES" + (capsLine ? ` · ${capsLine}` : "")} open>
         <CapabilitiesPanel touch />
       </Fold>
       <Fold title="RISK RULES (SERVER-ENFORCED)">

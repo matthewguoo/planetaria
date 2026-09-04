@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from app import bootstrap
+from app.api.routes.capabilities import router as capabilities_router
 from app.api.routes.market_data import router as market_router
 from app.api.routes.monitor import router as monitor_router
 from app.api.routes.options import router as options_router
@@ -92,6 +93,7 @@ app.add_middleware(
 # the real router would 500 against the missing app.state.
 app.include_router(trading_router)
 app.include_router(system_router)
+app.include_router(capabilities_router)
 if get_settings().trading_mode == "paper":
     app.include_router(strategies_router)
 else:

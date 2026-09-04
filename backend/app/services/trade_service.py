@@ -200,6 +200,7 @@ class TradeService:
         self.risk = risk
         self.fsm = PlanStateMachine(db, market.broadcast)
         self.enforcer = None  # set by ExitEnforcer at startup (circular)
+        self.capabilities = None  # CapabilitiesService, attached by bootstrap
         self._account_cache: tuple[float, dict] | None = None
         self._positions_cache: tuple[float, list[dict]] | None = None
         self._shortable_cache: dict[str, tuple[float, bool]] = {}
@@ -217,6 +218,11 @@ class TradeService:
                     "daytrade_count": 0, "status": "NO_KEYS",
                     "paper": paper, "mode": mode}
         acct = await self.alpaca.call(self.alpaca.trading.get_account, retries=1)
+
+        def _f(name: str) -> float | None:
+            v = getattr(acct, name, None)
+            return float(v) if v is not None else None
+
         out = {
             "equity": float(acct.equity),
             "cash": float(acct.cash),
@@ -225,6 +231,14 @@ class TradeService:
             "status": str(acct.status.value if hasattr(acct.status, "value") else acct.status),
             "paper": paper,
             "mode": mode,
+            # Broker facts the capabilities layer and the account page share.
+            "options_approved_level": getattr(acct, "options_approved_level", None),
+            "options_trading_level": getattr(acct, "options_trading_level", None),
+            "shorting_enabled": getattr(acct, "shorting_enabled", None),
+            "multiplier": _f("multiplier"),
+            "pattern_day_trader": getattr(acct, "pattern_day_trader", None),
+            "trading_blocked": getattr(acct, "trading_blocked", None),
+            "non_marginable_buying_power": _f("non_marginable_buying_power"),
         }
         self._account_cache = (time.monotonic(), out)
         return out
@@ -469,16 +483,23 @@ class TradeService:
                 raise ValueError(
                     "automation ids are not accepted on the live server - "
                     "manual entries only")
-            # The live account is options level 2: long single-leg only.
-            # Refuse here with a clear message instead of letting the broker
-            # reject the MLEG/short leg downstream.
+            # The live account's options level is whatever the capabilities
+            # probe VERIFIED (or the broker reports); unprobed, the floor is
+            # 2. Below 3, only long single-leg shapes pass. Refuse here with
+            # a clear message instead of letting the broker reject the
+            # MLEG/short leg downstream.
             if (payload.get("asset_class") or "option") == "option":
+                caps = self.capabilities
+                level = caps.options_ceiling() if caps is not None else 2
+                provenance = caps.level_provenance() if caps is not None else "unprobed default"
                 option_legs = payload.get("legs") or []
-                if len(option_legs) != 1 or any(
-                        int(leg.get("side", 0)) < 0 for leg in option_legs):
+                if level < 3 and (len(option_legs) != 1 or any(
+                        int(leg.get("side", 0)) < 0 for leg in option_legs)):
                     raise ValueError(
-                        "live account is options level 2 - long single-leg "
-                        "calls/puts only (no spreads, no short legs)")
+                        f"live account is options level {level} ({provenance}) - "
+                        "long single-leg calls/puts only (no spreads, no short "
+                        "legs); run the capabilities probe in RTH to verify a "
+                        "higher level")
 
         legs = payload["legs"]
         qty = int(payload["qty"])

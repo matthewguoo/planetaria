@@ -171,6 +171,21 @@ class _Running:
     last_event_mono: float | None = None
 
 
+
+def _options_capability(caps) -> dict:
+    """Multi-leg options need a verified level 3; unprobed accounts report
+    the broker's word (or the default) as such, never as a green light."""
+    if caps is None:
+        return {"met": True, "detail": "capabilities service absent - assuming multi-leg options"}
+    derived = (caps.summary() or {}).get("derived") or {}
+    level = derived.get("options_level")
+    provenance = caps.level_provenance()
+    if level is None:
+        return {"met": False, "detail": "options level unknown - run the capabilities probe"}
+    return {"met": int(level) >= 3,
+            "detail": f"options level {level} ({provenance})"
+                      + ("" if int(level) >= 3 else " - multi-leg structures will be refused")}
+
 class StrategyRunner:
     def __init__(self, db, bus: EventBus, store: SignalStore, trade, risk, market,
                  clock, settings, llm: LLMAnalyst | None = None):
@@ -956,7 +971,7 @@ class StrategyRunner:
             # outage would break replayability - log loudly.
             log.exception("DECISION JOURNAL WRITE FAILED (%s/%s)", row_id, action)
 
-    async def capability_state(self) -> dict:
+    async def capability_state(self) -> dict:  # noqa: D401
         """What the platform currently provides, against what strategies
         declare they need (Strategy.requires).
 
@@ -985,7 +1000,7 @@ class StrategyRunner:
                            else "equity_long_only is on — sells with no "
                                 "position are refused engine-wide"),
             },
-            "options": {"met": True, "detail": "account trades multi-leg options"},
+            "options": _options_capability(getattr(self.trade, "capabilities", None)),
             "llm": {
                 "met": bool(self.llm.configured),
                 "detail": (f"backend {getattr(self.settings, 'llm_backend', '?')}"
