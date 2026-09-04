@@ -126,6 +126,19 @@ async def actions_for(db, row_id) -> list[str]:
     return [r.action for r in rows]
 
 
+async def actions_once(db, row_id, predicate, timeout=3.0) -> list[str]:
+    """The journal for `row_id` once `predicate(actions)` holds (or the
+    deadline passes). A bus-driven decision journals AFTER the side effect
+    the test waited on (the placement, the strategy's event count), so
+    reading the journal the instant the effect appears is a race."""
+    deadline = asyncio.get_event_loop().time() + timeout
+    while True:
+        actions = await actions_for(db, row_id)
+        if predicate(actions) or asyncio.get_event_loop().time() >= deadline:
+            return actions
+        await asyncio.sleep(0.02)
+
+
 class TestRegistry:
     @pytest.mark.asyncio
     async def test_create_validates_kind_name_params(self, rig):
@@ -211,7 +224,7 @@ class TestIntentGate:
         payload = rig.trade.placed[0]
         assert payload["strategy"] == "placer"
         assert payload["underlying"] == "SPY"
-        actions = await actions_for(rig.db, row["id"])
+        actions = await actions_once(rig.db, row["id"], lambda a: "placed" in a)
         assert actions == ["intent", "placed"]
 
     @pytest.mark.asyncio
@@ -312,7 +325,7 @@ class TestCrashIsolation:
         assert await wait_for(lambda: len(strategy.events) == 1)
         rig.bus.publish(news_event(fine=True))  # loop must still be alive
         assert await wait_for(lambda: len(strategy.events) == 2)
-        assert "error" in await actions_for(rig.db, row["id"])
+        assert "error" in await actions_once(rig.db, row["id"], lambda a: "error" in a)
 
     @pytest.mark.asyncio
     async def test_sibling_unaffected_by_crash(self, rig):
