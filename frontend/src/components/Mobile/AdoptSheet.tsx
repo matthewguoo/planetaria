@@ -14,7 +14,7 @@ import { useAccountStore, useTradingMode } from "../../store/accountStore";
 import { Btn, Stepper } from "./MobileUi";
 import { Sheet } from "./Sheet";
 
-export function AdoptSheet({ pos, onClose }: { pos: UntrackedPosition; onClose: () => void }) {
+export function AdoptSheet({ pos, onClose, onChart }: { pos: UntrackedPosition; onClose: () => void; onChart?: (pos: UntrackedPosition) => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const risk = useAccountStore((s) => s.account?.risk);
@@ -51,7 +51,15 @@ export function AdoptSheet({ pos, onClose }: { pos: UntrackedPosition; onClose: 
   };
 
   return (
-    <Sheet title={`ADOPT · ${occLabel(pos)}`} onClose={onClose}>
+    <Sheet
+      title={`ADOPT · ${occLabel(pos)}`}
+      onClose={onClose}
+      right={onChart && (
+        <button className="h-9 border border-bb-border px-3 text-[11px] tracking-widest text-bb-muted active:text-bb-amber" onClick={() => onChart(pos)}>
+          CHART
+        </button>
+      )}
+    >
       <div className="flex flex-col gap-3 px-3 py-3">
         <div data-numeric className="flex gap-4 text-[12px] text-bb-muted">
           <span>×{pos.qty}</span>

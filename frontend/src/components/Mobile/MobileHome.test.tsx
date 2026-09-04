@@ -16,6 +16,7 @@ import {
   getAccountHistory,
   getHoldingDetail,
   getOpenOrders,
+  tightenExits,
   getSystemState,
   type Plan,
   type UntrackedPosition,
@@ -34,6 +35,7 @@ vi.mock("../../lib/api", async (importOriginal) => {
     getOpenOrders: vi.fn(),
     getHoldingDetail: vi.fn(),
     flattenAll: vi.fn(),
+    tightenExits: vi.fn(),
   };
 });
 
@@ -94,7 +96,7 @@ describe("MobileHome", () => {
   });
 
   it("renders the book as rows and opens the sheet with the contract details", async () => {
-    render(<MobileHome onChart={() => {}} onAdd={() => {}} onAccount={() => {}} />);
+    render(<MobileHome onChart={() => {}} onChartUntracked={() => {}} onAdd={() => {}} onAccount={() => {}} />);
     await flush();
     expect(screen.getByText("POSITIONS 1")).toBeTruthy();
     expect(screen.getByText("NVDA 09/04 230P")).toBeTruthy();
@@ -109,7 +111,7 @@ describe("MobileHome", () => {
   });
 
   it("partial close sends qty, type and limit only after CONFIRM", async () => {
-    render(<MobileHome onChart={() => {}} onAdd={() => {}} onAccount={() => {}} />);
+    render(<MobileHome onChart={() => {}} onChartUntracked={() => {}} onAdd={() => {}} onAccount={() => {}} />);
     await flush();
     fireEvent.click(screen.getByTestId(`position-${plan.id}`));
     await flush();
@@ -130,7 +132,7 @@ describe("MobileHome", () => {
   });
 
   it("ALL at market is the default close", async () => {
-    render(<MobileHome onChart={() => {}} onAdd={() => {}} onAccount={() => {}} />);
+    render(<MobileHome onChart={() => {}} onChartUntracked={() => {}} onAdd={() => {}} onAccount={() => {}} />);
     await flush();
     fireEvent.click(screen.getByTestId(`position-${plan.id}`));
     await flush();
@@ -142,8 +144,23 @@ describe("MobileHome", () => {
     expect(closePosition).toHaveBeenCalledWith(plan.id, { order_type: "market" });
   });
 
+  it("a plan with no stop can be given one from the sheet", async () => {
+    vi.mocked(tightenExits).mockResolvedValue(plan);
+    render(<MobileHome onChart={() => {}} onChartUntracked={() => {}} onAdd={() => {}} onAccount={() => {}} />);
+    await flush();
+    fireEvent.click(screen.getByTestId(`position-${plan.id}`));
+    await flush();
+    fireEvent.click(screen.getByText("ADD STOP"));
+    // seeded at basis minus the account default (50%): 2.07 -> 1.03, one 2% step up
+    fireEvent.click(screen.getByLabelText("STOP up"));
+    await act(async () => {
+      fireEvent.click(screen.getByText(/ADD STOP 1\.06/));
+    });
+    expect(tightenExits).toHaveBeenCalledWith(plan.id, { sl_premium: 1.05 });
+  });
+
   it("adopting shares sends an explicit stop and a dated time stop", async () => {
-    render(<MobileHome onChart={() => {}} onAdd={() => {}} onAccount={() => {}} />);
+    render(<MobileHome onChart={() => {}} onChartUntracked={() => {}} onAdd={() => {}} onAccount={() => {}} />);
     await flush();
     fireEvent.click(screen.getByTestId("untracked-PLTZ"));
     fireEvent.click(screen.getByLabelText("STOP % up"));

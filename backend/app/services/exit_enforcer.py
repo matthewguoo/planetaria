@@ -1692,6 +1692,12 @@ class ExitEnforcer:
         if plan.status not in OPEN_STATUSES:
             raise ValueError("plan is not open")
         fields: dict = {}
+        # A plan with NO stop (intrinsic cap / time-stop-only) may be GIVEN
+        # one here - that is a tightening, from unbounded to bounded. What it
+        # may not get is a target alone: the monitor spans TP-to-SL, and a
+        # target without a stop is not an exit plan (place_trade's rule).
+        if tp is not None and sl is None and plan.sl_premium is None:
+            raise ValueError("set a stop first - a target without a stop is not an exit plan")
         if tp is not None:
             if tp == plan.tp_premium:
                 raise ValueError("TP unchanged")

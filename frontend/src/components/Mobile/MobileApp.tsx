@@ -11,7 +11,7 @@
  */
 
 import { useRef, useState } from "react";
-import type { Plan } from "../../lib/api";
+import type { Plan, UntrackedPosition } from "../../lib/api";
 import { useDesigner } from "../../lib/useDesigner";
 import { useAccountStore, useTradingMode } from "../../store/accountStore";
 import { useEquityTicketStore } from "../../store/equityTicketStore";
@@ -137,6 +137,13 @@ export function MobileApp() {
     setReturnTab(tab);
     setTab("trade");
   };
+  /** CHART for an untracked broker position: its underlying, options or shares mode, no plan to view. */
+  const chartForUntracked = (pos: UntrackedPosition) => {
+    setSymbol(pos.occ ? pos.occ.underlying : pos.symbol);
+    setAssetMode(pos.occ ? "options" : "equity");
+    setReturnTab(tab);
+    setTab("trade");
+  };
   /** ADD from a position sheet: the ticket staged on the plan's structure. */
   const addTo = (plan: Plan) => {
     setSymbol(plan.underlying);
@@ -180,7 +187,7 @@ export function MobileApp() {
       <MobileHeader />
       <EnforcementBanner />
 
-      {tab === "home" && <MobileHome onChart={chartFor} onAdd={addTo} onAccount={() => setTab("account")} />}
+      {tab === "home" && <MobileHome onChart={chartFor} onChartUntracked={chartForUntracked} onAdd={addTo} onAccount={() => setTab("account")} />}
 
       {/* TRADE: chart + dock. Kept mounted (hidden) under the other tabs. */}
       <div className={"flex min-h-0 flex-1 flex-col" + (tab === "trade" ? "" : " hidden")}>

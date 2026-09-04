@@ -98,10 +98,18 @@ export function PositionSheet({
   const [orderType, setOrderType] = useState<"market" | "limit">("market");
   const [limit, setLimit] = useState(Number(Math.abs(plan.mark ?? basis).toFixed(2)));
   const all = qty >= held;
-  // exits form state
-  const [sl, setSl] = useState(plan.sl_premium ?? 0);
+  // exits form state. A plan with no stop yet (intrinsic cap, time-stop-only)
+  // can be GIVEN one here; the steppers seed at a sane default and APPLY
+  // sends whatever differs from the plan. Target 0 = none.
+  const defaultSl = useAccountStore((s) => s.account?.risk?.default_sl_pct) ?? 0.5;
+  const seedSl = plan.sl_premium ?? Number((basis - Math.abs(basis) * (option ? defaultSl : 0.1)).toFixed(2));
+  const [sl, setSl] = useState(seedSl);
   const [tp, setTp] = useState(plan.tp_premium ?? 0);
   const step = Math.max(0.01, Math.abs(basis) * 0.01);
+  const exitsPatch = () => ({
+    ...(plan.sl_premium == null || sl !== plan.sl_premium ? { sl_premium: Number(sl.toFixed(2)) } : {}),
+    ...(tp > 0 && tp !== plan.tp_premium ? { tp_premium: Number(tp.toFixed(2)) } : {}),
+  });
 
   const act = async (fn: () => Promise<unknown>, done?: () => void) => {
     setBusy(true);
@@ -156,7 +164,9 @@ export function PositionSheet({
           CLOSE
         </Btn>
         <Btn className="flex-1" disabled={!addAllowed} onClick={() => onAdd(plan)}>ADD</Btn>
-        <Btn className="flex-1" disabled={plan.sl_premium == null} onClick={() => setMode(mode === "exits" ? null : "exits")}>EXITS</Btn>
+        <Btn className="flex-1" disabled={!["partially_filled", "filled"].includes(plan.status)} onClick={() => setMode(mode === "exits" ? null : "exits")}>
+          {plan.sl_premium == null ? "ADD STOP" : "EXITS"}
+        </Btn>
       </div>
 
       {mode === "close" && (
@@ -196,23 +206,23 @@ export function PositionSheet({
         </div>
       )}
 
-      {mode === "exits" && plan.sl_premium != null && (
+      {mode === "exits" && (
         <div className="mx-3 mb-2 flex flex-col gap-2 border border-bb-border p-2">
           <Stepper label="STOP" value={sl} set={setSl} step={step} min={0} format={(v) => Math.abs(v).toFixed(2)} />
-          {plan.tp_premium != null && <Stepper label="TARGET" value={tp} set={setTp} step={step} min={0} format={(v) => Math.abs(v).toFixed(2)} />}
+          <Stepper label="TARGET (0 = none)" value={tp} set={setTp} step={step} min={0} format={(v) => (v > 0 ? Math.abs(v).toFixed(2) : "—")} />
           <div data-numeric className="text-[11px] text-bb-muted">
             at stop <span className="text-bb-loss">-${(Math.max(basis - sl, 0) * mult * held).toFixed(0)}</span>
+            {plan.sl_premium == null && <span className="ml-2 text-bb-amber">adds a stop · only tightens from here</span>}
           </div>
           <div className="flex gap-1">
-            <Btn kind="primary" className="flex-[2]" disabled={busy} onClick={() => act(() => tightenExits(plan.id, {
-              ...(sl !== plan.sl_premium ? { sl_premium: Number(sl.toFixed(2)) } : {}),
-              ...(plan.tp_premium != null && tp !== plan.tp_premium ? { tp_premium: Number(tp.toFixed(2)) } : {}),
-            }), () => setMode(null))}>
-              {busy ? "…" : "APPLY"}
+            <Btn kind="primary" className="flex-[2]" disabled={busy || Object.keys(exitsPatch()).length === 0} onClick={() => act(() => tightenExits(plan.id, exitsPatch()), () => setMode(null))}>
+              {busy ? "…" : plan.sl_premium == null ? `ADD STOP ${Math.abs(sl).toFixed(2)}` : "APPLY"}
             </Btn>
-            <Btn className="flex-1" onClick={() => act(() => tightenExits(plan.id, { sl_premium: Number((((plan.sl_premium ?? 0) + (plan.mark ?? basis)) / 2).toFixed(2)) }))}>
-              SL ▲ ½
-            </Btn>
+            {plan.sl_premium != null && (
+              <Btn className="flex-1" onClick={() => act(() => tightenExits(plan.id, { sl_premium: Number((((plan.sl_premium ?? 0) + (plan.mark ?? basis)) / 2).toFixed(2)) }))}>
+                SL ▲ ½
+              </Btn>
+            )}
           </div>
         </div>
       )}

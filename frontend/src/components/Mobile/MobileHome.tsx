@@ -130,8 +130,9 @@ function Section({ title, right, children }: { title: string; right?: React.Reac
   );
 }
 
-export function MobileHome({ onChart, onAdd, onAccount }: {
+export function MobileHome({ onChart, onChartUntracked, onAdd, onAccount }: {
   onChart: (plan: Plan) => void;
+  onChartUntracked: (pos: UntrackedPosition) => void;
   onAdd: (plan: Plan) => void;
   onAccount: () => void;
 }) {
@@ -293,7 +294,7 @@ export function MobileHome({ onChart, onAdd, onAccount }: {
           onAdd={(p) => { setSheet(null); onAdd(p); }}
         />
       )}
-      {sheetPos && <AdoptSheet pos={sheetPos} onClose={() => setSheet(null)} />}
+      {sheetPos && <AdoptSheet pos={sheetPos} onClose={() => setSheet(null)} onChart={(u) => { setSheet(null); onChartUntracked(u); }} />}
     </div>
   );
 }
