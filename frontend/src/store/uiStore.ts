@@ -28,6 +28,9 @@ type UiState = {
   view: View;
   /** Plan id the chart is viewing; null = designer mode. */
   viewingPlanId: string | null;
+  /** Untracked broker position (symbol) the terminal is inspecting: the
+   * chart on its underlying, the position panel with its details + adopt. */
+  viewingUntracked: string | null;
   /** Snapshot of a CLOSED plan being viewed (history rows aren't in the
    * positions store); live plans resolve from positions by id instead. */
   viewedHistorical: Plan | null;
@@ -37,6 +40,7 @@ type UiState = {
   chainOpen: boolean;
   setView: (view: View) => void;
   viewPosition: (planId: string) => void;
+  viewUntracked: (symbol: string) => void;
   viewHistorical: (plan: Plan) => void;
   closePositionView: () => void;
   setPnlMode: (mode: PnlMode) => void;
@@ -51,7 +55,7 @@ type UiState = {
  * rail, symbol search, mobile sheets) inherits the behavior. */
 export function exitPositionViewOnAction(): void {
   const s = useUiStore.getState();
-  if (s.viewingPlanId) s.closePositionView();
+  if (s.viewingPlanId || s.viewingUntracked) s.closePositionView();
 }
 
 export const useUiStore = create<UiState>((set) => ({
@@ -59,16 +63,19 @@ export const useUiStore = create<UiState>((set) => ({
   // holding. The terminal bundle overrides this to "terminal" at boot.
   view: "fund",
   viewingPlanId: null,
+  viewingUntracked: null,
   viewedHistorical: null,
   pnlMode: "live",
   chainOpen: false,
   setView: (view) => set({ view }),
   viewPosition: (planId) =>
-    set({ viewingPlanId: planId, viewedHistorical: null, view: "terminal" }),
+    set({ viewingPlanId: planId, viewingUntracked: null, viewedHistorical: null, view: "terminal" }),
+  viewUntracked: (symbol) =>
+    set({ viewingPlanId: null, viewingUntracked: symbol, viewedHistorical: null, view: "terminal" }),
   viewHistorical: (plan) =>
     // Closed trades are frozen facts: always the entry-basis projection.
-    set({ viewingPlanId: plan.id, viewedHistorical: plan, view: "terminal", pnlMode: "entry" }),
-  closePositionView: () => set({ viewingPlanId: null, viewedHistorical: null }),
+    set({ viewingPlanId: plan.id, viewingUntracked: null, viewedHistorical: plan, view: "terminal", pnlMode: "entry" }),
+  closePositionView: () => set({ viewingPlanId: null, viewingUntracked: null, viewedHistorical: null }),
   setPnlMode: (pnlMode) => set({ pnlMode }),
   toggleChain: () => set((s) => ({ chainOpen: !s.chainOpen })),
 }));

@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import {
-  adoptPositions,
   apiError,
   closePosition,
   flattenAll,
@@ -268,16 +267,24 @@ function PositionRow({ plan }: { plan: Plan }) {
 }
 
 function UntrackedRow({ pos }: { pos: UntrackedPosition }) {
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const refreshPositions = useAccountStore((s) => s.refreshPositions);
-
+  const viewUntracked = useUiStore((s) => s.viewUntracked);
+  const setSymbol = useTradingStore((s) => s.setSymbol);
+  const setAssetMode = useTradingStore((s) => s.setAssetMode);
   const label = pos.occ
     ? `${pos.occ.underlying} ${pos.occ.expiry.slice(5)} ${pos.occ.strike}${pos.occ.right}`
     : pos.symbol;
+  const open = () => {
+    setSymbol(pos.occ ? pos.occ.underlying : pos.symbol);
+    setAssetMode(pos.occ ? "options" : "equity");
+    viewUntracked(pos.symbol);
+  };
 
   return (
-    <tr className="border-b border-bb-border/50 bg-bb-orange/5 hover:bg-bb-hover">
+    <tr
+      className="cursor-pointer border-b border-bb-border/50 bg-bb-orange/5 hover:bg-bb-hover"
+      onClick={open}
+      title="Open this position: chart on its underlying, details and adoption below"
+    >
       <td className="px-2 py-1 text-white">
         {label}
         <span className="ml-1 text-[9px] text-bb-orange">UNTRACKED</span>
@@ -291,43 +298,20 @@ function UntrackedRow({ pos }: { pos: UntrackedPosition }) {
       <td data-numeric className={"px-2 py-1 text-right " + pnlCls(pos.unrealized_pl)}>
         {fmtUsd(pos.unrealized_pl, true)}
       </td>
-      <td className="px-2 py-1 text-center text-bb-muted" colSpan={4}>
-        no exit plan — adopt to enable TP/SL/time-stop enforcement
+      <td className="px-2 py-1 text-center text-bb-loss" colSpan={4}>
+        no stop
       </td>
       <td className="px-2 py-1 text-right">
-        {pos.occ ? (
-          <button
-            className="border border-bb-amber px-1.5 text-[10px] text-bb-amber hover:bg-bb-amber hover:text-black"
-            disabled={busy}
-            title="Create a managed trade plan (server-enforced TP/SL/time stop) for this position"
-            onClick={async () => {
-              setBusy(true);
-              setError(null);
-              try {
-                await adoptPositions([pos.symbol]);
-                await refreshPositions();
-              } catch (err) {
-                setError(apiError(err));
-              } finally {
-                setBusy(false);
-              }
-            }}
-          >
-            {busy ? "…" : "ADOPT"}
-          </button>
-        ) : (
-          <span
-            className="text-[9px] text-bb-muted"
-            title="Shares adopt from the phone view (narrow the window under 640px or open on the phone): it asks for the stop %, target and time stop instead of applying option defaults"
-          >
-            ADOPT: PHONE VIEW
-          </span>
-        )}
-        {error && (
-          <div className="max-w-[160px] truncate text-[9px] text-bb-loss" title={error}>
-            {error}
-          </div>
-        )}
+        <button
+          className="border border-bb-amber px-1.5 text-[10px] text-bb-amber hover:bg-bb-amber hover:text-black"
+          title="Put this position under the enforcer: stop, target, time stop"
+          onClick={(e) => {
+            e.stopPropagation();
+            open();
+          }}
+        >
+          ADOPT
+        </button>
       </td>
     </tr>
   );

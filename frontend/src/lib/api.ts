@@ -379,6 +379,11 @@ export type AccountRisk = {
     /** Share plans with no stop: exposed notional, never summed into max loss. */
     unstopped_notional_dollars: number;
     unstopped_plans: number;
+    /** Broker positions no plan owns: long option premium (in max loss) and share notional. */
+    untracked_premium_dollars: number;
+    untracked_premium_positions: number;
+    untracked_notional_dollars: number;
+    untracked_share_positions: number;
   };
   greeks: {
     delta_dollars: number;

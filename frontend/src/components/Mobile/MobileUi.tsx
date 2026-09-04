@@ -8,10 +8,12 @@ import { useAccountStore } from "../../store/accountStore";
 
 /** Big touch button; `danger` = red fill, `primary` = amber fill. */
 export function Btn({
-  children, onClick, kind = "ghost", disabled, className = "",
+  children, onClick, kind = "ghost", disabled, className = "", touch = true,
 }: {
   children: React.ReactNode; onClick: () => void; kind?: "ghost" | "danger" | "primary" | "outline-danger";
   disabled?: boolean; className?: string;
+  /** false = the compact desktop size. */
+  touch?: boolean;
 }) {
   const cls = {
     ghost: "border border-bb-border text-bb-muted active:text-bb-amber",
@@ -23,7 +25,7 @@ export function Btn({
     <button
       disabled={disabled}
       onClick={onClick}
-      className={`h-11 px-3 text-[12px] tracking-wider disabled:opacity-40 ${cls} ${className}`}
+      className={`${touch ? "h-11 px-3 text-[12px]" : "h-7 px-2 text-[10px]"} tracking-wider disabled:opacity-40 ${cls} ${className}`}
     >
       {children}
     </button>
@@ -31,27 +33,28 @@ export function Btn({
 }
 
 export function Stepper({
-  label, value, set, step, unit = "", min, max, format,
+  label, value, set, step, unit = "", min, max, format, touch = true,
 }: {
   label: string; value: number; set: (v: number) => void; step: number; unit?: string;
-  min: number; max?: number; format?: (v: number) => string;
+  min: number; max?: number; format?: (v: number) => string; touch?: boolean;
 }) {
   const clamp = (v: number) => Math.min(max ?? Infinity, Math.max(min, Number(v.toFixed(2))));
+  const btn = (touch ? "h-10 w-10 text-[16px]" : "h-7 w-7 text-[13px]") + " border border-bb-border text-bb-muted hover:text-bb-amber active:bg-bb-amber active:text-black";
   return (
     <div className="flex items-center justify-between">
-      <span className="text-[12px] text-bb-muted">{label}</span>
+      <span className={(touch ? "text-[12px]" : "text-[10px]") + " text-bb-muted"}>{label}</span>
       <span className="flex items-center gap-1">
-        <button className="h-10 w-10 border border-bb-border text-[16px] text-bb-muted active:bg-bb-amber active:text-black" onClick={() => set(clamp(value - step))} aria-label={`${label} down`}>−</button>
-        <span data-numeric className="w-20 text-center text-[15px] text-white">{format ? format(value) : `${value}${unit}`}</span>
-        <button className="h-10 w-10 border border-bb-border text-[16px] text-bb-muted active:bg-bb-amber active:text-black" onClick={() => set(clamp(value + step))} aria-label={`${label} up`}>+</button>
+        <button className={btn} onClick={() => set(clamp(value - step))} aria-label={`${label} down`}>−</button>
+        <span data-numeric className={(touch ? "w-20 text-[15px]" : "w-16 text-[12px]") + " text-center text-white"}>{format ? format(value) : `${value}${unit}`}</span>
+        <button className={btn} onClick={() => set(clamp(value + step))} aria-label={`${label} up`}>+</button>
       </span>
     </div>
   );
 }
 
 /** Two-way segmented control. */
-export function Seg<T extends string>({ value, options, onChange, danger = false }: {
-  value: T; options: readonly { id: T; label: string }[]; onChange: (v: T) => void; danger?: boolean;
+export function Seg<T extends string>({ value, options, onChange, danger = false, touch = true }: {
+  value: T; options: readonly { id: T; label: string }[]; onChange: (v: T) => void; danger?: boolean; touch?: boolean;
 }) {
   return (
     <span className="flex gap-px">
@@ -60,7 +63,7 @@ export function Seg<T extends string>({ value, options, onChange, danger = false
           key={o.id}
           onClick={() => onChange(o.id)}
           className={
-            "h-10 flex-1 px-3 text-[11px] tracking-widest " +
+            (touch ? "h-10 px-3 text-[11px]" : "h-7 px-2 text-[10px]") + " flex-1 tracking-widest " +
             (value === o.id
               ? (danger ? "bg-bb-loss" : "bg-bb-amber") + " font-semibold text-black"
               : "border border-bb-border text-bb-muted")

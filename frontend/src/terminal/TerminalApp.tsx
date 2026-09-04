@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { getFeedSettings } from "../lib/api";
+import { getFeedSettings, type Plan } from "../lib/api";
 import { AccountPage } from "../components/Account/AccountPage";
 import { EnforcementBanner } from "../components/EnforcementBanner";
 import { TerminalHeader } from "../components/TerminalHeader";
@@ -12,6 +12,7 @@ import { sharedBars } from "../lib/chartShared";
 import { MobileApp } from "../components/Mobile/MobileApp";
 import { OverviewPage } from "../components/Overview/OverviewPage";
 import { EquityTicket } from "../components/Panels/EquityTicket";
+import { PositionPanel } from "../components/Position/PositionPanel";
 import { OrderPanel } from "../components/Panels/OrderPanel";
 import { SizingPanel } from "../components/Panels/SizingPanel";
 import { StrategyPanel } from "../components/Panels/StrategyPanel";
@@ -20,6 +21,7 @@ import StrategiesPage from "../components/Strategies/StrategiesPage";
 import { useDesigner } from "../lib/useDesigner";
 import { useAccountStore } from "../store/accountStore";
 import { useStrategyStore } from "../store/strategyStore";
+import { useEquityTicketStore } from "../store/equityTicketStore";
 import { useTradingStore } from "../store/tradingStore";
 import { useUiStore } from "../store/uiStore";
 
@@ -96,6 +98,23 @@ export default function TerminalApp() {
   const view = useUiStore((s) => s.view);
   const chainOpen = useUiStore((s) => s.chainOpen);
   const viewPosition = useUiStore((s) => s.viewPosition);
+  const viewUntracked = useUiStore((s) => s.viewUntracked);
+  const inPositionView = useUiStore((s) => s.viewingPlanId != null || s.viewingUntracked != null);
+  const prefillFromPlan = useStrategyStore((s) => s.prefillFromPlan);
+  const equityTicket = useEquityTicketStore();
+  /** ADD from the position panel: the ticket staged on the plan's structure. */
+  const addTo = (plan: Plan) => {
+    setSymbol(plan.underlying);
+    if (plan.asset_class === "equity") {
+      setAssetMode("equity");
+      equityTicket.setSide(plan.legs[0].side > 0 ? 1 : -1);
+      equityTicket.setSharesOverride(plan.filled_qty || plan.qty);
+    } else {
+      setAssetMode("options");
+      prefillFromPlan(plan);
+    }
+    useUiStore.getState().closePositionView();
+  };
   const setSymbol = useTradingStore((s) => s.setSymbol);
   const assetMode = useTradingStore((s) => s.assetMode);
   const setAssetMode = useTradingStore((s) => s.setAssetMode);
@@ -118,7 +137,7 @@ export default function TerminalApp() {
             setSymbol(h.underlying);
             setAssetMode(h.occ ? "options" : "equity");
             if (h.plan_id) viewPosition(h.plan_id);
-            else setView("terminal");
+            else viewUntracked(h.symbol);
           }}
           onProtect={() => setView("account")}
         />
@@ -126,7 +145,13 @@ export default function TerminalApp() {
         <AccountPage
           onViewPlan={(plan) => {
             setSymbol(plan.underlying);
+            setAssetMode(plan.asset_class === "equity" ? "equity" : "options");
             viewPosition(plan.id);
+          }}
+          onViewUntracked={(pos) => {
+            setSymbol(pos.occ ? pos.occ.underlying : pos.symbol);
+            setAssetMode(pos.occ ? "options" : "equity");
+            viewUntracked(pos.symbol);
           }}
         />
       ) : view === "strategies" ? (
@@ -178,7 +203,9 @@ export default function TerminalApp() {
 
           <PositionsDrawer />
 
-          {optionsMode ? (
+          {inPositionView ? (
+            <PositionPanel onAdd={addTo} />
+          ) : optionsMode ? (
             <section className="grid max-h-[40vh] shrink-0 auto-rows-[16rem] grid-cols-2 gap-px overflow-y-auto xl:grid-cols-3">
               <StrategyPanel designer={designer} />
               <SizingPanel designer={designer} />

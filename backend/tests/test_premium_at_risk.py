@@ -86,3 +86,45 @@ def test_merge_holdings_carries_protection_tri_state():
     assert rows["NVDA260904P00230000"]["protected"] is False
     assert rows["AVGG"]["protection"] == "stop" and rows["AVGG"]["protected"] is True
     assert rows["SPCU"]["protection"] == "none" and rows["SPCU"]["plan_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_snapshot_counts_untracked_long_option_premium():
+    """A long option held outside any plan is its whole premium at risk; a
+    share position is a notional nothing will exit. Both are the account,
+    not the plans the engine owns."""
+    from types import SimpleNamespace
+
+    from app.services.portfolio_risk import PortfolioRisk
+
+    class Risk:
+        async def open_plans(self):
+            return []
+
+    class Trade:
+        risk = Risk()
+
+        async def get_account(self):
+            return {"equity": 10_000.0}
+
+        async def untracked_positions(self, plans=None):
+            return [
+                {"symbol": "NVDA260904P00230000", "qty": 1.0, "asset_class": "option", "avg_entry_price": 2.07},
+                {"symbol": "AVGG", "qty": 100.0, "asset_class": "stock", "avg_entry_price": 24.73},
+                {"symbol": "SPY260918C00700000", "qty": -1.0, "asset_class": "option", "avg_entry_price": 1.0},
+            ]
+
+    market = SimpleNamespace(spot=lambda s: None, latest_quote=lambda s: None)
+    pr = PortfolioRisk(Trade(), market)
+
+    async def no_closes(symbol):
+        return []
+
+    pr.daily_closes = no_closes
+    snap = await pr._build()
+    t = snap["total"]
+    assert t["untracked_premium_dollars"] == pytest.approx(207.0)
+    assert t["untracked_premium_positions"] == 1          # the short call is not premium-capped
+    assert t["untracked_notional_dollars"] == pytest.approx(2473.0)
+    assert t["max_loss_dollars"] == pytest.approx(207.0)
+    assert t["max_loss_pct"] == pytest.approx(2.07)

@@ -256,6 +256,28 @@ class PortfolioRisk:
         equity = float(account.get("equity") or 0.0)
         now_ms = time.time() * 1000
 
+        # Untracked broker positions are exposed too: a long option held
+        # outside any plan is its whole premium at risk; shares are a notional
+        # nothing will exit. Counted here so MAX LOSS is the account, not the
+        # plans the engine happens to own.
+        untracked_premium = 0.0
+        untracked_premium_count = 0
+        untracked_notional = 0.0
+        untracked_share_count = 0
+        try:
+            fetch = getattr(self.trade, "untracked_positions", None)
+            for pos in (await fetch(plans)) if fetch is not None else []:
+                qty = abs(float(pos.get("qty") or 0))
+                basis = abs(float(pos.get("avg_entry_price") or 0))
+                if pos.get("asset_class") == "option" and float(pos.get("qty") or 0) > 0:
+                    untracked_premium += basis * 100 * qty
+                    untracked_premium_count += 1
+                elif pos.get("asset_class") == "stock":
+                    untracked_notional += basis * qty
+                    untracked_share_count += 1
+        except Exception:  # noqa: BLE001
+            log.warning("untracked positions unavailable for the risk snapshot", exc_info=True)
+
         per_plan: list[dict] = []
         premium_total = 0.0
         premium_plans = 0
@@ -368,8 +390,12 @@ class PortfolioRisk:
                 "premium_at_risk_dollars": round(premium_total, 2),
                 "premium_at_risk_pct": pct(premium_total),
                 "premium_at_risk_plans": premium_plans,
-                "max_loss_dollars": round(total_dollars + premium_total, 2),
-                "max_loss_pct": pct(total_dollars + premium_total),
+                "untracked_premium_dollars": round(untracked_premium, 2),
+                "untracked_premium_positions": untracked_premium_count,
+                "untracked_notional_dollars": round(untracked_notional, 2),
+                "untracked_share_positions": untracked_share_count,
+                "max_loss_dollars": round(total_dollars + premium_total + untracked_premium, 2),
+                "max_loss_pct": pct(total_dollars + premium_total + untracked_premium),
                 "unstopped_notional_dollars": round(unstopped_total, 2),
                 "unstopped_plans": unstopped_plans,
             },

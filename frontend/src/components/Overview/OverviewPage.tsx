@@ -135,6 +135,7 @@ export function OverviewPage({
               [
                 risk ? `${fmtUsd(risk.total.risk_dollars)} @ stops` : "",
                 premiumAtRisk > 0 ? `+${fmtUsd(premiumAtRisk)} premium` : "",
+                risk && risk.total.untracked_premium_dollars > 0 ? `+${fmtUsd(risk.total.untracked_premium_dollars)} untracked` : "",
                 unprotected ? `${unprotected} unprotected` : "",
               ].filter(Boolean).join(" · "),
               unprotected ? "text-bb-loss" : "text-bb-orange",

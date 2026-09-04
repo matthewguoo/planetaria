@@ -6,7 +6,6 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  adoptPositions,
   apiError,
   cancelOpenOrder,
   closePosition,
@@ -20,6 +19,7 @@ import {
   type OpenOrder,
   type Plan,
   type PortfolioHistory,
+  type UntrackedPosition,
 } from "../../lib/api";
 import { fmtUsd, pnlCls } from "../../lib/format";
 import { usePoll } from "../../lib/usePoll";
@@ -55,8 +55,10 @@ function RiskPanel({ risk }: { risk: AccountRisk | null }) {
      "Largest single underlying's share of total stop risk"],
     ["PREMIUM AT RISK", `${fmtUsd(risk.total.premium_at_risk_dollars)}${risk.total.premium_at_risk_pct != null ? ` · ${risk.total.premium_at_risk_pct.toFixed(1)}%` : ""}`,
      "text-bb-amber", "Long options held with NO stop: the whole debit paid is the maximum loss (intrinsic cap)"],
+    ["UNTRACKED", `${fmtUsd(risk.total.untracked_premium_dollars)}${risk.total.untracked_notional_dollars > 0 ? ` + ${fmtUsd(risk.total.untracked_notional_dollars)} sh` : ""}`,
+     "text-bb-loss", "Broker positions no plan owns: long option premium (counted in MAX LOSS) and share notional (nothing will exit it)"],
     ["MAX LOSS", `${fmtUsd(risk.total.max_loss_dollars)}${risk.total.max_loss_pct != null ? ` · ${risk.total.max_loss_pct.toFixed(1)}%` : ""}`,
-     "text-bb-loss", "Stops + premium at risk: the most every open position can lose together"],
+     "text-bb-loss", "Stops + premium at risk (managed and untracked long options): the most the account can lose together"],
     ["NET Δ$", fmtSigned(g.delta_dollars), pnlCls(g.delta_dollars),
      "Net delta dollars: P/L per +100% underlying move; sign = direction"],
     ["β-WTD Δ$ (SPY)", fmtSigned(g.beta_weighted_delta_dollars), pnlCls(g.beta_weighted_delta_dollars),
@@ -315,7 +317,7 @@ export function EquityCurve({ history }: { history: PortfolioHistory | null }) {
 /** `onViewPlan` hands a position off to the chart. The terminal shell passes
  * it; the ops console has no chart, so it passes nothing and the row simply
  * stops being clickable — the page itself stays shell-agnostic. */
-export function AccountPage({ onViewPlan }: { onViewPlan?: (plan: Plan) => void } = {}) {
+export function AccountPage({ onViewPlan, onViewUntracked }: { onViewPlan?: (plan: Plan) => void; onViewUntracked?: (pos: UntrackedPosition) => void } = {}) {
   const { live } = useTradingMode();
   const account = useAccountStore((s) => s.account);
   const positions = useAccountStore((s) => s.positions);
@@ -393,7 +395,12 @@ export function AccountPage({ onViewPlan }: { onViewPlan?: (plan: Plan) => void 
               + {fmtUsd(risk.total.premium_at_risk_dollars)} premium · {risk.total.premium_at_risk_plans} long option{risk.total.premium_at_risk_plans > 1 ? "s" : ""}, no stop
             </span>
           )}
-          {risk && risk.total.premium_at_risk_dollars > 0 && (
+          {risk && risk.total.untracked_premium_dollars > 0 && (
+            <span data-numeric className="text-[10px] text-bb-loss">
+              + {fmtUsd(risk.total.untracked_premium_dollars)} untracked option{risk.total.untracked_premium_positions > 1 ? "s" : ""} · no plan at all
+            </span>
+          )}
+          {risk && risk.total.max_loss_dollars > risk.total.risk_dollars && (
             <span data-numeric className="text-[11px] text-bb-loss">
               MAX LOSS {fmtUsd(risk.total.max_loss_dollars)}
               {risk.total.max_loss_pct != null ? ` · ${risk.total.max_loss_pct.toFixed(1)}%` : ""}
@@ -533,7 +540,11 @@ export function AccountPage({ onViewPlan }: { onViewPlan?: (plan: Plan) => void 
               </tr>
             ))}
             {untracked.map((p) => (
-              <tr key={p.symbol} className="border-b border-bb-border/50 bg-bb-orange/5">
+              <tr
+                key={p.symbol}
+                className={"border-b border-bb-border/50 bg-bb-orange/5 " + (onViewUntracked ? "cursor-pointer hover:bg-bb-hover" : "")}
+                onClick={onViewUntracked ? () => onViewUntracked(p) : undefined}
+              >
                 <td className="px-2 py-1 text-white">
                   {p.symbol}
                   <span className="ml-1 text-[9px] text-bb-orange">UNTRACKED</span>
@@ -552,24 +563,13 @@ export function AccountPage({ onViewPlan }: { onViewPlan?: (plan: Plan) => void 
                   —
                 </td>
                 <td className="px-2 py-1 text-right">
-                  {!p.occ && (
-                    <span
-                      className="text-[9px] text-bb-muted"
-                      title="Shares adopt from the phone view (window under 640px, or the phone): it asks for stop %, target and time stop instead of applying option defaults"
-                    >
-                      ADOPT: PHONE VIEW
-                    </span>
-                  )}
-                  {p.occ && (
+                  {onViewUntracked && (
                     <button
                       className="border border-bb-amber px-1.5 text-[10px] text-bb-amber hover:bg-bb-amber hover:text-black"
-                      onClick={async () => {
-                        try {
-                          await adoptPositions([p.symbol]);
-                          await refreshPositions();
-                        } catch (err) {
-                          setError(apiError(err));
-                        }
+                      title="Open this position in the terminal: chart on its underlying, details, and adoption (stop, target, time stop)"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onViewUntracked(p);
                       }}
                     >
                       ADOPT
