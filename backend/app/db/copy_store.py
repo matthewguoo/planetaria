@@ -170,6 +170,9 @@ async def run(source_url: str, target_url: str, *, dry_run: bool, verify: bool, 
                 tgt_counts = await table_counts(probe, tables)
                 log.info("target %s: %s (rev %s)", target_url.split("@")[-1], tgt_counts,
                          await stamped_revision(probe))
+            except Exception as exc:  # noqa: BLE001  (a missing database is the usual pre-cutover state)
+                log.info("target %s: not reachable yet (%s) - the copy will create the schema once the database exists",
+                         target_url.split("@")[-1], str(exc).splitlines()[0][:120])
             finally:
                 await probe.dispose()
             log.info("dry-run: nothing written")
