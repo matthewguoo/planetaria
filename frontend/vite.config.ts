@@ -30,6 +30,9 @@ const cleanTerminalPath = {
       if (req.url === "/terminal" || req.url?.startsWith("/terminal?")) {
         req.url = req.url.replace("/terminal", "/terminal.html");
       }
+      if (req.url === "/admin" || req.url?.startsWith("/admin?")) {
+        req.url = req.url.replace("/admin", "/admin.html");
+      }
       next();
     });
   },
@@ -39,7 +42,7 @@ export default defineConfig({
   plugins: [react(), cleanTerminalPath],
   build: {
     target: "esnext",
-    rollupOptions: { input: { main: "index.html", terminal: "terminal.html" } },
+    rollupOptions: { input: { main: "index.html", terminal: "terminal.html", admin: "admin.html" } },
   },
   // PORT env (when set) wins so parallel dev servers don't fight over 5173.
   server: { port: Number(process.env.PORT) || 5173, strictPort: true, proxy, allowedHosts: true },

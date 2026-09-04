@@ -789,6 +789,27 @@ export type MonitorSnapshot = {
   calls: MonitorCall[];
 };
 
+/** The server administration window (admin.html): one summary, the
+ * cross-plan journal, the log tail. Read-only. */
+export type AdminSummary = {
+  server: {
+    mode: TradingMode; paper: boolean; account: string | null; host: string; pid: number; port: number | null;
+    started_at: string; uptime_s: number; version: string | null; python: string; log_file: string | null;
+  };
+  process: { cpu_pct: number | null; rss_mb: number | null; tasks: number; threads: number | null };
+  account: Partial<Account> & { error?: string };
+  open_plans: number;
+  calls: { counts: Record<string, number>; errors: Record<string, number>; buffered: number };
+  last_error: MonitorCall | null;
+  capabilities: CapabilitiesSummary | null;
+  system: Partial<SystemState> & { error?: string };
+};
+export const getAdminSummary = () => api.get<AdminSummary>("/api/admin/summary").then((r) => r.data);
+export const getAdminEvents = (limit = 60) =>
+  api.get<{ events: PlanEvent[] }>("/api/admin/events", { params: { limit } }).then((r) => r.data.events);
+export const getAdminLog = (lines = 80) =>
+  api.get<{ path: string | null; lines: string[] }>("/api/admin/log", { params: { lines } }).then((r) => r.data);
+
 export const getMonitorCalls = (category?: string, limit = 80) =>
   api
     .get<MonitorSnapshot>("/api/monitor/calls", { params: { category, limit } })

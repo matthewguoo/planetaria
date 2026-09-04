@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from app import bootstrap
+from app.api.routes.admin import router as admin_router
 from app.api.routes.capabilities import router as capabilities_router
 from app.api.routes.market_data import router as market_router
 from app.api.routes.monitor import router as monitor_router
@@ -94,6 +95,7 @@ app.add_middleware(
 app.include_router(trading_router)
 app.include_router(system_router)
 app.include_router(capabilities_router)
+app.include_router(admin_router)
 if get_settings().trading_mode == "paper":
     app.include_router(strategies_router)
 else:
@@ -136,6 +138,12 @@ if not get_settings().headless and _dist.is_dir():
     @app.get("/terminal", include_in_schema=False)
     async def terminal_page():
         return FileResponse(_dist / "terminal.html")
+
+    # The server administration window (deploy/live/admin-window.sh opens
+    # it on the box's own screen): stats, the engine feed, every broker call.
+    @app.get("/admin", include_in_schema=False)
+    async def admin_page():
+        return FileResponse(_dist / "admin.html")
 
     # LIVE server: the root is the account — holdings, equity, protection —
     # not the strategy console (there is no strategy plane in this process).

@@ -230,6 +230,8 @@ class PlanEventRow(Base):
 
     def to_dict(self) -> dict:
         return {
+            "id": self.id,
+            "plan_id": self.plan_id,
             "ts": self.ts.isoformat() if self.ts else None,
             "event": self.event,
             "source": self.source_status,

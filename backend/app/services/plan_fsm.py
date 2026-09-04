@@ -225,6 +225,18 @@ class PlanStateMachine:
             detail=detail,
         ))
 
+    async def events_recent(self, limit: int = 60) -> list[dict]:
+        """The newest journal rows across every plan (the admin feed)."""
+        from sqlalchemy import select
+
+        from app.models.trade import PlanEventRow
+
+        async with self.db.session() as session:
+            result = await session.execute(
+                select(PlanEventRow).order_by(PlanEventRow.id.desc()).limit(limit)
+            )
+            return [row.to_dict() for row in result.scalars().all()]
+
     async def events_for(self, plan_id: str, limit: int = 100) -> list[dict]:
         from sqlalchemy import select
 
