@@ -809,6 +809,38 @@ export type AdminSummary = {
   system: Partial<SystemState> & { error?: string };
 };
 export const getAdminSummary = () => api.get<AdminSummary>("/api/admin/summary").then((r) => r.data);
+
+/** Vitals for the admin window: request latency / throughput, broker
+ * call latency, the ticker cache, one row per exit monitor. */
+export type LatencySummary = { count: number; avg_ms: number | null; p50_ms: number | null; p95_ms: number | null; max_ms: number | null };
+export type RequestWindow = LatencySummary & { window_s: number; rps: number | null; errors_5xx: number; errors_4xx: number };
+export type AdminMonitor = {
+  plan_id: string; label: string; asset_class: string | null; status: string; qty: number;
+  task: string; beat_age_s: number | null; health: string; parked: boolean; ghost_keys: number;
+  tp: number | null; sl: number | null; time_stop_utc: string | null; time_stop_in_s: number | null;
+  tp_resting: boolean; partial: Plan["partial_exit"]; ok: boolean;
+};
+export type AdminTicker = {
+  symbol: string; bars_1m: number; last_bar_ts: number | null; backfill_ms: number | null;
+  backfilled_at: number | null; loading: boolean; subscribed: boolean; quote: boolean;
+};
+export type AdminVitals = {
+  requests: {
+    total: number; errors_5xx_total: number; last_60s: RequestWindow; last_5m: RequestWindow; admin_last_60s: RequestWindow;
+    top_routes_5m: { route: string; count: number; avg_ms: number; max_ms: number }[];
+  };
+  broker: { window_s: number } & Record<"broker" | "data", LatencySummary & { per_min: number | null; errors: number; slowest: { name: string; ms: number }[] }>;
+  cache: {
+    tickers: AdminTicker[]; tickers_cached: number; bars_1m_total: number; backfill_avg_ms: number | null; backfill_max_ms: number | null;
+    contracts: { cached: number; inflight: number } | null; chains: { cached: number } | null;
+  };
+  monitors: AdminMonitor[];
+  monitors_ok: number;
+};
+export const getAdminVitals = () => api.get<AdminVitals>("/api/admin/vitals").then((r) => r.data);
+export type AdminPlanFeed = { plan: Plan; events: PlanEvent[]; log: string[] };
+export const getAdminPlanFeed = (planId: string) =>
+  api.get<AdminPlanFeed>(`/api/admin/plans/${planId}/feed`).then((r) => r.data);
 export const getAdminEvents = (limit = 60) =>
   api.get<{ events: PlanEvent[] }>("/api/admin/events", { params: { limit } }).then((r) => r.data.events);
 export const getAdminLog = (lines = 80) =>

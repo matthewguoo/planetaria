@@ -10,7 +10,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from app import bootstrap
+from app.services.vitals import request_timing_middleware
 from app.api.routes.admin import router as admin_router
+from app.api.routes.admin_vitals import router as admin_vitals_router
 from app.api.routes.capabilities import router as capabilities_router
 from app.api.routes.market_data import router as market_router
 from app.api.routes.options import router as options_router
@@ -77,6 +79,10 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="planetaria", lifespan=lifespan)
 
+# Every HTTP request's latency and status, for the admin window's vitals
+# (a pure-ASGI wrapper: websocket and lifespan scopes pass through).
+app.add_middleware(request_timing_middleware())
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=get_settings().cors_origins,
@@ -93,6 +99,7 @@ app.include_router(trading_router)
 app.include_router(system_router)
 app.include_router(capabilities_router)
 app.include_router(admin_router)
+app.include_router(admin_vitals_router)
 if get_settings().trading_mode == "paper":
     app.include_router(strategies_router)
 else:

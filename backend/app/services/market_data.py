@@ -27,6 +27,7 @@ from app.config import Settings
 from app.services.alpaca import AlpacaService
 from app.services.bar_store import BarStore
 from app.services.broadcast import Broadcaster
+from app.services.fast_bars import FAST_TFS, FastBarStore, is_fast_tf
 from app.services.redis_client import RedisFacade
 
 log = logging.getLogger("app.mktdata")
@@ -43,6 +44,13 @@ QUOTE_VS_BAR_GRACE_MS = 60_000
 OVERNIGHT_POLL_S = 10.0
 OVERNIGHT_URL = "https://data.alpaca.markets/v2/stocks/{symbol}/trades/latest?feed=overnight"
 
+
+# Fast (sub-minute) bars are rolled from the trade tape for symbols a
+# scalper is watching. Seeded from REST on first subscription: this much
+# history, from the real-time feed (IEX on the free tier, whose REST trades
+# ARE real-time — only SIP is delayed there).
+FAST_SEED_MINUTES = 45
+FAST_SEED_LIMIT = 10_000
 
 # Extended hours (04:00-09:30 / 16:00-20:00 ET): IEX streams only 08:00-17:00,
 # so premarket before 8 and postmarket after 5 are dark on the free tier while
@@ -119,6 +127,12 @@ class MarketDataService:
 
         self._stock_refs: dict[str, int] = {}
         self._option_refs: dict[str, int] = {}
+        # Sub-minute bars: trade-tape subscriptions are reference-counted
+        # separately from bars/quotes so a scalper's 5s chart is the only
+        # thing paying for the print firehose.
+        self.fast = FastBarStore()
+        self._fast_refs: dict[str, int] = {}
+        self._fast_seeded: set[str] = set()
         self._latest_quotes: dict[str, dict] = {}  # symbol -> quote msg (stock + option)
         self._quote_fetch_at: dict[str, float] = {}  # symbol -> monotonic REST attempt
         self._overnight_bars: dict[str, dict] = {}  # symbol -> forming 1m bar
@@ -129,6 +143,9 @@ class MarketDataService:
         self._tasks: list[asyncio.Task] = []
         self._backfilled: set[str] = set()
         self._backfill_tasks: dict[str, asyncio.Task] = {}
+        # symbol -> (wall time finished, ms taken): the admin window's
+        # "ticker load time".
+        self._backfill_stats: dict[str, tuple[float, float]] = {}
         self._lock = asyncio.Lock()
         # Last REST fetch attempt per option symbol (monotonic) — throttles
         # the poll fallback so quiet markets don't hammer the API.
@@ -162,6 +179,7 @@ class MarketDataService:
             "stream_age_s": self.stream_age_s,
             "stock_symbols": sorted(self._stock_refs.keys()),
             "option_symbols": len(self._option_refs),
+            "fast_symbols": sorted(self._fast_refs.keys()),
         }
 
     def latest_quote(self, symbol: str) -> dict | None:
@@ -385,13 +403,34 @@ class MarketDataService:
         self._backfill_tasks[symbol] = task
 
     async def _backfill_and_mark(self, symbol: str) -> None:
+        started = time.monotonic()
         try:
             await self._backfill(symbol)
             self._backfilled.add(symbol)
+            self._backfill_stats[symbol] = (time.time(), (time.monotonic() - started) * 1000)
         except Exception as exc:
             log.error("backfill %s failed: %s", symbol, exc)
         finally:
             self._backfill_tasks.pop(symbol, None)
+
+    def cache_status(self) -> list[dict]:
+        """One row per ticker in the bar cache: bars held, last bar, the
+        backfill's duration and when it finished, whether it is subscribed
+        on the stream and whether a backfill is in flight."""
+        rows = []
+        for sym in self.bars.symbols():
+            done_at, ms = self._backfill_stats.get(sym, (None, None))
+            rows.append({
+                "symbol": sym,
+                "bars_1m": self.bars.count(sym, "1m"),
+                "last_bar_ts": self.bars.last_ts(sym),
+                "backfill_ms": round(ms) if ms is not None else None,
+                "backfilled_at": done_at,
+                "loading": sym in self._backfill_tasks,
+                "subscribed": sym in self._stock_refs,
+                "quote": sym in self._latest_quotes,
+            })
+        return rows
 
     async def ensure_backfilled(self, symbol: str) -> None:
         """Await completion of the symbol's backfill (REST callers that want
@@ -413,6 +452,106 @@ class MarketDataService:
         # Bars stay cached; we keep upstream bar subscription (30-symbol budget
         # is plenty for an app watching a handful of underlyings) so re-focus
         # is instant. Only quotes for options are aggressively pruned.
+
+    # ------------------------------------------------------- fast (tape) bars
+
+    def get_bars(self, symbol: str, tf: str) -> list[dict]:
+        """Bars for any timeframe the client may ask for: the 1m-derived
+        series from the bar store, or the tape-rolled fast series."""
+        if is_fast_tf(tf):
+            return self.fast.get_bars(symbol, tf)
+        return self.bars.get_bars(symbol, tf)
+
+    async def subscribe_fast(self, symbol: str) -> None:
+        """Start rolling sub-minute bars for `symbol`: subscribe the trade
+        tape on first reference and seed recent history from REST."""
+        symbol = symbol.upper()
+        async with self._lock:
+            self._fast_refs[symbol] = self._fast_refs.get(symbol, 0) + 1
+            first = self._fast_refs[symbol] == 1
+        if not self.alpaca.configured or not first:
+            return
+        if self._stock_stream is not None:
+            await self.alpaca.call(
+                self._stock_stream.subscribe_trades, self._on_stock_trade, symbol
+            )
+        if symbol not in self._fast_seeded:
+            self._fast_seeded.add(symbol)
+            asyncio.create_task(self._seed_fast(symbol), name=f"fast-seed-{symbol}")
+
+    async def unsubscribe_fast(self, symbol: str) -> None:
+        symbol = symbol.upper()
+        async with self._lock:
+            count = self._fast_refs.get(symbol, 0) - 1
+            if count <= 0:
+                self._fast_refs.pop(symbol, None)
+                gone = True
+            else:
+                self._fast_refs[symbol] = count
+                gone = False
+        if gone and self.alpaca.configured and self._stock_stream is not None:
+            try:
+                await self.alpaca.call(self._stock_stream.unsubscribe_trades, symbol)
+            except Exception as exc:
+                log.warning("unsubscribe_trades %s failed: %s", symbol, exc)
+            # Drop the series: a re-focus minutes later re-seeds from REST
+            # rather than showing a chart with a hole in it.
+            self.fast.forget(symbol)
+            self._fast_seeded.discard(symbol)
+
+    async def _seed_fast(self, symbol: str) -> None:
+        """REST-seed the fast series from the last FAST_SEED_MINUTES of
+        prints on the real-time feed, then push a snapshot per fast tf."""
+        from alpaca.data.requests import StockTradesRequest
+
+        now = datetime.now(timezone.utc)
+        request = StockTradesRequest(
+            symbol_or_symbols=symbol,
+            start=now - timedelta(minutes=FAST_SEED_MINUTES),
+            end=now,
+            feed=self.alpaca.stock_feed,
+            limit=FAST_SEED_LIMIT,
+        )
+        try:
+            result = await self.alpaca.call(
+                self.alpaca.stock_data.get_stock_trades, request, timeout=20.0
+            )
+        except Exception as exc:
+            log.warning("fast-bar seed %s failed: %s", symbol, exc)
+            return
+        trades = (getattr(result, "data", None) or {}).get(symbol) or []
+        prints = [
+            {
+                "p": float(t.price),
+                "s": int(t.size or 0),
+                "t": int(t.timestamp.timestamp() * 1000),
+                "c": t.conditions,
+                "i": t.id,
+            }
+            for t in trades
+        ]
+        n = self.fast.seed(symbol, prints)
+        log.info("seeded %d prints into fast bars for %s", n, symbol)
+        for tf in FAST_TFS:
+            self.broadcast.publish(
+                f"bars:{symbol}:{tf}",
+                {"t": "bars_snapshot", "symbol": symbol, "tf": tf,
+                 "bars": self.fast.get_bars(symbol, tf)},
+            )
+
+    async def _on_stock_trade(self, trade) -> None:
+        self._last_stream_msg = time.monotonic()
+        symbol = trade.symbol
+        updates = self.fast.on_trade(
+            symbol, float(trade.price), int(trade.size or 0),
+            int(trade.timestamp.timestamp() * 1000),
+            getattr(trade, "conditions", None), getattr(trade, "id", None),
+        )
+        for tf, updated in updates:
+            self.broadcast.publish(
+                f"bars:{symbol}:{tf}",
+                {"t": "bar", "symbol": symbol, "tf": tf, "bar": updated},
+            )
 
     async def subscribe_options(self, symbols: list[str]) -> None:
         fresh = []

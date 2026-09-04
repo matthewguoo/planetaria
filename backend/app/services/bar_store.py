@@ -74,6 +74,13 @@ class BarStore:
         series = self._series(symbol, "1m")
         return max(series.keys()) if series else None
 
+    def symbols(self) -> list[str]:
+        """Every symbol holding at least one 1m bar."""
+        return sorted(sym for sym, tfs in self._bars.items() if tfs.get("1m"))
+
+    def count(self, symbol: str, tf: str = "1m") -> int:
+        return len(self._bars.get(symbol, {}).get(tf, {}))
+
     # ------------------------------------------------------------------ load
 
     async def hydrate(self, symbol: str) -> int:
