@@ -88,7 +88,10 @@ export function OverviewPage({
   const today = (account?.day_realized_pnl ?? 0) + sum.todayPl;
   const todayPct = equity > 0 ? today / (equity - today || equity) : 0;
   const sorted = sortHoldings(list, sort, equity);
-  const unprotected = sum.total - sum.protectedCount;
+  // A premium-capped long option (no stop) is not "unprotected": its loss is
+  // bounded by the debit paid. Only rows nothing will exit count here.
+  const unprotected = sum.total - sum.protectedCount - sum.premiumCappedCount;
+  const premiumAtRisk = risk?.total.premium_at_risk_dollars ?? 0;
 
   const pickSort = (s: HoldingsSort) => {
     setSort(s);
@@ -127,9 +130,13 @@ export function OverviewPage({
             ["BUYING POWER", fmtUsd(account?.buying_power), "", "text-white"],
             ["OPEN P/L", fmtUsd(sum.unrealized, true), sum.invested > 0 ? pct(sum.unrealized / (sum.invested - sum.unrealized || 1)) + " on cost" : "", pnlCls(sum.unrealized)],
             [
-              "AT RISK @ STOPS",
-              risk?.total.risk_pct != null ? `${risk.total.risk_pct.toFixed(1)}%` : risk ? fmtUsd(risk.total.risk_dollars) : "—",
-              unprotected ? `${unprotected} of ${sum.total} unprotected` : sum.total ? "every position has a stop" : "",
+              "MAX LOSS",
+              risk?.total.max_loss_pct != null ? `${risk.total.max_loss_pct.toFixed(1)}%` : risk ? fmtUsd(risk.total.max_loss_dollars) : "—",
+              [
+                risk ? `${fmtUsd(risk.total.risk_dollars)} @ stops` : "",
+                premiumAtRisk > 0 ? `+${fmtUsd(premiumAtRisk)} premium` : "",
+                unprotected ? `${unprotected} unprotected` : "",
+              ].filter(Boolean).join(" · "),
               unprotected ? "text-bb-loss" : "text-bb-orange",
             ],
           ] as const
@@ -137,7 +144,7 @@ export function OverviewPage({
           <div key={label} className="flex flex-col gap-0.5 bg-bb-panel px-3 py-2">
             <span className="text-[10px] tracking-widest text-bb-muted">{label}</span>
             <span data-numeric className={"text-[17px] " + cls}>{value}</span>
-            {sub && <span className={"text-[10px] " + (label === "AT RISK @ STOPS" && unprotected ? "text-bb-loss" : "text-bb-muted")}>{sub}</span>}
+            {sub && <span className={"text-[10px] " + (label === "MAX LOSS" && unprotected ? "text-bb-loss" : "text-bb-muted")}>{sub}</span>}
           </div>
         ))}
       </div>

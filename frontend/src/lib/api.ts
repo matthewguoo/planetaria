@@ -1,3 +1,4 @@
+import type { Protection } from "./planRisk";
 import axios from "axios";
 
 // Same-origin by default (vite dev/preview proxy /api to the backend), so
@@ -162,6 +163,8 @@ export type Holding = UntrackedPosition & {
   tp: number | null;
   time_stop_utc: string | null;
   protected: boolean;
+  /** "stop" | "premium" (long option, no stop: loss capped at the debit) | "none". */
+  protection: Protection;
 };
 
 export const getHoldings = () =>
@@ -232,6 +235,16 @@ export type AccountRisk = {
     corr_risk_pct: number | null;
     concentration_pct: number;
     open_plans: number;
+    /** Long options with no stop: the whole debit is the loss. */
+    premium_at_risk_dollars: number;
+    premium_at_risk_pct: number | null;
+    premium_at_risk_plans: number;
+    /** risk_dollars + premium_at_risk_dollars. */
+    max_loss_dollars: number;
+    max_loss_pct: number | null;
+    /** Share plans with no stop: exposed notional, never summed into max loss. */
+    unstopped_notional_dollars: number;
+    unstopped_plans: number;
   };
   greeks: {
     delta_dollars: number;
@@ -246,6 +259,10 @@ export type AccountRisk = {
     status: string;
     risk_dollars: number;
     risk_pct: number | null;
+    bracketless: boolean;
+    premium_at_risk: number;
+    unstopped_notional: number;
+    protection: Protection;
   }[];
   underlyings: {
     symbol: string;
@@ -360,23 +377,10 @@ export const putFeedSettings = (patch: Partial<FeedSettings>) =>
 export const getPlanEvents = (planId: string) =>
   api.get<{ events: PlanEvent[] }>(`/api/positions/${planId}/events`).then((r) => r.data.events);
 
-/** Client-side mirror of the server's plan_stop_risk: dollars lost if this
- * plan exits exactly at its stop. Bracketless plans (sl null) carry no
- * stop-defined risk — they are bounded by their book/allocation instead. */
-export function planStopRisk(plan: {
-  fill_premium?: number | null;
-  entry_limit: number;
-  sl_premium: number | null;
-  filled_qty?: number | null;
-  qty: number;
-  asset_class?: string;
-}): number {
-  if (plan.sl_premium == null) return 0;
-  const basis = plan.fill_premium ?? plan.entry_limit;
-  const qty = plan.filled_qty ?? plan.qty;
-  const mult = plan.asset_class === "equity" ? 1 : 100;
-  return Math.max(basis - plan.sl_premium, 0) * mult * Math.max(qty, 0);
-}
+/** Per-plan risk math lives in ./planRisk (stop risk, premium at risk,
+ * protection tri-state); re-exported so the existing import sites keep working. */
+export { planStopRisk, planPremiumAtRisk, planUnstoppedNotional, planMaxLoss, planProtection } from "./planRisk";
+export type { Protection } from "./planRisk";
 
 export const getAccountHistory = (period = "1M", timeframe = "1D") =>
   api

@@ -15,6 +15,7 @@ import {
   closePosition,
   flattenAll,
   getSystemState,
+  planPremiumAtRisk,
   planStopRisk,
   tightenExits,
   type Plan,
@@ -114,6 +115,7 @@ function PositionCard({ plan, monitored }: { plan: Plan; monitored: Set<string> 
   const pnl = plan.unrealized_pnl;
   const pnlPct = pnl != null && planBasis(plan) >= 1 ? (pnl / planBasis(plan)) * 100 : null;
   const risk = planStopRisk(plan);
+  const premiumRisk = planPremiumAtRisk(plan);
   const held = ["partially_filled", "filled", "exiting"].includes(plan.status);
   const watched = monitored === null ? null : monitored.has(plan.id);
   const step = Math.max(0.01, Math.abs(basis) * 0.01);
@@ -176,12 +178,21 @@ function PositionCard({ plan, monitored }: { plan: Plan; monitored: Set<string> 
       {open && (
         <div className="flex flex-col gap-2 border-t border-bb-border/40 px-3 py-2">
           <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px]">
-            <span className="text-bb-muted">
-              RISK @ STOP{" "}
-              <span data-numeric className="text-bb-orange">
-                -${risk.toFixed(0)}{equity ? ` · ${((risk / equity) * 100).toFixed(1)}%` : ""}
+            {premiumRisk > 0 ? (
+              <span className="text-bb-muted">
+                PREMIUM AT RISK{" "}
+                <span data-numeric className="text-bb-amber">
+                  -${premiumRisk.toFixed(0)}{equity ? ` · ${((premiumRisk / equity) * 100).toFixed(1)}%` : ""}
+                </span>
               </span>
-            </span>
+            ) : (
+              <span className="text-bb-muted">
+                RISK @ STOP{" "}
+                <span data-numeric className="text-bb-orange">
+                  -${risk.toFixed(0)}{equity ? ` · ${((risk / equity) * 100).toFixed(1)}%` : ""}
+                </span>
+              </span>
+            )}
             {held && (
               <span
                 className={

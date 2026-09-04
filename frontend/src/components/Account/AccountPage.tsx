@@ -14,6 +14,7 @@ import {
   getAccountRisk,
   getHistory,
   getOpenOrders,
+  planPremiumAtRisk,
   planStopRisk,
   type AccountRisk,
   type OpenOrder,
@@ -52,6 +53,10 @@ function RiskPanel({ risk }: { risk: AccountRisk | null }) {
      "text-bb-orange", "sqrt(r'ρr) over underlying return correlations — what the stops are worth as ONE portfolio bet. Equals the simple sum when everything is perfectly correlated."],
     ["CONCENTRATION", `${risk.total.concentration_pct.toFixed(0)}%`, "text-bb-amber",
      "Largest single underlying's share of total stop risk"],
+    ["PREMIUM AT RISK", `${fmtUsd(risk.total.premium_at_risk_dollars)}${risk.total.premium_at_risk_pct != null ? ` · ${risk.total.premium_at_risk_pct.toFixed(1)}%` : ""}`,
+     "text-bb-amber", "Long options held with NO stop: the whole debit paid is the maximum loss (intrinsic cap)"],
+    ["MAX LOSS", `${fmtUsd(risk.total.max_loss_dollars)}${risk.total.max_loss_pct != null ? ` · ${risk.total.max_loss_pct.toFixed(1)}%` : ""}`,
+     "text-bb-loss", "Stops + premium at risk: the most every open position can lose together"],
     ["NET Δ$", fmtSigned(g.delta_dollars), pnlCls(g.delta_dollars),
      "Net delta dollars: P/L per +100% underlying move; sign = direction"],
     ["β-WTD Δ$ (SPY)", fmtSigned(g.beta_weighted_delta_dollars), pnlCls(g.beta_weighted_delta_dollars),
@@ -350,7 +355,9 @@ export function AccountPage({ onViewPlan }: { onViewPlan?: (plan: Plan) => void 
           title={
             "Account % lost if EVERY open position exits at its stop loss.\n" +
             "CORR = correlation-adjusted (positions in correlated underlyings " +
-            "don't diversify — three index ETF longs are ~one bet)."
+            "don't diversify — three index ETF longs are ~one bet).\n" +
+            "PREMIUM = long options held with no stop: the whole debit is the loss.\n" +
+            "MAX LOSS = stops + premium."
           }
         >
           <span className="text-[10px] tracking-widest text-bb-muted">AT RISK @ SL</span>
@@ -366,6 +373,17 @@ export function AccountPage({ onViewPlan }: { onViewPlan?: (plan: Plan) => void 
               </span>
             )}
           </span>
+          {risk && risk.total.premium_at_risk_dollars > 0 && (
+            <span data-numeric className="text-[10px] text-bb-amber">
+              + {fmtUsd(risk.total.premium_at_risk_dollars)} premium · {risk.total.premium_at_risk_plans} long option{risk.total.premium_at_risk_plans > 1 ? "s" : ""}, no stop
+            </span>
+          )}
+          {risk && risk.total.premium_at_risk_dollars > 0 && (
+            <span data-numeric className="text-[11px] text-bb-loss">
+              MAX LOSS {fmtUsd(risk.total.max_loss_dollars)}
+              {risk.total.max_loss_pct != null ? ` · ${risk.total.max_loss_pct.toFixed(1)}%` : ""}
+            </span>
+          )}
         </div>
         <StatCard
           label="STATUS"
@@ -457,10 +475,18 @@ export function AccountPage({ onViewPlan }: { onViewPlan?: (plan: Plan) => void 
                 </td>
                 <td
                   data-numeric
-                  className="px-2 py-1 text-right text-bb-orange"
-                  title={`-$${planStopRisk(p).toFixed(0)} at stop`}
+                  className={"px-2 py-1 text-right " + (planPremiumAtRisk(p) > 0 ? "text-bb-amber" : "text-bb-orange")}
+                  title={
+                    planPremiumAtRisk(p) > 0
+                      ? `premium at risk -$${planPremiumAtRisk(p).toFixed(0)} — no stop; loss capped at the debit paid`
+                      : `-$${planStopRisk(p).toFixed(0)} at stop`
+                  }
                 >
-                  {account?.equity ? `${((planStopRisk(p) / account.equity) * 100).toFixed(1)}%` : "—"}
+                  {account?.equity
+                    ? planPremiumAtRisk(p) > 0
+                      ? `P ${((planPremiumAtRisk(p) / account.equity) * 100).toFixed(1)}%`
+                      : `${((planStopRisk(p) / account.equity) * 100).toFixed(1)}%`
+                    : "—"}
                 </td>
                 <td className="px-2 py-1 text-right">
                   {onViewPlan && (

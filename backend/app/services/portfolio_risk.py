@@ -125,6 +125,46 @@ def plan_stop_risk(plan: TradePlan) -> float:
     return per_set * max(qty, 0)
 
 
+def _basis_and_qty(plan: TradePlan) -> tuple[float, int]:
+    basis = plan.fill_premium if plan.fill_premium is not None else plan.entry_limit
+    qty = plan.effective_qty if plan.filled_qty is not None else plan.qty
+    return basis, max(qty, 0)
+
+
+def plan_premium_at_risk(plan: TradePlan) -> float:
+    """Long-only OPTION plans with no stop (the intrinsic cap): the whole
+    premium paid is the maximum loss. Zero for anything with a stop (its
+    risk is the stop figure) and for structures with a short leg (loss is
+    not premium-bounded)."""
+    if plan.sl_premium is not None or plan.asset_class == "equity":
+        return 0.0
+    if any(leg.get("side", 1) < 0 for leg in plan.legs or []):
+        return 0.0
+    basis, qty = _basis_and_qty(plan)
+    return abs(basis) * plan.contract_multiplier * qty
+
+
+def plan_unstopped_notional(plan: TradePlan) -> float:
+    """Equity plans with no stop: the share notional held. Reported, never
+    summed into max loss (shares are not premium-capped)."""
+    if plan.sl_premium is not None or plan.asset_class != "equity":
+        return 0.0
+    basis, qty = _basis_and_qty(plan)
+    return abs(basis) * qty
+
+
+def plan_protection(plan) -> str:
+    """"stop" | "premium" | "none" - works on a TradePlan or its to_dict()."""
+    get = (lambda k: getattr(plan, k, None)) if not isinstance(plan, dict) else plan.get
+    if get("sl_premium") is not None:
+        return "stop"
+    legs = get("legs") or []
+    if (get("asset_class") or "option") != "equity" and not any(
+            (leg.get("side", 1) or 1) < 0 for leg in legs):
+        return "premium"
+    return "none"
+
+
 # ------------------------------------------------------------- service
 
 
@@ -217,19 +257,36 @@ class PortfolioRisk:
         now_ms = time.time() * 1000
 
         per_plan: list[dict] = []
+        premium_total = 0.0
+        premium_plans = 0
+        unstopped_total = 0.0
+        unstopped_plans = 0
         risk_by_underlying: dict[str, float] = {}
         greeks_by_underlying: dict[str, dict] = {}
         totals = {"delta_dollars": 0.0, "vega_per_pt": 0.0, "theta_per_day": 0.0, "rho_per_pct": 0.0}
         for plan in plans:
             dollars = plan_stop_risk(plan)
+            premium = plan_premium_at_risk(plan)
+            unstopped = plan_unstopped_notional(plan)
+            if premium:
+                premium_total += premium
+                premium_plans += 1
+            if unstopped:
+                unstopped_total += unstopped
+                unstopped_plans += 1
             per_plan.append({
                 "id": plan.id,
                 "underlying": plan.underlying,
                 "status": plan.status,
                 "risk_dollars": round(dollars, 2),
                 "risk_pct": round(dollars / equity * 100.0, 3) if equity > 0 else None,
-                # No stop level -> the 0 above is "unmeasured here", not "safe".
+                # No stop level -> the 0 above is "unmeasured here", not "safe":
+                # a long option's whole premium (premium_at_risk) or a share
+                # notional (unstopped_notional) is what is actually exposed.
                 "bracketless": plan.sl_premium is None,
+                "premium_at_risk": round(premium, 2),
+                "unstopped_notional": round(unstopped, 2),
+                "protection": plan_protection(plan),
             })
             risk_by_underlying[plan.underlying] = risk_by_underlying.get(plan.underlying, 0.0) + dollars
             spot = self._spot(plan.underlying)
@@ -304,6 +361,17 @@ class PortfolioRisk:
                 "corr_risk_pct": pct(corr_dollars),
                 "concentration_pct": round(concentration, 1),
                 "open_plans": len(plans),
+                # Premium-capped long options (no stop): the whole debit is
+                # the loss. Correlation math stays on stop risk only - a hard
+                # cap is not a level and mixing them would understate
+                # concentration.
+                "premium_at_risk_dollars": round(premium_total, 2),
+                "premium_at_risk_pct": pct(premium_total),
+                "premium_at_risk_plans": premium_plans,
+                "max_loss_dollars": round(total_dollars + premium_total, 2),
+                "max_loss_pct": pct(total_dollars + premium_total),
+                "unstopped_notional_dollars": round(unstopped_total, 2),
+                "unstopped_plans": unstopped_plans,
             },
             "greeks": {
                 "delta_dollars": round(totals["delta_dollars"], 2),

@@ -27,6 +27,7 @@ from alpaca.trading.requests import (
 from app.models.trade import TradePlan, as_utc, utcnow
 from app.services.alpaca import AlpacaService
 from app.services.market_clock import equity_session
+from app.services.portfolio_risk import plan_protection
 from app.services.plan_fsm import (
     TERMINAL_STATES,
     PlanEvent,
@@ -184,6 +185,9 @@ def merge_holdings(positions: list[dict], plans: list[dict]) -> list[dict]:
         row["tp"] = plan.get("tp_premium") if plan else None
         row["time_stop_utc"] = plan.get("time_stop_utc") if plan else None
         row["protected"] = bool(plan and plan.get("sl_premium") is not None)
+        # Tri-state for the UI: "stop" / "premium" (long option, no stop -
+        # loss capped at the debit paid) / "none" (nothing will exit it).
+        row["protection"] = plan_protection(plan) if plan else "none"
         out.append(row)
     return out
 

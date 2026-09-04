@@ -5,6 +5,7 @@ import {
   closePosition,
   flattenAll,
   getHistory,
+  planPremiumAtRisk,
   planStopRisk,
   putRisk,
   tightenExits,
@@ -41,13 +42,14 @@ const etTime = (iso: string) => fmtTimeET(Date.parse(iso));
 function RiskCell({ plan }: { plan: Plan }) {
   const equity = useAccountStore((s) => s.account?.equity);
   const dollars = planStopRisk(plan);
+  const premium = planPremiumAtRisk(plan);
   return (
     <td
       data-numeric
-      className="px-2 py-1 text-right text-bb-orange"
-      title={`-$${dollars.toFixed(0)} if stopped out`}
+      className={"px-2 py-1 text-right " + (premium > 0 ? "text-bb-amber" : "text-bb-orange")}
+      title={premium > 0 ? `premium at risk -$${premium.toFixed(0)} — no stop; loss capped at the debit paid` : `-$${dollars.toFixed(0)} if stopped out`}
     >
-      {equity ? `${((dollars / equity) * 100).toFixed(1)}%` : "—"}
+      {equity ? (premium > 0 ? `P ${((premium / equity) * 100).toFixed(1)}%` : `${((dollars / equity) * 100).toFixed(1)}%`) : "—"}
     </td>
   );
 }

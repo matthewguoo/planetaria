@@ -56,6 +56,8 @@ export type HoldingsSummary = {
   todayPl: number;
   unrealized: number;
   protectedCount: number;
+  /** Long options with no stop: loss capped at the premium paid. */
+  premiumCappedCount: number;
   total: number;
 };
 
@@ -66,8 +68,9 @@ export function summarize(rows: Holding[]): HoldingsSummary {
       todayPl: acc.todayPl + (h.unrealized_intraday_pl ?? 0),
       unrealized: acc.unrealized + (h.unrealized_pl ?? 0),
       protectedCount: acc.protectedCount + (h.protected ? 1 : 0),
+      premiumCappedCount: acc.premiumCappedCount + (h.protection === "premium" ? 1 : 0),
       total: acc.total + 1,
     }),
-    { invested: 0, todayPl: 0, unrealized: 0, protectedCount: 0, total: 0 },
+    { invested: 0, todayPl: 0, unrealized: 0, protectedCount: 0, premiumCappedCount: 0, total: 0 },
   );
 }
