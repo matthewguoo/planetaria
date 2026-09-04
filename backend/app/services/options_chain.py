@@ -14,6 +14,22 @@ from app.services.alpaca import AlpacaService
 from app.services.redis_client import RedisFacade
 from app.services.trade_service import parse_occ_symbol
 
+
+def weekdays_ahead(day, n: int):
+    """The date `n` weekdays after `day` - the far edge of a "0-n DTE"
+    chain window. Counted in weekdays, not calendar days, so a Friday still
+    sees next week's expiries: with calendar days a 3-DTE window from a
+    Friday held only that day's 0DTE, and across a long weekend nothing
+    else at all. Exchange holidays are not skipped (they only widen the
+    window by a day, never narrow it)."""
+    out = day
+    left = max(int(n), 0)
+    while left > 0:
+        out += timedelta(days=1)
+        if out.weekday() < 5:
+            left -= 1
+    return out
+
 log = logging.getLogger("app.chain")
 
 CHAIN_TTL_S = 5.0
@@ -89,7 +105,7 @@ class ChainService:
         request = OptionChainRequest(
             underlying_symbol=underlying,
             expiration_date_gte=today,
-            expiration_date_lte=today + timedelta(days=dte_max + 1),
+            expiration_date_lte=weekdays_ahead(today, dte_max),
             strike_price_gte=round(spot * 0.94, 2) if spot else None,
             strike_price_lte=round(spot * 1.06, 2) if spot else None,
             feed=self.alpaca.option_feed,
