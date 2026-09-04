@@ -6,6 +6,7 @@
 
 import { useMemo } from "react";
 import { computeProbabilitiesClient, computeSizingClient } from "./analytics";
+import { applyLiveQuotes } from "./liveLegs";
 import {
   positionEntryCost,
   positionValue,
@@ -13,6 +14,7 @@ import {
   type Smiles,
 } from "./optionsMath";
 import { useAccountStore } from "../store/accountStore";
+import { useLegQuotes } from "../store/optionQuoteStore";
 import {
   buildLegs,
   hoursToExpiry as calcHte,
@@ -48,6 +50,11 @@ export type Designer = {
   sizing: ReturnType<typeof computeSizingClient> | null;
   probabilities: ReturnType<typeof computeProbabilitiesClient> | null;
   equity: number;
+  /** Legs priced off a streamed quote right now (the rest use the chain
+   * snapshot). 0 = the ticket is on the poll. */
+  liveLegs: number;
+  /** Age of the oldest streamed quote in use, ms; null when on the poll. */
+  legQuoteAgeMs: number | null;
 };
 
 export function useDesigner(): Designer {
@@ -65,9 +72,22 @@ export function useDesigner(): Designer {
   const quote = useTradingStore((s) => s.quote);
   const account = useAccountStore((s) => s.account);
 
+  // The snapshot legs decide WHICH contracts to stream; the streamed quotes
+  // then re-price them on every tick (see liveLegs.ts).
+  const snapshotLegs = useMemo(
+    () => buildLegs({ chain, expiry, kind, strikes, ratios, rights, sides }),
+    [chain, expiry, kind, strikes, ratios, rights, sides],
+  );
+  const legSymbols = useMemo(() => (snapshotLegs ?? []).map((l) => l.symbol), [snapshotLegs]);
+  const legQuotes = useLegQuotes(legSymbols);
+
   return useMemo(() => {
-    const legs = buildLegs({ chain, expiry, kind, strikes, ratios, rights, sides });
     const spot = freshSpot(quote, chain?.spot ?? 0);
+    const tauYears = expiry ? Math.max(calcHte(expiry), 0) / TRADING_HOURS_PER_YEAR : 0;
+    const overlay = snapshotLegs
+      ? applyLiveQuotes(snapshotLegs, legQuotes, spot, tauYears)
+      : { legs: null, live: 0, ageMs: null };
+    const legs = overlay.legs;
     // Sizing denominates in the SELECTED account's real equity — capital
     // separation is done with real accounts (a $5k options account makes
     // every %-gate bind at $5k by construction).
@@ -94,6 +114,8 @@ export function useDesigner(): Designer {
       sizing: null,
       probabilities: null,
       equity,
+      liveLegs: overlay.live,
+      legQuoteAgeMs: overlay.ageMs,
     };
     if (!legs || !expiry || spot <= 0) return empty;
 
@@ -176,6 +198,8 @@ export function useDesigner(): Designer {
       sizing,
       probabilities,
       equity,
+      liveLegs: overlay.live,
+      legQuoteAgeMs: overlay.ageMs,
     };
-  }, [chain, expiry, kind, strikes, ratios, rights, sides, tpPct, slPct, qtyOverride, timeStopEt, quote, account]);
+  }, [chain, expiry, snapshotLegs, legQuotes, tpPct, slPct, qtyOverride, timeStopEt, quote, account]);
 }

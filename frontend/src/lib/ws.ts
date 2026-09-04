@@ -15,6 +15,7 @@ type Handler = (msg: WsMessage) => void;
 type SubSpec =
   | { channel: "bars"; symbol: string; tf: string }
   | { channel: "quote"; symbol: string }
+  | { channel: "oquote"; symbol: string }
   | { channel: "plans" };
 
 // Same-origin by default (dev/preview server proxies /ws), matching api.ts —
@@ -27,6 +28,7 @@ const WS_URL =
 function subKey(spec: SubSpec): string {
   if (spec.channel === "bars") return `bars:${spec.symbol}:${spec.tf}`;
   if (spec.channel === "quote") return `quote:${spec.symbol}`;
+  if (spec.channel === "oquote") return `oquote:${spec.symbol}`;
   return "plans";
 }
 

@@ -303,7 +303,12 @@ export function MobileOptionsTicket({ designer }: { designer: Designer }) {
               </div>
             );
           })}
-          <Row label={`NET ${isCredit ? "CREDIT" : "DEBIT"}`} value={designer.ready ? Math.abs(designer.entry).toFixed(2) : "—"} cls={isCredit ? "text-bb-profit" : "text-bb-amber"} big />
+          <Row
+            label={`NET ${isCredit ? "CREDIT" : "DEBIT"} · ${designer.ready && designer.legs && designer.liveLegs === designer.legs.length ? "LIVE" : "SNAP"}`}
+            value={designer.ready ? Math.abs(designer.entry).toFixed(2) : "—"}
+            cls={isCredit ? "text-bb-profit" : "text-bb-amber"}
+            big
+          />
         </div>
       </Section>
 

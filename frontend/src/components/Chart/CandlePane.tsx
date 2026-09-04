@@ -42,7 +42,7 @@ import { tradingDateAhead } from "../../lib/equityMath";
 import { deriveEquityPlan, type EquityPlan } from "../../lib/equityPlan";
 import { useAccountStore } from "../../store/accountStore";
 import { useEquityTicketStore } from "../../store/equityTicketStore";
-import { TF_MS, freshSpot, quoteIsStale, useTradingStore, type IndicatorToggles } from "../../store/tradingStore";
+import { TF_MS, freshSpot, isFastTf, quoteIsStale, useTradingStore, type IndicatorToggles } from "../../store/tradingStore";
 import { useUiStore } from "../../store/uiStore";
 import {
   availableStrikes,
@@ -638,8 +638,11 @@ export function CandlePane({
       entryOverride: overlay.entryBasis,
       viewLo: viewWindow ? viewWindow[0] : null,
       viewHi: viewWindow ? viewWindow[1] : null,
+      // A 5s/15s/30s chart wants the surface to follow the tape: recompute
+      // every 0.02% of spot (~$0.13 on SPY) instead of every 0.1%.
+      spotQuant: isFastTf(tf) ? 0.0002 : 0.001,
     };
-  }, [overlay, viewWindow]);
+  }, [overlay, viewWindow, tf]);
 
   useHeatmap(surfaceInputs, (result) => {
     surfaceRef.current = result;

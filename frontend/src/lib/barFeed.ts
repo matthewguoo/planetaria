@@ -6,6 +6,7 @@
 import { onConnectionState, onPlanUpdate, primePlans } from "./audio";
 import { replaceBars, upsertBar, type BarRow } from "./perspective";
 import { socket, type WsMessage } from "./ws";
+import type { OptionQuote } from "../store/optionQuoteStore";
 import { useTradingStore, type Quote, type Timeframe } from "../store/tradingStore";
 
 let unsubBars: (() => void) | null = null;
@@ -57,6 +58,13 @@ socket.onMessage((msg: WsMessage) => {
     }
     case "quote": {
       if (msg.symbol === store.symbol) store.setQuote(msg as unknown as Quote);
+      break;
+    }
+    case "oquote": {
+      // Option NBBO for a contract someone on this page holds a ref on.
+      void import("../store/optionQuoteStore").then(({ useOptionQuoteStore }) => {
+        useOptionQuoteStore.getState().setQuote(msg as unknown as OptionQuote);
+      });
       break;
     }
     case "status": {

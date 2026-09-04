@@ -28,6 +28,10 @@ export type SurfaceInputs = {
   /** Visible y-domain (quantized by the chart); null before first draw. */
   viewLo: number | null;
   viewHi: number | null;
+  /** Spot move (fraction) that triggers a recompute; default 0.1%. A
+   * sub-minute chart passes something finer so the surface follows the
+   * tape instead of stepping every $0.65 of SPY. */
+  spotQuant?: number;
 };
 
 export function useHeatmap(inputs: SurfaceInputs | null, onResult: (r: HeatmapResult) => void) {
@@ -60,8 +64,10 @@ export function useHeatmap(inputs: SurfaceInputs | null, onResult: (r: HeatmapRe
     if (!inputs || !inputs.legs || !inputs.legs.length || inputs.spot <= 0) return;
     const { legs, hoursToExpiry, spot, tpPremium, slPremium, smiles, volShift, skewBeta } = inputs;
 
-    // Quantize spot to 0.1% so quote jitter doesn't thrash the worker; round
-    // smile vols to 3dp so 10s chain refreshes only recompute on real moves.
+    // Quantize spot (0.1% by default, finer on fast charts) so quote jitter
+    // doesn't thrash the worker; round smile vols to 3dp so chain refreshes
+    // only recompute on real moves.
+    const quant = inputs.spotQuant ?? 0.001;
     const qSpot = Math.round(spot * 1000) / 1000;
     const smileKey = smiles
       ? [smiles.C, smiles.P].map((pts) => pts.map(([k, v]) => `${k}:${v.toFixed(3)}`).join(","))
@@ -69,7 +75,7 @@ export function useHeatmap(inputs: SurfaceInputs | null, onResult: (r: HeatmapRe
     const key = JSON.stringify([
       legs.map((l) => [l.right, l.strike, l.side, l.qty, l.entry, l.iv]),
       Math.round(hoursToExpiry * 100),
-      Math.round(qSpot / (spot * 0.001)),
+      Math.round(qSpot / (spot * quant)),
       tpPremium,
       slPremium,
       smileKey,

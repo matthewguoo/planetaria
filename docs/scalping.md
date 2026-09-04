@@ -129,10 +129,14 @@ Two account facts that matter for scalping on the Roth:
 
 ## 4. What is deliberately not here
 
-- No option-quote WebSocket to the browser yet: the ticket's bid/ask
-  still arrive via the chain snapshot (the SCALP profile drops that to 2s;
-  the server-side chain cache is 5s). Live per-leg streaming to the ticket
-  is the next step if 2s proves too slow on the screen.
+- Streamed option quotes reach the browser since the same evening: the
+  WebSocket `oquote` channel (one contract per subscription, at most 12
+  per socket) feeds the ticket's legs on every tick - entry at the live
+  mid, half-spread from the live book, IV re-solved - and the ENTRY row
+  reads LIVE / PART / SNAP to say which legs are streaming. A quote older
+  than 15 s falls back to the chain snapshot. The heatmap also recomputes
+  every 0.02% of spot on a sub-minute chart (0.1% otherwise). The smile
+  itself still comes from the chain poll.
 - The exit ladder's optimizer rungs apply to manual closes, time stops
   and stop losses alike; the broker-resting take-profit is unchanged (a
   limit at the TP price is already the best possible exit).

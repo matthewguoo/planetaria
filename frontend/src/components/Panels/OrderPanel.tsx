@@ -230,6 +230,20 @@ export function OrderPanel({ designer }: { designer: Designer }) {
           <span className="fld-l">
             ENTRY {designer.ready && designer.entry < 0 ? "CREDIT" : "LIMIT"}
             {worked && <span className="ml-1 text-bb-profit" title="Spread optimizer: rung 0 is repriced off the live book at submit">WORKED</span>}
+            {designer.ready && designer.legs && (
+              <span
+                className={"ml-1 " + (designer.liveLegs === designer.legs.length ? "text-bb-profit" : "text-bb-muted")}
+                title={
+                  designer.liveLegs === designer.legs.length
+                    ? `Every leg priced off a streamed quote (oldest ${Math.round((designer.legQuoteAgeMs ?? 0) / 1000)}s)`
+                    : designer.liveLegs > 0
+                      ? `${designer.liveLegs} of ${designer.legs.length} legs streaming; the rest use the chain snapshot`
+                      : "Priced off the chain snapshot (no streamed quote yet)"
+                }
+              >
+                {designer.liveLegs === designer.legs.length ? "LIVE" : designer.liveLegs > 0 ? "PART" : "SNAP"}
+              </span>
+            )}
           </span>
           <span data-numeric className={"text-[12px] " + (designer.entry < 0 ? "text-bb-profit" : "text-bb-amber")}>
             {designer.ready ? `${Math.abs(designer.entry).toFixed(2)} × ${designer.qty}` : "—"}
