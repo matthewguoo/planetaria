@@ -17,14 +17,26 @@ else
   say "  exists"
 fi
 
+# Re-runs skip the slow, already-done work (a fresh npm ci is minutes of
+# silence on this box and reads as a hang). REBUILD=1 forces both.
 say "2/6 backend venv"
 cd "$REPO/backend"
-[ -d .venv ] || python3 -m venv .venv
-.venv/bin/pip install -q --upgrade pip
-.venv/bin/pip install -q -r requirements.lock.txt
+if [ -x .venv/bin/uvicorn ] && [ -z "${REBUILD:-}" ]; then
+  say "  exists (REBUILD=1 to reinstall)"
+else
+  [ -d .venv ] || python3 -m venv .venv
+  .venv/bin/pip install --upgrade pip
+  .venv/bin/pip install -r requirements.lock.txt
+fi
 
 say "3/6 frontend build (served by the backend; no node at runtime)"
-cd "$REPO/frontend" && npm ci --silent && npm run build --silent
+cd "$REPO/frontend"
+if [ -f dist/terminal.html ] && [ -d node_modules ] && [ -z "${REBUILD:-}" ]; then
+  say "  built (REBUILD=1 to rebuild)"
+else
+  [ -d node_modules ] || npm ci
+  npm run build
+fi
 cd "$REPO"
 
 say "4/6 env file"
