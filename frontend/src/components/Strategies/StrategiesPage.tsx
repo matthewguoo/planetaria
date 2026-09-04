@@ -1107,7 +1107,7 @@ function CreatePanel({
             )
           }
         >
-          CREATE (disabled)
+          CREATE
         </button>
         <span className="text-[10px] text-bb-muted" title={selected?.doc ?? ""}>
           {selected ? `${selected.doc.slice(0, 80)} · listens: ${selected.subscriptions.join(", ")}` : ""}

@@ -26,6 +26,7 @@ import {
   buildUntrackedView,
   equityPositionOfPlan,
   equityPositionOfUntracked,
+  marketIv,
   type EquityPosition,
   type PositionView,
 } from "../../lib/positionView";
@@ -363,7 +364,22 @@ export function CandlePane({
     : untrackedPos?.symbol ?? null;
   const detail = useHoldingDetail(detailSymbol);
   const enteredAt = detail?.entered_at ?? null;
-  const detailIv = detail?.quote?.iv ?? null;
+  // The contract's vol: the feed's snapshot IV when it has one (market
+  // hours), else the vol implied by its quote mid / the broker's mark at
+  // the underlying's spot — never a flat guess while a price exists.
+  const detailIv = useMemo(() => {
+    const snap = detail?.quote?.iv ?? null;
+    if (snap && snap > 0) return snap;
+    const occ = untrackedPos?.occ ?? null;
+    const leg = viewingPlan && viewingPlan.legs.length === 1 ? viewingPlan.legs[0] : null;
+    const strike = occ?.strike ?? leg?.strike ?? null;
+    const right = occ?.right ?? leg?.right ?? null;
+    const expiry = occ?.expiry ?? leg?.expiry ?? null;
+    if (strike == null || right == null || expiry == null) return null;
+    const price = detail?.quote?.mid ?? untrackedPos?.current_price ?? viewingPlan?.mark ?? null;
+    const spot = detail?.underlying?.spot ?? (chain?.spot && chain.spot > 0 ? chain.spot : null) ?? (quote && quote.mid > 0 ? quote.mid : null);
+    return marketIv({ price: price == null ? null : Math.abs(price), spot, strike, right, expiry });
+  }, [detail, untrackedPos, viewingPlan, chain, quote]);
   const defaultSl = account?.risk?.default_sl_pct ?? 0.5;
   // The exit draft (chart drag <-> panel fields) for the position in view.
   const draftKey = viewingPlan ? planDraftKey(viewingPlan.id) : untrackedPos ? untrackedDraftKey(untrackedPos.symbol) : null;
@@ -428,7 +444,7 @@ export function CandlePane({
     if (viewingPlan) {
       // The draft's exits draw while the plan is open (an edit in progress
       // is a line on the chart); a closed plan is a frozen fact.
-      const positionView = buildPositionView(viewingPlan, chain, pnlMode, planClosed ? null : draft);
+      const positionView = buildPositionView(viewingPlan, chain, pnlMode, planClosed ? null : draft, detailIv);
       if (positionView) return fromView(positionView, !planClosed && planEditable);
     } else if (untrackedPos?.occ) {
       // UNTRACKED option: the broker row marked at its live IV, anchored at
@@ -510,7 +526,8 @@ export function CandlePane({
     account: typeof account;
   }>({ on: false, ticket: eqTicket, quote, tf, account });
   eqInputsRef.current = {
-    on: assetMode === "equity" && !viewingPlan,
+    // Position view (a plan or an untracked row) never shows the ticket's lines.
+    on: assetMode === "equity" && !viewingPlan && !untrackedPos,
     ticket: eqTicket,
     quote,
     tf,
@@ -1040,7 +1057,7 @@ export function CandlePane({
             const tfMinutes = TF_MS[useTradingStore.getState().tf] / 60000;
             const anchorIdx = anchorIndexForMs(barsRef.current, eqPos.anchorMs);
             const idx = xToIndex(x, viewRef.current, layout);
-            const hours = Math.max(0, ((idx - anchorIdx) * tfMinutes) / 60);
+            const hours = Math.max(0, hoursFromIndex(idx, anchorIdx, tfMinutes));
             const at = Math.max(Date.parse(addTradingHours(eqPos.anchorMs, hours)), Date.now());
             const iso = shareExitDayIso(at);
             if (iso !== store.draft.timeStopUtc) store.set({ timeStopUtc: iso });
@@ -1094,7 +1111,7 @@ export function CandlePane({
             const anchorIdx = anchorIndexFor(barsRef.current, overlayNow);
             const tfMinutes = TF_MS[useTradingStore.getState().tf] / 60000;
             const idx = xToIndex(x, viewRef.current, layout);
-            const hours = Math.max(0, Math.min(((idx - anchorIdx) * tfMinutes) / 60, overlayNow.hoursToExpiry));
+            const hours = Math.max(0, Math.min(hoursFromIndex(idx, anchorIdx, tfMinutes), overlayNow.hoursToExpiry));
             const at = Math.max(Date.parse(addTradingHours(overlayNow.anchorMs, hours)), Date.now() + 5 * 60_000);
             const iso = new Date(at).toISOString();
             const store = useExitDraftStore.getState();
@@ -1105,7 +1122,7 @@ export function CandlePane({
             const anchorIdx = anchorIndexFor(barsRef.current, overlayNow);
             const tfMinutes = TF_MS[useTradingStore.getState().tf] / 60000;
             const idx = xToIndex(x, viewRef.current, layout);
-            const hours = ((idx - anchorIdx) * tfMinutes) / 60;
+            const hours = hoursFromIndex(idx, anchorIdx, tfMinutes);
             const nowMin = etMinutes();
             const maxMin = Math.min(15 * 60 + 55, nowMin + overlayNow.hoursToExpiry * 60);
             const targetMin = Math.max(
@@ -1123,7 +1140,7 @@ export function CandlePane({
             const tfMinutes = TF_MS[useTradingStore.getState().tf] / 60000;
             const hte = surface?.hoursToExpiry ?? overlayNow.hoursToExpiry;
             const idx = xToIndex(x, viewRef.current, layout);
-            const hours = Math.max(0, Math.min(((idx - anchorIdx) * tfMinutes) / 60, hte));
+            const hours = Math.max(0, Math.min(hoursFromIndex(idx, anchorIdx, tfMinutes), hte));
             const tau = Math.max(hte - hours, 0) / TRADING_HOURS_PER_YEAR;
             const price = yToPrice(y, domain, layout);
             if (price > 0) {
@@ -1305,8 +1322,21 @@ function currentDomain(
 /** Bar-index offset from the surface anchor (entry bar in position view,
  * latest bar in designer view) in trading time. */
 function futureIndex(hoursFromAnchor: number, anchorIdx: number, tfMinutes: number): number {
-  return anchorIdx + (hoursFromAnchor * 60) / tfMinutes;
+  return anchorIdx + ((hoursFromAnchor * 60) / tfMinutes) * FUTURE_SCALE;
 }
+
+/** Inverse of futureIndex: trading hours from the anchor at a bar index. */
+function hoursFromIndex(idx: number, anchorIdx: number, tfMinutes: number): number {
+  return ((idx - anchorIdx) * tfMinutes) / 60 / FUTURE_SCALE;
+}
+
+/** Bars per trading hour, relative to RTH: with extended-hours bars on the
+ * tape a 6.5h trading session spans 16h of bars, so a trading-time offset
+ * must stretch by that ratio or the expiry lands the same evening. Set by
+ * render() from the ETH toggle; the hit tests and drags read it too. */
+let FUTURE_SCALE = 1;
+const ETH_SESSION_HOURS = 16;
+const RTH_SESSION_HOURS = 6.5;
 
 function render(
   ctx: CanvasRenderingContext2D,
@@ -1324,6 +1354,7 @@ function render(
   equity: EquityPlan | null = null,
   eqPos: EquityPosition | null = null,
 ) {
+  FUTURE_SCALE = showEth ? ETH_SESSION_HOURS / RTH_SESSION_HOURS : 1;
   const draggingStrike = dragTarget?.kind === "strike" ? dragTarget.i : null;
   ctx.fillStyle = COLORS.bg;
   ctx.fillRect(0, 0, layout.width, layout.height);
@@ -1441,7 +1472,7 @@ function drawPlTooltip(
 ) {
   if (mouse.y > layout.volTop) return;
   const idx = xToIndex(mouse.x, view, layout);
-  const hours = ((idx - anchorIdx) * tfMinutes) / 60;
+  const hours = hoursFromIndex(idx, anchorIdx, tfMinutes);
   if (hours < 0 || hours > surface.hoursToExpiry) return;
   const price = yToPrice(mouse.y, domain, layout);
   if (price <= 0) return;
@@ -1531,8 +1562,10 @@ function drawHeatmap(
   dragTarget: DragTarget | null,
   anchorIdx: number,
 ) {
+  // Color scale: the loss at the stop, or with no stop the premium itself
+  // (a long option's max loss) — never a flat $100.
   const risk = Math.max(
-    overlay.slPremium !== null ? (overlay.entry - overlay.slPremium) * 100 : 100,
+    overlay.slPremium !== null ? (overlay.entry - overlay.slPremium) * 100 : Math.abs(overlay.entry) * 100,
     1,
   );
   const x0 = indexToX(anchorIdx, view, layout);

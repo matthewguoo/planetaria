@@ -13,6 +13,7 @@ import {
   type UntrackedPosition,
 } from "../../lib/api";
 import { fmtUsd, pnlCls } from "../../lib/format";
+import { ConfirmButton } from "../ConfirmButton";
 import { useAccountStore } from "../../store/accountStore";
 import { useTradingStore } from "../../store/tradingStore";
 import { useUiStore } from "../../store/uiStore";
@@ -20,10 +21,12 @@ import { fmtTimeET } from "../Chart/scales";
 
 type Tab = "POSITIONS" | "HISTORY" | "ACCOUNT";
 
-/** Premium cost basis in dollars for percent-return display. */
+/** Cost basis in dollars for percent-return display: premium x 100 per
+ * option set, price x 1 per share. */
 function planBasis(plan: Plan): number {
-  const premium = Math.abs(plan.fill_premium ?? plan.entry_limit);
-  return premium * 100 * (plan.filled_qty || plan.qty);
+  const price = Math.abs(plan.fill_premium ?? plan.entry_limit);
+  const multiplier = plan.asset_class === "equity" ? 1 : 100;
+  return price * multiplier * (plan.filled_qty || plan.qty);
 }
 
 /** "$X (+Y%)" against the premium basis — % omitted when basis is ~0
@@ -248,13 +251,11 @@ function PositionRow({ plan }: { plan: Plan }) {
           >
             SL▲
           </button>
-          <button
-            className="border border-bb-loss px-1.5 text-[10px] text-bb-loss hover:bg-bb-loss hover:text-black"
+          <ConfirmButton
+            label="CLOSE"
             disabled={busy}
-            onClick={() => act(() => closePosition(plan.id))}
-          >
-            CLOSE
-          </button>
+            onConfirm={() => act(() => closePosition(plan.id))}
+          />
         </span>
         {error && (
           <div className="max-w-[160px] truncate text-[9px] text-bb-loss" title={error}>
@@ -330,10 +331,12 @@ function PositionsTab() {
         {untracked.length > 0 && (
           <span className="text-[10px] text-bb-orange">{untracked.length} UNTRACKED @ BROKER</span>
         )}
-        <button
-          className="ml-auto border border-bb-loss px-2 py-0.5 text-[10px] text-bb-loss hover:bg-bb-loss hover:text-black"
+        <ConfirmButton
+          label="FLATTEN ALL"
+          confirmLabel={`CONFIRM FLATTEN ${positions.length}`}
+          className="ml-auto py-0.5"
           disabled={busy || !positions.length}
-          onClick={async () => {
+          onConfirm={async () => {
             setBusy(true);
             try {
               await flattenAll();
@@ -342,9 +345,7 @@ function PositionsTab() {
               setBusy(false);
             }
           }}
-        >
-          FLATTEN ALL
-        </button>
+        />
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto">
         {positions.length || untracked.length ? (

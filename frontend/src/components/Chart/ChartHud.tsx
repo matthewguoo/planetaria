@@ -389,6 +389,9 @@ export function ChartHud({
   const viewingPlanId = useUiStore((s) => s.viewingPlanId);
   const viewingUntracked = useUiStore((s) => s.viewingUntracked);
   const viewedHistorical = useUiStore((s) => s.viewedHistorical);
+  // The MC / theta blocks read the DESIGNER; in position view the chart
+  // shows a position, not the designer, so those numbers would be a lie.
+  const inPositionView = viewingPlanId != null || viewingUntracked != null;
   const tf = useTradingStore((s) => s.tf);
   const volShift = useStrategyStore((s) => s.volShift);
   const setVolShift = useStrategyStore((s) => s.setVolShift);
@@ -520,9 +523,9 @@ export function ChartHud({
       )}
       {!viewingPlanId && viewingUntracked && <UntrackedBlock symbol={viewingUntracked} />}
 
-      {variant !== "readout" && indicators.theta && <ThetaBlock designer={designer} />}
+      {variant !== "readout" && !inPositionView && indicators.theta && <ThetaBlock designer={designer} />}
 
-      {variant !== "readout" && indicators.sim && designer.ready && p && (
+      {variant !== "readout" && !inPositionView && indicators.sim && designer.ready && p && (
         <div
           className="pointer-events-none flex flex-col gap-0.5 border border-bb-border/60 bg-black/75 px-1.5 py-1"
           title="Monte Carlo: 2000 paths with the enforcer's exact exit rules, net of spread friction. Analytic rows: risk-neutral GBM."

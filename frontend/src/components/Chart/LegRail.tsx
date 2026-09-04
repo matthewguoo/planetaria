@@ -104,7 +104,9 @@ export function LegRail({ designer }: { designer: Designer }) {
   const sides = useStrategyStore((s) => s.sides);
   const ratios = useStrategyStore((s) => s.ratios);
   const setStrike = useStrategyStore((s) => s.setStrike);
-  const viewingPlanId = useUiStore((s) => s.viewingPlanId);
+  // Position view (a plan or an untracked row): the chart shows that
+  // position's legs, not the designer's — the rail has nothing to edit.
+  const inPositionView = useUiStore((s) => s.viewingPlanId != null || s.viewingUntracked != null);
 
   const railRef = useRef<HTMLDivElement>(null);
   const [dragging, setDragging] = useState<number | null>(null);
@@ -127,7 +129,7 @@ export function LegRail({ designer }: { designer: Designer }) {
   );
 
   // Hidden in read-only position view, or with nothing to show.
-  if (viewingPlanId || !scale || !strikes.length || !chain || !expiry) return null;
+  if (inPositionView || !scale || !strikes.length || !chain || !expiry) return null;
 
   return (
     <div

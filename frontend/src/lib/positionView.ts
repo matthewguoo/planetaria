@@ -13,6 +13,7 @@
 
 import type { Plan, UntrackedPosition } from "./api";
 import {
+  impliedVol,
   positionValue,
   TRADING_HOURS_PER_YEAR,
   tradingHoursToExpiry,
@@ -20,7 +21,7 @@ import {
   type Smiles,
 } from "./optionsMath";
 import { tradingDateAhead } from "./equityMath";
-import { etWallToUtcIso } from "./et";
+import { etDateIso, etWallToUtcIso } from "./et";
 import { contractLabel, heldQty, occLabel } from "./positionDetail";
 import { tradingHoursBetween } from "./tradingTime";
 import type { Chain } from "../store/strategyStore";
@@ -69,11 +70,36 @@ export function planExits(plan: Plan, draft: ExitDraft | null): ExitDraft {
   return draft ?? { sl: plan.sl_premium, tp: plan.tp_premium, timeStopUtc: plan.time_stop_utc };
 }
 
+/** The vol the market is quoting for ONE contract, backed out of a price
+ * (the quote mid, or the broker's mark) at the underlying's spot. The data
+ * feed's snapshot carries no IV outside market hours; the price is still
+ * real, so the surface is priced off it rather than a flat guess. */
+export function marketIv(args: {
+  price: number | null | undefined;
+  spot: number | null | undefined;
+  strike: number;
+  right: "C" | "P";
+  expiry: string;
+  nowMs?: number;
+}): number | null {
+  const { price, spot, strike, right, expiry } = args;
+  if (!price || price <= 0 || !spot || spot <= 0) return null;
+  const nowMs = args.nowMs ?? Date.now();
+  if (expiry < etDateIso(nowMs)) return null; // expired: no time value to explain
+  const tau = tradingHoursToExpiry(expiry, nowMs) / TRADING_HOURS_PER_YEAR;
+  if (tau <= 0) return null;
+  const iv = impliedVol(price, spot, strike, tau, right);
+  return iv !== null && iv > 0.005 && iv < 5 ? iv : null;
+}
+
 export function buildPositionView(
   plan: Plan,
   chain: Chain | null,
   mode: "entry" | "live",
   draft: ExitDraft | null = null,
+  /** Vol for a leg that carries none (adopted positions), when the chain
+   * has no contract for it either: the market-implied one (marketIv). */
+  fallbackIv: number | null = null,
 ): PositionView | null {
   if (!plan.legs.length) return null;
   // Equity plans (share legs: no right/strike/expiry) have no options
@@ -96,7 +122,8 @@ export function buildPositionView(
       mode === "live" && chain
         ? chain.contracts.find((c) => c.symbol === l.symbol) ?? null
         : null;
-    const iv = contract && contract.iv > 0 ? contract.iv : l.iv ?? 0;
+    const own = l.iv ?? 0;
+    const iv = contract && contract.iv > 0 ? contract.iv : own > 0 ? own : fallbackIv ?? 0;
     return {
       symbol: l.symbol,
       right: l.right,
@@ -104,7 +131,7 @@ export function buildPositionView(
       qty: l.ratio || 1,
       side: (l.side >= 0 ? 1 : -1) as 1 | -1,
       entry: l.entry,
-      iv: iv > 0 ? iv : 0.2, // adopted positions may carry iv=0; degrade loudly-ish
+      iv: iv > 0 ? iv : 0.2, // nothing knows a vol: degrade loudly-ish
     };
   });
 

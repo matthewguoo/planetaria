@@ -100,3 +100,32 @@ describe("equity positions", () => {
     expect(v.timeStopHours).toBeLessThan(v.hoursTotal - 6);
   });
 });
+
+describe("marketIv", () => {
+  it("backs the vol out of a quoted price at the spot, null when there is no price or time", async () => {
+    const { marketIv } = await import("./positionView");
+    const { bsPrice, TRADING_HOURS_PER_YEAR, tradingHoursToExpiry } = await import("./optionsMath");
+    const nowMs = Date.parse("2026-09-03T19:35:27Z");
+    const tau = tradingHoursToExpiry("2026-09-04", nowMs) / TRADING_HOURS_PER_YEAR;
+    const price = bsPrice(229.95, 230, tau, 0.47, "P");
+    expect(marketIv({ price, spot: 229.95, strike: 230, right: "P", expiry: "2026-09-04", nowMs })).toBeCloseTo(0.47, 3);
+    expect(marketIv({ price: null, spot: 229.95, strike: 230, right: "P", expiry: "2026-09-04", nowMs })).toBeNull();
+    expect(marketIv({ price, spot: 0, strike: 230, right: "P", expiry: "2026-09-04", nowMs })).toBeNull();
+    // at or below intrinsic there is no vol to find
+    expect(marketIv({ price: 0.05, spot: 229.95, strike: 230, right: "P", expiry: "2026-09-04", nowMs })).toBeNull();
+    // expired
+    expect(marketIv({ price, spot: 229.95, strike: 230, right: "P", expiry: "2026-09-01", nowMs })).toBeNull();
+  });
+
+  it("buildPositionView prices a leg with no IV at the fallback before the flat 20%", async () => {
+    const { buildPositionView } = await import("./positionView");
+    const plan = {
+      ...eqPlan, id: "op2", asset_class: "option", underlying: "NVDA", fill_premium: 2.07, entry_limit: 2.07,
+      legs: [{ symbol: put.symbol, right: "P", strike: 230, expiry: "2026-09-04", side: 1, ratio: 1, entry: 2.07, iv: null }],
+      tp_premium: null, sl_premium: null, time_stop_utc: null,
+    } as unknown as Plan;
+    expect(buildPositionView(plan, null, "entry")!.legs[0].iv).toBe(0.2);
+    expect(buildPositionView(plan, null, "entry", null, 0.47)!.legs[0].iv).toBe(0.47);
+    expect(buildPositionView(plan, null, "entry", null, null)!.legs[0].iv).toBe(0.2);
+  });
+});

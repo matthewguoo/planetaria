@@ -24,6 +24,7 @@ import {
 import { fmtUsd, pnlCls } from "../../lib/format";
 import { usePoll } from "../../lib/usePoll";
 import { useAccountStore, useTradingMode } from "../../store/accountStore";
+import { ConfirmButton } from "../ConfirmButton";
 import { AccountsPanel } from "../System/SystemPanels";
 import { CapabilitiesPanel } from "./CapabilitiesPanel";
 
@@ -522,10 +523,10 @@ export function AccountPage({ onViewPlan, onViewUntracked }: { onViewPlan?: (pla
                       VIEW
                     </button>
                   )}
-                  <button
-                    className="ml-1 border border-bb-loss px-1.5 text-[10px] text-bb-loss hover:bg-bb-loss hover:text-black"
-                    onClick={async (e) => {
-                      e.stopPropagation();
+                  <ConfirmButton
+                    label="CLOSE"
+                    className="ml-1"
+                    onConfirm={async () => {
                       try {
                         await closePosition(p.id);
                         await refreshPositions();
@@ -533,9 +534,7 @@ export function AccountPage({ onViewPlan, onViewUntracked }: { onViewPlan?: (pla
                         setError(apiError(err));
                       }
                     }}
-                  >
-                    CLOSE
-                  </button>
+                  />
                 </td>
               </tr>
             ))}
