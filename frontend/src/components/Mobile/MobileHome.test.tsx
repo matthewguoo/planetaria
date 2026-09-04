@@ -154,7 +154,7 @@ describe("MobileHome", () => {
     // seeded at basis minus the account default (50%): 2.07 -> 1.03, one 2% step up
     fireEvent.click(screen.getByLabelText("STOP up"));
     await act(async () => {
-      fireEvent.click(screen.getByText(/ADD STOP 1\.06/));
+      fireEvent.click(screen.getByText(/ADD STOP 1\.05/));
     });
     expect(tightenExits).toHaveBeenCalledWith(plan.id, { sl_premium: 1.05 });
   });
