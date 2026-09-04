@@ -95,6 +95,9 @@ async def startup(app: FastAPI, settings: Settings) -> None:
     app.state.broadcaster = broadcaster
     app.state.market = market
     app.state.chain = ChainService(alpaca, redis, market)
+    from app.services.contracts import ContractsService
+
+    app.state.contracts = ContractsService(alpaca, market)
     app.state.risk = risk
     app.state.trade = trade
     app.state.enforcer = enforcer

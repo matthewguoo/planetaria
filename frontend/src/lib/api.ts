@@ -197,7 +197,9 @@ export type Plan = {
   entered_at?: string | null;
   exited_at?: string | null;
   /** Chunked closing waves (external liquidations): one chart marker each. */
-  exit_fills?: { ts: string; premium: number; qty: number }[] | null;
+  exit_fills: { ts: string; premium: number; qty: number; realized?: number | null; kind?: "partial" | "external"; reason?: string; order_id?: string }[] | null;
+  /** In-flight manual partial close, cleared when it fills or dies. */
+  partial_exit?: { key: string; qty: number; limit: number | null; order_id: string | null; ts: string } | null;
   /** Execution-quality ledger: realized fill vs submit-time fair value. */
   exec_quality?: Partial<
     Record<
@@ -223,7 +225,11 @@ export type UntrackedPosition = {
   current_price: number | null;
   market_value: number | null;
   unrealized_pl: number | null;
-  occ: { underlying: string; expiry: string; right: "C" | "P"; strike: number } | null;
+  occ: { underlying: string; expiry: string; right: "C" | "P"; strike: number } | null;  unrealized_plpc?: number | null;
+  unrealized_intraday_pl?: number | null;
+  change_today?: number | null;
+  lastday_price?: number | null;
+  cost_basis?: number | null;
 };
 
 /** One row of the account overview: a broker position stamped with the
@@ -275,8 +281,54 @@ export const getHistory = () =>
   api.get<{ trades: Plan[] }>("/api/history").then((r) => r.data.trades);
 export const postOrder = (payload: object) =>
   api.post<Plan>("/api/orders", payload).then((r) => r.data);
-export const closePosition = (planId: string) =>
-  api.post(`/api/positions/${planId}/close`).then((r) => r.data);
+export type CloseOptions = { qty?: number; order_type?: "market" | "limit"; limit_price?: number };
+export type CloseResult = {
+  ok: boolean;
+  mode?: "whole" | "partial";
+  status?: string;
+  order_id?: string;
+  closed_qty?: number;
+  remaining_qty?: number;
+  tp_premium?: number;
+};
+/** Whole @ market (the exit ladder) unless `opts` says otherwise: a qty below
+ * what is held is a partial close; order_type limit rests at limit_price. */
+export const closePosition = (planId: string, opts?: CloseOptions) =>
+  api.post<CloseResult>(`/api/positions/${planId}/close`, opts ?? {}).then((r) => r.data);
+
+export type HoldingDetail = {
+  position: Holding;
+  contract: {
+    style: string | null;
+    size: number;
+    open_interest: number;
+    open_interest_date: string | null;
+    tradable: boolean;
+    close_price: number | null;
+    underlying: string;
+  } | null;
+  quote: {
+    bid?: number | null;
+    ask?: number | null;
+    bid_size?: number | null;
+    ask_size?: number | null;
+    mid?: number | null;
+    last?: number | null;
+    last_size?: number | null;
+    last_ts?: string | null;
+    iv?: number | null;
+    delta?: number | null;
+    gamma?: number | null;
+    theta?: number | null;
+    vega?: number | null;
+    volume?: number | null;
+  };
+  underlying: { symbol: string; spot: number | null };
+};
+export const getHoldingDetail = (symbol: string) =>
+  api.get<HoldingDetail>(`/api/holdings/${encodeURIComponent(symbol)}`).then((r) => r.data);
+export const replaceOpenOrder = (orderId: string, patch: { limit_price?: number; qty?: number }) =>
+  api.patch<{ id: string; status: string; limit_price: number | null; qty: number | null }>(`/api/orders/${orderId}`, patch).then((r) => r.data);
 export const flattenAll = () => api.post("/api/positions/flatten").then((r) => r.data);
 export const tightenExits = (
   planId: string,
@@ -292,6 +344,9 @@ export type PortfolioHistory = {
 
 export type OpenOrder = {
   id: string;
+  /** The open plan that owns this broker order, and its role there. */
+  plan_id?: string | null;
+  role?: "entry" | "tp" | "exit" | "partial" | null;
   symbol: string;
   side: string;
   qty: number | null;

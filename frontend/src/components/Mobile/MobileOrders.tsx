@@ -84,9 +84,9 @@ export function MobileOpenOrders() {
         </div>
       ))}
       {orders && !orders.length && (
-        <div className="px-3 py-6 text-center text-[12px] text-bb-muted">no working orders</div>
+        <div className="px-3 py-6 text-center text-[12px] text-bb-muted">—</div>
       )}
-      {orders === null && <div className="px-3 py-6 text-center text-[12px] text-bb-muted">loading…</div>}
+      {orders === null && <div className="px-3 py-6 text-center text-[12px] text-bb-muted">…</div>}
       {error && <div className="px-3 py-1 text-[11px] text-bb-loss">✗ {error}</div>}
     </div>
   );
@@ -152,7 +152,7 @@ export function MobileHistory() {
           );
         })}
         {trades && !trades.length && (
-          <div className="px-3 py-6 text-center text-[12px] text-bb-muted">no closed trades yet</div>
+          <div className="px-3 py-6 text-center text-[12px] text-bb-muted">—</div>
         )}
       </div>
     </div>

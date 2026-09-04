@@ -338,6 +338,8 @@ type StrategyState = {
   setSlPct: (v: number) => void;
   setTimeStopEt: (v: string) => void;
   setQty: (v: number) => void;
+  /** Stage the ticket on an existing plan's structure (ADD from the position sheet). */
+  prefillFromPlan: (plan: { legs: { right: string | null; strike: number | null; expiry: string | null; side: number; ratio: number }[]; qty: number; filled_qty?: number | null }) => void;
   setVolShift: (v: number) => void;
   setSkewBeta: (v: boolean) => void;
   /** Build a delta-targeted premium-selling structure from the live chain.
@@ -645,6 +647,22 @@ export const useStrategyStore = create<StrategyState>((set, get) => ({
   setTimeStopEt: (v) => {
     exitPositionViewOnAction();
     set({ timeStopEt: v });
+  },
+  prefillFromPlan: (plan) => {
+    const legs = plan.legs.filter((l) => l.right != null && l.strike != null);
+    if (!legs.length) return;
+    set({
+      expiry: legs[0].expiry ?? undefined,
+      strikes: legs.map((l) => l.strike as number),
+      ratios: legs.map((l) => l.ratio || 1),
+      rights: legs.map((l) => l.right as "C" | "P"),
+      sides: legs.map((l) => (l.side > 0 ? 1 : -1)),
+      qty: Math.max(1, plan.filled_qty || plan.qty),
+      // Marked edited/modified so loadChain keeps this structure instead of
+      // resetting to the preset for the new symbol.
+      modified: true,
+      edited: true,
+    } as Partial<StrategyState>);
   },
   setQty: (v) => {
     exitPositionViewOnAction();

@@ -115,7 +115,34 @@ class TradePlan(Base):
     # literature's verdict is that spread friction — not direction — is where
     # retail options P/L dies; this measures ours on every fill.
     exec_quality: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # In-flight MANUAL partial close: {key, qty, limit, order_id, ts}. One at
+    # a time; cleared when its fill (a kind="partial" wave in exit_fills) or
+    # death is absorbed. The plan keeps running for the remainder.
+    partial_exit: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    @property
+    def pending_partial_qty(self) -> int:
+        return int((self.partial_exit or {}).get("qty") or 0)
+
+    @property
+    def restable_qty(self) -> int:
+        """Units a broker-resting TP may claim: what is held minus what a
+        pending partial close already commits (over-committing is refused
+        at the broker)."""
+        return max(self.effective_qty - self.pending_partial_qty, 0)
+
+    @property
+    def partial_realized(self) -> float:
+        return round(sum(float(f.get("realized") or 0.0)
+                         for f in (self.exit_fills or []) if f.get("kind") == "partial"), 2)
+
+    def close_pnl(self, premium: float | None, qty: int | None = None) -> float | None:
+        """Realized P/L at the FINAL close: the remainder marked at `premium`
+        plus every partial wave already realized. Every final-close site
+        uses this so a partial's P/L is added, never overwritten."""
+        base = self.pnl_at(premium, qty)
+        return None if base is None else round(base + self.partial_realized, 2)
 
     @property
     def effective_qty(self) -> int:
@@ -170,6 +197,7 @@ class TradePlan(Base):
             "exited_at": as_utc(self.exited_at).isoformat() if self.exited_at else None,
             "exit_fills": self.exit_fills,
             "exec_quality": self.exec_quality,
+            "partial_exit": self.partial_exit,
         }
 
 

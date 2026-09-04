@@ -954,6 +954,16 @@ class TradeService:
                 )
                 plan = result.scalars().first()
             if plan is None:
+                plan = await self.plan_for_partial_order(order_id)
+                if plan is None:
+                    return
+                if event == "fill":
+                    if self.enforcer:
+                        await self.enforcer.absorb_partial_locked(plan.id, order)
+                    else:
+                        await self.apply_partial_fill(plan.id, order)
+                elif event in ("canceled", "expired", "rejected"):
+                    await self._update_plan(plan.id, partial_exit=None)
                 return
             # Broker-resting TP events: a fill closes the plan; a dead order
             # clears the field so the monitor re-rests it.
@@ -992,7 +1002,7 @@ class TradeService:
                 if (eq := self._quality_on_fill(plan, "entry", avg)) is not None:
                     fields["exec_quality"] = eq
             elif event == "fill":
-                realized = plan.pnl_at(avg)
+                realized = plan.close_pnl(avg)
                 fsm_event = PlanEvent.EXIT_FILLED
                 fields = {
                     "exit_premium": avg,
@@ -1194,6 +1204,64 @@ class TradeService:
 
     # ------------------------------------------------- broker-resting TP
 
+    async def submit_partial_exit(self, plan: TradePlan, qty: int, limit_price: float | None,
+                                  key: str):
+        """Close `qty` of `plan.effective_qty` under its own idempotency key
+        ({plan.id}-x{key}, key = p...). Never registered in the enforcer's
+        ghost keys: a filled partial must reduce the plan, not close it."""
+        if not self.alpaca.configured:
+            raise ValueError("partial close needs the broker (keyless mode)")
+        client_order_id = f"{plan.id}-x{key}"
+        request = self._close_request(plan, limit_price, client_order_id, sets=qty)
+        return await self._submit_idempotent(request, client_order_id)
+
+    async def apply_partial_fill(self, plan_id: str, order) -> TradePlan:
+        """A manual partial close filled: record the wave with its realized
+        P/L, shrink the plan to the remainder (its stop stays armed), or
+        close it outright if the fill took everything held."""
+        plan = await self.get_plan(plan_id)
+        filled = int(float(getattr(order, "filled_qty", 0) or 0))
+        raw = float(order.filled_avg_price or 0) or None
+        avg = self._fill_value(plan, raw, is_entry=False)
+        held = plan.effective_qty
+        order_id = str(order.id)
+        if filled <= 0 or avg is None:
+            return await self._update_plan(plan_id, partial_exit=None)
+        if filled >= held:
+            await self.fsm.apply(plan_id, PlanEvent.EXIT_SUBMITTED, exit_order_id=order_id,
+                                 exit_reason="manual", partial_exit=None)
+            result = await self.fsm.apply(
+                plan_id, PlanEvent.EXIT_FILLED, guard={"exit_order_id": order_id},
+                exit_premium=avg, realized_pnl=plan.close_pnl(avg),
+                exited_at=as_utc(getattr(order, "filled_at", None)) or utcnow(),
+            )
+            if result.applied and self.enforcer:
+                self.enforcer.disarm(plan_id)
+            return await self.get_plan(plan_id)
+        realized = plan.pnl_at(avg, filled)
+        wave = {
+            "ts": (as_utc(getattr(order, "filled_at", None)) or utcnow()).isoformat(),
+            "premium": avg, "qty": filled, "realized": realized,
+            "kind": "partial", "reason": "manual", "order_id": order_id,
+        }
+        await self.fsm.apply(
+            plan_id, PlanEvent.EXIT_PARTIAL,
+            qty=max(plan.qty - filled, held - filled),
+            filled_qty=held - filled,
+            exit_fills=[*(plan.exit_fills or []), wave],
+            partial_exit=None,
+        )
+        log.info("plan %s: partial close filled %d/%d @ %.4f (%+.2f)", plan_id, filled, held, avg, realized or 0)
+        return await self.get_plan(plan_id)
+
+    async def plan_for_partial_order(self, order_id: str) -> TradePlan | None:
+        """The open plan whose pending partial close is `order_id` (JSON
+        field - a Python scan over the open plans, which are few)."""
+        for plan in await self.risk.open_plans():
+            if (plan.partial_exit or {}).get("order_id") == order_id:
+                return plan
+        return None
+
     async def submit_resting_tp(self, plan: TradePlan) -> None:
         """Rest the take-profit AT THE BROKER as a live limit close: zero
         software latency and it fills even if this engine is down. The key
@@ -1204,7 +1272,7 @@ class TradeService:
         last_exc: Exception | None = None
         for suffix in ("", "r2", "r3", "r4"):
             key = f"{plan.id}-xtp{cents}{suffix}"
-            request = self._close_request(plan, plan.tp_premium, key)
+            request = self._close_request(plan, plan.tp_premium, key, sets=plan.restable_qty)
             try:
                 order = await self._submit_idempotent(request, key)
                 await self.fsm.update_fields(plan.id, tp_order_id=str(order.id))
@@ -1272,7 +1340,7 @@ class TradeService:
             plan_id, PlanEvent.EXIT_SUBMITTED,
             exit_order_id=order_id, exit_reason="tp", tp_order_id=None,
         )
-        realized = plan.pnl_at(avg)
+        realized = plan.close_pnl(avg)
         result = await self.fsm.apply(
             plan_id, PlanEvent.EXIT_FILLED,
             guard={"exit_order_id": order_id},

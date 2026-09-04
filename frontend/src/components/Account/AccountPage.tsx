@@ -220,13 +220,22 @@ function ExitQualityPanel({ closed }: { closed: Plan[] | null }) {
   );
 }
 
+/** Theme token with a fallback, read once per draw (the canvas cannot use CSS vars). */
+function cssColor(name: string, fallback: string): string {
+  if (typeof getComputedStyle !== "function") return fallback;
+  const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  return v || fallback;
+}
+
 export function EquityCurve({ history }: { history: PortfolioHistory | null }) {
   const ref = useRef<HTMLCanvasElement>(null);
 
   useEffect(() => {
     const canvas = ref.current;
     if (!canvas) return;
-    const ctx = canvas.getContext("2d")!;
+    const draw = () => {
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
     const dpr = window.devicePixelRatio || 1;
     const w = canvas.clientWidth;
     const h = canvas.clientHeight;
@@ -248,12 +257,10 @@ export function EquityCurve({ history }: { history: PortfolioHistory | null }) {
       ctx.textAlign = "center";
       const msg =
         history === null
-          ? "loading…"
+          ? "…"
           : points.length === 1
-            ? `history starts ${new Date(points[0].t * 1000).toLocaleDateString("en-US", { month: "short", day: "numeric" })} · $${Math.round(points[0].v).toLocaleString()} — one session so far`
-            : (history.equity ?? []).length
-              ? "no equity history yet (account not funded for this period)"
-              : "no portfolio history (broker unreachable?)";
+            ? `$${Math.round(points[0].v).toLocaleString()} · since ${new Date(points[0].t * 1000).toLocaleDateString("en-US", { month: "short", day: "numeric" })}`
+            : "—";
       ctx.fillText(msg, w / 2, h / 2);
       return;
     }
@@ -270,7 +277,7 @@ export function EquityCurve({ history }: { history: PortfolioHistory | null }) {
     const yOf = (v: number) => h - 16 - ((v - lo) / (hi - lo)) * (h - 24);
 
     const up = points[points.length - 1].v >= points[0].v;
-    const color = up ? "#00C853" : "#FF1744";
+    const color = up ? cssColor("--bb-profit", "#00C853") : cssColor("--bb-loss", "#FF1744");
     ctx.strokeStyle = color;
     ctx.lineWidth = 1.5;
     ctx.beginPath();
@@ -292,6 +299,14 @@ export function EquityCurve({ history }: { history: PortfolioHistory | null }) {
     ctx.fillText(first.toLocaleDateString("en-US", { month: "short", day: "numeric" }), 4, h - 4);
     ctx.textAlign = "right";
     ctx.fillText(last.toLocaleDateString("en-US", { month: "short", day: "numeric" }), w - 60, h - 4);
+    };
+    draw();
+    // Phones rotate and collapse their URL bar: redraw on any size change,
+    // not only when the data changes.
+    if (typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(() => draw());
+    ro.observe(canvas.parentElement ?? canvas);
+    return () => ro.disconnect();
   }, [history]);
 
   return <canvas ref={ref} className="h-full w-full" />;

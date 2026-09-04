@@ -135,6 +135,9 @@ class ExitEnforcer:
         # Timing knobs (instance-level so pressure tests can compress them).
         self.escalation = list(ESCALATION)
         self.verify_poll_s = 5.0
+        # How long a MARKET partial close is awaited inline before the
+        # stream / reconcile take over (the fill usually lands in a second).
+        self.partial_wait_s = 10.0
         self.verify_attempts = 120  # ~10 min of polls before loud rearm
         self.rearm_delay_s = 5.0
         self.reconcile_interval_s = 45.0
@@ -234,6 +237,13 @@ class ExitEnforcer:
                 notes="orphaned planned row (no order submitted)",
             )
             return
+        if plan.partial_exit and self.trade.alpaca.configured:
+            try:
+                plan = await self._reconcile_partial(plan)
+            except Exception:
+                log.exception("partial-exit reconcile failed for %s", plan.id)
+            if plan.status in ("closed", "cancelled", "rejected"):
+                return
         # Manual/external liquidation, checked BEFORE the time-stop backstop:
         # a held position that VANISHED at the broker without any exit order
         # of ours means someone closed it out from under the engine (broker
@@ -341,7 +351,7 @@ class ExitEnforcer:
                 )
                 raw = float(order.filled_avg_price or 0) or None
                 avg = self.trade._fill_value(plan, raw, is_entry=False)
-                realized = plan.pnl_at(avg)
+                realized = plan.close_pnl(avg)
                 eq = self.trade._quality_on_fill(plan, "exit", avg)
                 await self.trade.fsm.apply(
                     plan.id, PlanEvent.EXIT_FILLED,
@@ -728,7 +738,7 @@ class ExitEnforcer:
         premium, sets_closed, exited_at, events, detail = (
             await self._capture_external_exit(plan)
         )
-        realized = plan.pnl_at(premium, sets_closed or None)
+        realized = plan.close_pnl(premium, sets_closed or None)
         if realized is not None and sets_closed and sets_closed < plan.effective_qty:
             detail += (
                 f"; only {sets_closed}/{plan.effective_qty} sets found in history"
@@ -783,7 +793,7 @@ class ExitEnforcer:
                 if premium is None:
                     log.warning("blank-exit repair: nothing recoverable for %s", plan.id)
                     continue
-                realized = plan.pnl_at(premium, sets_closed or None)
+                realized = plan.close_pnl(premium, sets_closed or None)
                 already_noted = "exit backfilled from broker history" in (plan.notes or "")
                 await self.trade.fsm.update_fields(
                     plan.id,
@@ -815,6 +825,14 @@ class ExitEnforcer:
         """The plan is closed; cancel any unresolved ghost that is live so no
         stray closing order can fill into a fresh (reversed) position."""
         self._parked.discard(plan_id)
+        try:
+            closed = await self.trade.get_plan(plan_id)
+            pending = (closed.partial_exit or {}).get("order_id")
+            if pending:
+                await self.trade.cancel_order(pending)
+                await self.trade.fsm.update_fields(plan_id, partial_exit=None)
+        except Exception:
+            log.exception("partial sweep failed for plan %s", plan_id)
         keys = self._ghost_keys.pop(plan_id, None)
         if not keys:
             return
@@ -1261,6 +1279,11 @@ class ExitEnforcer:
                          plan_id, reason)
                 await self._sweep_ghosts_on_close(plan_id)
                 return
+        if plan.partial_exit:
+            plan = await self._cancel_partial_exit(plan)
+            if plan.status in ("closed", "cancelled", "rejected"):
+                await self._sweep_ghosts_on_close(plan_id)
+                return
         # Closed market: the ladder is useless (limits can't fill, market
         # orders bounce) and actively harmful (all-night cancel/replace
         # churn). Park one resting limit instead; the monitor resumes the
@@ -1495,18 +1518,159 @@ class ExitEnforcer:
 
     # ---------------------------------------------------- manual actions
 
-    async def manual_close(self, plan_id: str) -> None:
+    async def manual_close(self, plan_id: str, qty: int | None = None,
+                           order_type: str = "market", limit_price: float | None = None) -> dict:
+        """Human close. Whole @ market = the exit ladder; whole @ limit = the
+        broker-resting TP moved to that price (the stop stays armed); a
+        quantity below what is held = a partial close under its own order
+        with the plan continuing for the remainder."""
         plan = await self.trade.get_plan(plan_id)
+        if plan.status == "planned":
+            if not plan.entry_order_id:
+                await self.trade.fsm.apply(plan.id, PlanEvent.ENTRY_CANCELLED,
+                                           notes="cancelled before any order was submitted")
+                return {"mode": "whole", "status": "cancelled"}
+            await self.trade.cancel_entry(plan)
+            return {"mode": "whole", "status": "entry_cancelled"}
         if plan.status == "submitted":
             await self.trade.cancel_entry(plan)
-            return
-        if plan.status in ("partially_filled", "filled", "exiting"):
-            if plan.status == "partially_filled":
-                await self.trade.cancel_entry(plan)
-            self.disarm(plan_id)
-            await self._execute_exit(plan_id, "manual")
-            # Re-arm a watchdog in case the exit order dies.
-            await self.arm(plan_id)
+            return {"mode": "whole", "status": "entry_cancelled"}
+        if plan.status not in ("partially_filled", "filled", "exiting"):
+            raise ValueError(f"plan is {plan.status} - nothing to close")
+        held = plan.effective_qty
+        if qty is not None and 0 < qty < held:
+            if plan.status == "exiting":
+                raise ValueError("exit in progress - cannot partial close now")
+            return await self._partial_close(plan_id, int(qty),
+                                             limit_price if order_type == "limit" else None)
+        if order_type == "limit":
+            if limit_price is None:
+                raise ValueError("limit close needs limit_price")
+            if plan.status == "exiting":
+                raise ValueError("exit in progress - cannot rest a limit now")
+            updated = await self.tighten_exits(plan_id, tp=float(limit_price), sl=None, time_stop_utc=None)
+            return {"mode": "whole", "status": "resting_tp", "tp_premium": updated.tp_premium}
+        if plan.status == "partially_filled":
+            await self.trade.cancel_entry(plan)
+        self.disarm(plan_id)
+        await self._execute_exit(plan_id, "manual")
+        # Re-arm a watchdog in case the exit order dies.
+        await self.arm(plan_id)
+        return {"mode": "whole", "status": "ladder"}
+
+    async def _partial_close(self, plan_id: str, qty: int, limit: float | None) -> dict:
+        """Close `qty` of the held units under the plan's exit lock. The
+        resting TP comes down first (it plus a partial would over-commit
+        the position at the broker); the monitor re-rests it at the reduced
+        size after the fill. Market partials are awaited briefly; a limit
+        partial rests and is resolved by the stream / reconcile."""
+        lock = self._exit_locks.setdefault(plan_id, asyncio.Lock())
+        if lock.locked():
+            raise ValueError("exit in progress - cannot partial close now")
+        async with lock:
+            plan = await self.trade.get_plan(plan_id)
+            if plan.partial_exit:
+                raise ValueError("a partial close is already pending - cancel it first")
+            if plan.status not in ("filled", "partially_filled"):
+                raise ValueError(f"plan is {plan.status} - cannot partial close")
+            held = plan.effective_qty
+            if not 0 < qty < held:
+                raise ValueError(f"qty must be between 1 and {held - 1} for a partial close")
+            if limit is not None and plan.sl_premium is not None and limit <= plan.sl_premium:
+                raise ValueError("limit must be above the stop")
+            if plan.tp_order_id:
+                if await self.trade.cancel_resting_tp(plan):
+                    return {"mode": "partial", "status": "closed_by_tp", "closed_qty": held, "remaining_qty": 0}
+                plan = await self.trade.get_plan(plan_id)
+            key = f"p{uuid4().hex[:6]}"
+            stamp = {"key": key, "qty": qty, "limit": limit, "order_id": None,
+                     "ts": datetime.now(timezone.utc).isoformat()}
+            await self.trade.fsm.apply(plan_id, PlanEvent.EXIT_PARTIAL_SUBMITTED, partial_exit=stamp)
+            try:
+                order = await self.trade.submit_partial_exit(plan, qty, limit, key)
+            except Exception as exc:
+                await self.trade.fsm.update_fields(plan_id, partial_exit=None)
+                raise ValueError(f"partial close rejected: {exc}")
+            order_id = str(order.id)
+            await self.trade.fsm.update_fields(plan_id, partial_exit={**stamp, "order_id": order_id})
+            if limit is not None:
+                return {"mode": "partial", "status": "resting", "order_id": order_id,
+                        "closed_qty": 0, "remaining_qty": held}
+            deadline = time.monotonic() + self.partial_wait_s
+            while time.monotonic() < deadline:
+                status = (await self.trade.order_status(order_id)).lower()
+                if status == "filled":
+                    fresh = await self.trade.alpaca.call(
+                        self.trade.alpaca.trading.get_order_by_id, order_id, retries=1)
+                    updated = await self.trade.apply_partial_fill(plan_id, fresh)
+                    return {"mode": "partial", "status": "filled", "order_id": order_id,
+                            "closed_qty": qty, "remaining_qty": updated.effective_qty
+                            if updated.status not in ("closed",) else 0}
+                if any(t in status for t in ("cancel", "rejected", "expired")):
+                    await self.trade.fsm.update_fields(plan_id, partial_exit=None)
+                    raise ValueError(f"partial close order died: {status}")
+                await asyncio.sleep(min(1.0, self.verify_poll_s))
+            return {"mode": "partial", "status": "pending", "order_id": order_id,
+                    "closed_qty": 0, "remaining_qty": held}
+
+    async def absorb_partial_locked(self, plan_id: str, order) -> None:
+        """A partial-close fill from the stream, under the exit lock so it
+        cannot interleave with a ladder that is about to size the close."""
+        lock = self._exit_locks.setdefault(plan_id, asyncio.Lock())
+        async with lock:
+            await self.trade.apply_partial_fill(plan_id, order)
+
+    async def _cancel_partial_exit(self, plan: TradePlan) -> TradePlan:
+        """Before a whole close: take a pending partial order down to a
+        terminal verdict. A partial that filled first shrinks the plan (the
+        ladder then closes what is actually held)."""
+        pe = plan.partial_exit or {}
+        order_id = pe.get("order_id")
+        if not order_id:
+            if pe:
+                await self.trade.fsm.update_fields(plan.id, partial_exit=None)
+            return await self.trade.get_plan(plan.id)
+        try:
+            await self.trade.cancel_order(order_id)
+        except Exception as exc:
+            log.warning("partial cancel errored for %s: %s", plan.id, exc)
+        deadline = time.monotonic() + 5.0
+        while True:
+            try:
+                status = (await self.trade.order_status(order_id)).lower()
+            except Exception:
+                status = ""
+            if status == "filled":
+                fresh = await self.trade.alpaca.call(
+                    self.trade.alpaca.trading.get_order_by_id, order_id, retries=1)
+                return await self.trade.apply_partial_fill(plan.id, fresh)
+            if any(t in status for t in ("cancel", "rejected", "expired")):
+                await self.trade.fsm.update_fields(plan.id, partial_exit=None)
+                return await self.trade.get_plan(plan.id)
+            if time.monotonic() > deadline:
+                raise RuntimeError(f"partial close order {order_id} not terminal after cancel ({status})")
+            await asyncio.sleep(0.5)
+
+    async def _reconcile_partial(self, plan: TradePlan) -> TradePlan:
+        """Restart-safe resolution of an in-flight partial close."""
+        pe = plan.partial_exit or {}
+        order_id = pe.get("order_id")
+        if not order_id:
+            found = await self.trade._order_by_client_id(f"{plan.id}-x{pe.get('key', '')}")
+            if found is None:
+                await self.trade.fsm.update_fields(plan.id, partial_exit=None)
+                return await self.trade.get_plan(plan.id)
+            order_id = str(found.id)
+            await self.trade.fsm.update_fields(plan.id, partial_exit={**pe, "order_id": order_id})
+        status = (await self.trade.order_status(order_id)).lower()
+        if status == "filled":
+            fresh = await self.trade.alpaca.call(
+                self.trade.alpaca.trading.get_order_by_id, order_id, retries=1)
+            return await self.trade.apply_partial_fill(plan.id, fresh)
+        if any(t in status for t in ("cancel", "rejected", "expired")):
+            await self.trade.fsm.update_fields(plan.id, partial_exit=None)
+            return await self.trade.get_plan(plan.id)
+        return plan
 
     async def flatten_all(self) -> int:
         plans = await self.trade.risk.open_plans()

@@ -1,18 +1,20 @@
 /**
- * Phone shell (< 640px or a touch device on its short side). The pattern
- * is the one every phone brokerage converged on: a bottom tab bar
- * (CHART · POSITIONS · ACCOUNT · MORE), the chart as the home screen with
- * the live book docked under it, and one big TRADE button that opens the
- * ticket as a sheet over the still-live chart. The chart itself stays
- * mounted across tabs (feed subscriptions survive), it is only hidden.
+ * Phone shell (< 640px or a touch device on its short side). Bottom tabs
+ * HOME · TRADE · ACCOUNT · MORE. HOME is the account: equity curve, the
+ * book as one-line rows, working orders — a row opens its sheet with every
+ * detail and action. TRADE is the chart with the ticket; it stays mounted
+ * (feed subscriptions survive) and a position sheet's CHART lands there in
+ * position view, whose ✕ returns to HOME.
  *
  * No desktop file grows for this — the phone lives under components/Mobile/
  * and reuses the stores, the designer and the order payload unchanged.
  */
 
 import { useRef, useState } from "react";
+import type { Plan } from "../../lib/api";
 import { useDesigner } from "../../lib/useDesigner";
 import { useAccountStore, useTradingMode } from "../../store/accountStore";
+import { useEquityTicketStore } from "../../store/equityTicketStore";
 import { useStrategyStore } from "../../store/strategyStore";
 import { useTradingStore } from "../../store/tradingStore";
 import { useUiStore } from "../../store/uiStore";
@@ -22,20 +24,21 @@ import { ChainPanel } from "../Chart/ChainPanel";
 import { LegRail } from "../Chart/LegRail";
 import { EquityTicket } from "../Panels/EquityTicket";
 import { MobileAccount } from "./MobileAccount";
-import { OverviewPage } from "../Overview/OverviewPage";
 import { MobileChartBar } from "./MobileChartBar";
 import { MobileHeader } from "./MobileHeader";
+import { MobileHome } from "./MobileHome";
 import { MobileMore } from "./MobileMore";
 import { MobileOpenOrders } from "./MobileOrders";
 import { MobileOptionsTicket } from "./MobileOptionsTicket";
 import { MobilePositions } from "./MobilePositions";
+import { AccountStrip } from "./MobileUi";
 import { Sheet } from "./Sheet";
 
-type Tab = "chart" | "positions" | "account" | "more";
+type Tab = "home" | "trade" | "account" | "more";
 type Dock = "positions" | "orders" | "chain";
 
 /** Read-only position-view banner: which plan the chart is inspecting. */
-function MobilePositionBanner() {
+function MobilePositionBanner({ onBack }: { onBack: () => void }) {
   const viewingPlanId = useUiStore((s) => s.viewingPlanId);
   const viewedHistorical = useUiStore((s) => s.viewedHistorical);
   const pnlMode = useUiStore((s) => s.pnlMode);
@@ -79,35 +82,9 @@ function MobilePositionBanner() {
           ))}
         </span>
       )}
-      <button className="ml-auto h-10 w-10 text-[16px] text-bb-muted" onClick={closePositionView} aria-label="Back to designer">
+      <button className="ml-auto h-10 w-10 text-[16px] text-bb-muted" onClick={() => { closePositionView(); onBack(); }} aria-label="Back">
         ✕
       </button>
-    </div>
-  );
-}
-
-/** One-line book summary between the chart and the dock. */
-function AccountStrip() {
-  const account = useAccountStore((s) => s.account);
-  const positions = useAccountStore((s) => s.positions);
-  const unrealized = positions.reduce((a, p) => a + (p.unrealized_pnl ?? 0), 0);
-  const day = (account?.day_realized_pnl ?? 0) + unrealized;
-  const cls = day >= 0 ? "text-bb-profit" : "text-bb-loss";
-  return (
-    <div className="flex h-8 shrink-0 items-center gap-4 border-b border-bb-border bg-bb-panel px-3 text-[11px]">
-      <span className="text-bb-muted">
-        EQUITY <span data-numeric className="text-white">{account ? `$${Math.round(account.equity).toLocaleString()}` : "—"}</span>
-      </span>
-      <span className="text-bb-muted">
-        TODAY{" "}
-        <span data-numeric className={cls}>
-          {account ? `${day >= 0 ? "+" : "−"}$${Math.abs(day).toFixed(0)}` : "—"}
-          {account && account.equity > 0 ? ` (${day >= 0 ? "+" : "−"}${Math.abs((day / account.equity) * 100).toFixed(2)}%)` : ""}
-        </span>
-      </span>
-      <span className="ml-auto text-bb-muted">
-        CASH <span data-numeric className="text-white">{account ? `$${Math.round(account.cash).toLocaleString()}` : "—"}</span>
-      </span>
     </div>
   );
 }
@@ -119,16 +96,13 @@ export function MobileApp() {
   const positions = useAccountStore((s) => s.positions);
   const untracked = useAccountStore((s) => s.untracked);
   const modified = useStrategyStore((s) => s.modified);
-  const viewingPlanId = useUiStore((s) => s.viewingPlanId);
+  const prefillFromPlan = useStrategyStore((s) => s.prefillFromPlan);
   const viewPosition = useUiStore((s) => s.viewPosition);
   const setSymbol = useTradingStore((s) => s.setSymbol);
+  const equityTicket = useEquityTicketStore();
   const { live } = useTradingMode();
-  // The live server serves this bundle at "/" booted on the OVERVIEW: the
-  // phone opens on ACCOUNT (equity big, holdings) and one tap on a holding
-  // lands on its chart.
-  const [tab, setTab] = useState<Tab>(() =>
-    useUiStore.getState().view === "overview" ? "account" : "chart",
-  );
+  const [tab, setTab] = useState<Tab>("home");
+  const [returnTab, setReturnTab] = useState<Tab>("home");
   const [dock, setDock] = useState<Dock>("positions");
   const [dockOpen, setDockOpen] = useState(true);
   const [ticket, setTicket] = useState(false);
@@ -155,9 +129,33 @@ export function MobileApp() {
     }));
   };
 
+  /** A position sheet's CHART: the TRADE tab in position view; ✕ returns here. */
+  const chartFor = (plan: Plan) => {
+    setSymbol(plan.underlying);
+    setAssetMode(plan.asset_class === "equity" ? "equity" : "options");
+    viewPosition(plan.id);
+    setReturnTab(tab);
+    setTab("trade");
+  };
+  /** ADD from a position sheet: the ticket staged on the plan's structure. */
+  const addTo = (plan: Plan) => {
+    setSymbol(plan.underlying);
+    if (plan.asset_class === "equity") {
+      setAssetMode("equity");
+      equityTicket.setSide(plan.legs[0].side > 0 ? 1 : -1);
+      equityTicket.setSharesOverride(plan.filled_qty || plan.qty);
+    } else {
+      setAssetMode("options");
+      prefillFromPlan(plan);
+    }
+    setReturnTab(tab);
+    setTab("trade");
+    setTicket(true);
+  };
+
   const openCount = positions.length + untracked.length;
   const dockTabs: { id: Dock; label: string }[] = [
-    { id: "positions", label: `POSITIONS${openCount ? ` ${openCount}` : ""}` },
+    { id: "positions", label: `BOOK${openCount ? ` ${openCount}` : ""}` },
     { id: "orders", label: "ORDERS" },
     ...(optionsMode ? [{ id: "chain" as Dock, label: "CHAIN" }] : []),
   ];
@@ -182,15 +180,17 @@ export function MobileApp() {
       <MobileHeader />
       <EnforcementBanner />
 
-      {/* HOME: chart + dock. Kept mounted (hidden) under the other tabs. */}
-      <div className={"flex min-h-0 flex-1 flex-col" + (tab === "chart" ? "" : " hidden")}>
-        <MobilePositionBanner />
+      {tab === "home" && <MobileHome onChart={chartFor} onAdd={addTo} onAccount={() => setTab("account")} />}
+
+      {/* TRADE: chart + dock. Kept mounted (hidden) under the other tabs. */}
+      <div className={"flex min-h-0 flex-1 flex-col" + (tab === "trade" ? "" : " hidden")}>
+        <MobilePositionBanner onBack={() => setTab(returnTab)} />
         <MobileChartBar onZoom={zoom} onFit={fit} />
         <div ref={chartWrapRef} className="relative min-h-0 flex-1">
           <CandlePane designer={designer} hudVariant="readout" />
           {optionsMode && <LegRail designer={designer} />}
         </div>
-        <AccountStrip />
+        <AccountStrip onClick={() => setTab("home")} />
         <div className="flex shrink-0 flex-col border-t border-bb-border bg-bb-panel">
           <div className="flex h-10 items-center">
             {dockTabs.map(({ id, label }) => (
@@ -211,7 +211,7 @@ export function MobileApp() {
           </div>
           {dockOpen && (
             <div className="flex h-[26dvh] min-h-36 flex-col border-t border-bb-border/60 bg-black">
-              {activeDock === "positions" && <MobilePositions compact />}
+              {activeDock === "positions" && <MobilePositions />}
               {activeDock === "orders" && <MobileOpenOrders />}
               {activeDock === "chain" && <div className="min-h-0 flex-1"><ChainPanel /></div>}
             </div>
@@ -231,43 +231,27 @@ export function MobileApp() {
         </div>
       </div>
 
-      {tab === "positions" && (
-        <div className="flex min-h-0 flex-1 flex-col">
-          <div className="flex h-10 items-center px-3 text-[12px] tracking-widest text-bb-amber">POSITIONS</div>
-          <MobilePositions />
-        </div>
-      )}
       {tab === "account" && (
         <div className="flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain">
-          <OverviewPage
-            onOpen={(h) => {
-              setSymbol(h.underlying);
-              setAssetMode(h.occ ? "options" : "equity");
-              if (h.plan_id) viewPosition(h.plan_id);
-              setTab("chart");
-            }}
-            onProtect={() => setTab("positions")}
-          />
           <MobileAccount />
         </div>
       )}
       {tab === "more" && (
         <div className="flex min-h-0 flex-1 flex-col">
-          <div className="flex h-10 items-center px-3 text-[12px] tracking-widest text-bb-amber">SYSTEM</div>
           <MobileMore />
         </div>
       )}
 
       <nav className="flex h-14 shrink-0 items-stretch border-t border-bb-border bg-bb-panel pb-[env(safe-area-inset-bottom)]">
-        {navBtn("chart", "CHART")}
-        {navBtn("positions", "POSITIONS", openCount)}
+        {navBtn("home", "HOME", openCount)}
+        {navBtn("trade", "TRADE")}
         {navBtn("account", "ACCOUNT")}
         {navBtn("more", "MORE")}
       </nav>
 
       {ticket && (
         <Sheet
-          title={viewingPlanId ? "TRADE TICKET · position view exits on any edit" : "TRADE TICKET"}
+          title="TRADE"
           onClose={() => setTicket(false)}
           tall
           right={

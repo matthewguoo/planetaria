@@ -221,13 +221,24 @@ async def adopt_positions(request: Request, body: AdoptIn) -> dict:
     return {"adopted": adopted}
 
 
+class CloseIn(BaseModel):
+    """Omitted = whole position at market (the exit ladder). qty below what is
+    held = a partial close; order_type limit rests at limit_price (whole =
+    the broker-resting TP moved there, the stop stays armed)."""
+    qty: int | None = Field(default=None, ge=1)
+    order_type: Literal["market", "limit"] = "market"
+    limit_price: float | None = None
+
+
 @router.post("/positions/{plan_id}/close")
-async def close_position(request: Request, plan_id: str) -> dict:
+async def close_position(request: Request, plan_id: str, body: CloseIn | None = None) -> dict:
+    body = body or CloseIn()
     try:
-        await request.app.state.enforcer.manual_close(plan_id)
+        result = await request.app.state.enforcer.manual_close(
+            plan_id, qty=body.qty, order_type=body.order_type, limit_price=body.limit_price)
     except ValueError as exc:
         raise HTTPException(422, str(exc))
-    return {"ok": True}
+    return {"ok": True, **(result or {})}
 
 
 @router.post("/positions/flatten")
@@ -294,9 +305,22 @@ async def open_orders(request: Request) -> dict:
     except Exception as exc:
         raise HTTPException(502, f"orders fetch failed: {exc}")
 
+    # Which plan (and which role) owns each broker order, so the UI can
+    # show them under the position and refuse to reprice what a plan owns.
+    owners: dict[str, tuple[str, str]] = {}
+    for plan in await request.app.state.risk.open_plans():
+        for role, oid in (("entry", plan.entry_order_id), ("tp", plan.tp_order_id),
+                          ("exit", plan.exit_order_id),
+                          ("partial", (plan.partial_exit or {}).get("order_id"))):
+            if oid:
+                owners[str(oid)] = (plan.id, role)
+
     def _norm(order) -> dict:
+        owner = owners.get(str(order.id))
         return {
             "id": str(order.id),
+            "plan_id": owner[0] if owner else None,
+            "role": owner[1] if owner else None,
             "symbol": order.symbol,
             "side": str(getattr(order.side, "value", order.side) or ""),
             "qty": float(order.qty) if order.qty is not None else None,
@@ -315,7 +339,82 @@ async def open_orders(request: Request) -> dict:
             ],
         }
 
-    return {"orders": [_norm(o) for o in orders]}
+    rows = [_norm(o) for o in orders]
+    rows.sort(key=lambda r: r["submitted_at"] or "", reverse=True)
+    return {"orders": rows}
+
+
+class ReplaceIn(BaseModel):
+    limit_price: float | None = None
+    qty: int | None = Field(default=None, ge=1)
+
+
+@router.patch("/orders/{order_id}")
+async def replace_order(request: Request, order_id: str, body: ReplaceIn) -> dict:
+    """Reprice/resize a broker order NO plan owns. Plan-owned orders are the
+    engine's (entry ladder, resting TP, partial close): 409 - cancel it or
+    edit the plan's exits instead."""
+    trade = request.app.state.trade
+    if not trade.alpaca.configured:
+        raise HTTPException(503, "broker not configured")
+    if body.limit_price is None and body.qty is None:
+        raise HTTPException(422, "nothing to change")
+    for plan in await request.app.state.risk.open_plans():
+        owned = {plan.entry_order_id, plan.tp_order_id, plan.exit_order_id,
+                 (plan.partial_exit or {}).get("order_id")}
+        if order_id in owned:
+            raise HTTPException(409, f"order belongs to plan {plan.id} - cancel it or edit the plan's exits")
+    try:
+        from alpaca.trading.requests import ReplaceOrderRequest
+
+        order = await trade.alpaca.call(
+            trade.alpaca.trading.replace_order_by_id, order_id,
+            ReplaceOrderRequest(limit_price=body.limit_price, qty=body.qty), retries=0,
+        )
+    except Exception as exc:
+        raise HTTPException(502, f"replace failed: {exc}")
+    return {"id": str(order.id), "status": str(getattr(order.status, "value", order.status) or ""),
+            "limit_price": float(order.limit_price) if order.limit_price is not None else None,
+            "qty": float(order.qty) if order.qty is not None else None}
+
+
+@router.get("/holdings/{symbol}")
+async def holding_detail(request: Request, symbol: str) -> dict:
+    """Everything a position page shows: the merged holding row, the option
+    contract's facts (style, size, open interest), the live snapshot
+    (bid/ask, last, IV, greeks, today's volume) and the underlying's spot."""
+    app = request.app
+    symbol = symbol.upper()
+    try:
+        plans = await app.state.risk.open_plans()
+        rows = await app.state.trade.holdings(plans)
+    except Exception as exc:
+        raise HTTPException(502, f"holdings unavailable: {exc}")
+    row = next((r for r in rows if r["symbol"] == symbol), None)
+    if row is None:
+        raise HTTPException(404, f"{symbol} is not held")
+    contracts = getattr(app.state, "contracts", None)
+    detail = {"contract": None, "quote": {}}
+    if row.get("occ") and contracts is not None:
+        detail = await contracts.detail(symbol)
+    elif contracts is None or not row.get("occ"):
+        q = app.state.market.latest_quote(symbol)
+        if q is None:
+            try:
+                q = await app.state.market.fetch_latest_stock_quote(symbol)
+            except Exception:
+                q = None
+        if q:
+            detail["quote"] = {"bid": q.get("bid"), "ask": q.get("ask"), "mid": q.get("mid")}
+    underlying = row.get("underlying") or symbol
+    spot = app.state.market.spot(underlying)
+    if spot is None:
+        try:
+            await app.state.market.fetch_latest_stock_quote(underlying)
+            spot = app.state.market.spot(underlying)
+        except Exception:
+            spot = None
+    return {"position": row, **detail, "underlying": {"symbol": underlying, "spot": spot}}
 
 
 @router.delete("/orders/{order_id}")

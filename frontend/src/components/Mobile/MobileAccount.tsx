@@ -6,12 +6,10 @@
  * change saves on its own button.
  */
 
-import { useCallback, useState } from "react";
-import { apiError, getAccountHistory, putRisk, type PortfolioHistory, type RiskSettings } from "../../lib/api";
-import { usePoll } from "../../lib/usePoll";
+import { useState } from "react";
+import { apiError, putRisk, type RiskSettings } from "../../lib/api";
 import { useAccountStore, useTradingMode } from "../../store/accountStore";
 import { capabilitiesSummaryLine } from "../../lib/capabilities";
-import { EquityCurve } from "../Account/AccountPage";
 import { CapabilitiesPanel } from "../Account/CapabilitiesPanel";
 import { AccountsPanel } from "../System/SystemPanels";
 import { MobileHistory } from "./MobileOrders";
@@ -89,7 +87,7 @@ function RiskRules() {
               await putRisk(draft);
               setDraft({});
               await refreshAccount();
-              setMsg("saved — enforced from the next entry");
+              setMsg("saved");
             } catch (err) {
               setMsg(`✗ ${apiError(err)}`);
             } finally {
@@ -97,7 +95,7 @@ function RiskRules() {
             }
           }}
         >
-          {saving ? "SAVING…" : "SAVE RULES"}
+          {saving ? "…" : "SAVE"}
         </button>
         {dirty && <button className="h-11 border border-bb-border px-3 text-[12px] text-bb-muted" onClick={() => setDraft({})}>RESET</button>}
       </div>
@@ -110,52 +108,25 @@ export function MobileAccount() {
   const account = useAccountStore((s) => s.account);
   const capsLine = capabilitiesSummaryLine(useAccountStore((s) => s.account?.capabilities));
   const { live } = useTradingMode();
-  const [history, setHistory] = useState<PortfolioHistory | null>(null);
-  const [period, setPeriod] = useState("1M");
-
-  const refresh = useCallback(async (alive: () => boolean) => {
-    try {
-      const h = await getAccountHistory(period, period === "1D" ? "15Min" : period === "1W" ? "1H" : "1D");
-      if (alive()) setHistory(h);
-    } catch {
-      if (alive()) setHistory({ timestamps: [], equity: [], profit_loss: [], base_value: null });
-    }
-  }, [period]);
-  usePoll(refresh, 20_000, [refresh]);
 
   return (
     <div className="flex shrink-0 flex-col">
       <div className="grid grid-cols-2 gap-px border-t border-bb-border p-px">
-        <Stat label="STATUS" value={account?.status ?? "—"} sub={live ? "LIVE · real money" : "PAPER"} />
-        <Stat label="DAY TRADES" value={String(account?.daytrade_count ?? "—")} sub="rolling 5 sessions" />
+        <Stat label="STATUS" value={account?.status ?? "—"} sub={live ? "LIVE" : "PAPER"} />
+        <Stat label="DAY TRADES" value={String(account?.daytrade_count ?? "—")} sub="5 sessions" />
       </div>
 
-      <div className="border-t border-bb-border">
-        <div className="flex h-10 items-center justify-between px-3">
-          <span className="text-[10px] tracking-widest text-bb-muted">EQUITY CURVE</span>
-          <span className="flex gap-px">
-            {["1D", "1W", "1M", "3M", "1A"].map((p) => (
-              <button key={p} onClick={() => setPeriod(p)} className={"h-8 px-2 text-[11px] " + (period === p ? "bg-bb-amber font-semibold text-black" : "text-bb-muted")}>
-                {p}
-              </button>
-            ))}
-          </span>
-        </div>
-        <div className="h-40 px-1 pb-1">
-          <EquityCurve history={history} />
-        </div>
-      </div>
 
       <Fold title={"CAPABILITIES" + (capsLine ? ` · ${capsLine}` : "")} open>
         <CapabilitiesPanel touch />
       </Fold>
-      <Fold title="RISK RULES (SERVER-ENFORCED)">
+      <Fold title="RISK RULES">
         <RiskRules />
       </Fold>
       <Fold title={live ? "LIVE ACCOUNT" : "PAPER ACCOUNT"}>
         <AccountsPanel />
       </Fold>
-      <Fold title="CLOSED TRADES">
+      <Fold title="CLOSED">
         <div className="flex max-h-[60dvh] flex-col">
           <MobileHistory />
         </div>

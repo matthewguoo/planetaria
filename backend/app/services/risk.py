@@ -173,7 +173,18 @@ class RiskService:
                     TradePlan.updated_at >= start_utc,
                 )
             )
-            return sum(plan.realized_pnl or 0.0 for plan in result.scalars())
+            total = sum(plan.realized_pnl or 0.0 for plan in result.scalars())
+            # Partial closes realized today on plans still OPEN: the day
+            # breaker must see them too.
+            open_rows = await session.execute(
+                select(TradePlan).where(TradePlan.status.in_(("filled", "partially_filled", "exiting")))
+            )
+            start_iso = start_utc.isoformat()
+            for plan in open_rows.scalars():
+                for wave in plan.exit_fills or []:
+                    if wave.get("kind") == "partial" and str(wave.get("ts", "")) >= start_iso:
+                        total += float(wave.get("realized") or 0.0)
+            return total
 
     async def trades_created_today(self) -> int:
         """All plans created this ET session day, regardless of status."""

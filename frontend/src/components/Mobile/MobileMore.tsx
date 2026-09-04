@@ -49,10 +49,6 @@ export function MobileMore() {
           <MobileMonitorSheet />
         </Section>
       )}
-      <div className="px-3 py-4 text-[10px] leading-relaxed text-bb-muted">
-        Install: Chrome menu → “Add to Home screen” opens this terminal full-screen without browser bars.
-        Reached over Tailscale only; nothing here is public.
-      </div>
     </div>
   );
 }

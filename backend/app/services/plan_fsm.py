@@ -64,6 +64,10 @@ class PlanEvent(str, Enum):
     EXIT_SUBMITTED = "exit_submitted"
     EXIT_ORDER_DEAD = "exit_order_dead"
     EXIT_FILLED = "exit_filled"
+    # Manual partial close: the plan stays where it is (self-loops) while
+    # part of the position leaves; the journal row is the point.
+    EXIT_PARTIAL_SUBMITTED = "exit_partial_submitted"
+    EXIT_PARTIAL = "exit_partial"
     # Position vanished at the broker outside our exit path (expiry
     # liquidation, manual close in their UI): reconcile closes the plan.
     FORCE_CLOSED = "force_closed"
@@ -90,6 +94,8 @@ TRANSITIONS: dict[PlanEvent, dict[PlanState, PlanState]] = {
     },
     E.EXIT_ORDER_DEAD: {S.EXITING: S.EXITING},
     E.EXIT_FILLED: {S.EXITING: S.CLOSED},
+    E.EXIT_PARTIAL_SUBMITTED: {S.FILLED: S.FILLED, S.PARTIALLY_FILLED: S.PARTIALLY_FILLED},
+    E.EXIT_PARTIAL: {S.FILLED: S.FILLED, S.PARTIALLY_FILLED: S.PARTIALLY_FILLED},
     E.FORCE_CLOSED: {
         S.PARTIALLY_FILLED: S.CLOSED,
         S.FILLED: S.CLOSED,
