@@ -54,20 +54,36 @@ function useDataPumps() {
   const assetMode = useTradingStore((s) => s.assetMode);
   const loadChain = useStrategyStore((s) => s.loadChain);
   const refreshAccount = useAccountStore((s) => s.refreshAccount);
+  const defaultTp = useAccountStore((s) => s.account?.risk?.default_tp_pct);
+  const defaultSl = useAccountStore((s) => s.account?.risk?.default_sl_pct);
   const refreshPositions = useAccountStore((s) => s.refreshPositions);
   const [cadence, setCadence] = useState({ chain: 10_000, account: 30_000, positions: 5_000 });
 
   useEffect(() => {
-    getFeedSettings()
-      .then((cfg) =>
-        setCadence({
-          chain: cfg.chain_refresh_s * 1000,
-          account: cfg.account_poll_s * 1000,
-          positions: cfg.positions_poll_s * 1000,
-        }),
-      )
-      .catch(() => {});
+    const load = () =>
+      getFeedSettings()
+        .then((cfg) =>
+          setCadence({
+            chain: cfg.chain_refresh_s * 1000,
+            account: cfg.account_poll_s * 1000,
+            positions: cfg.positions_poll_s * 1000,
+          }),
+        )
+        .catch(() => {});
+    load();
+    // A PROFILE preset rewrites the cadences server-side; re-read them so
+    // the chain pump speeds up without a reload.
+    window.addEventListener("planetaria:settings-changed", load);
+    return () => window.removeEventListener("planetaria:settings-changed", load);
   }, []);
+
+  // The ticket's exits start where the server's defaults say (the PROFILE
+  // sets them); once the trader types a number the ticket is theirs.
+  useEffect(() => {
+    if (!defaultTp || !defaultSl) return;
+    const st = useStrategyStore.getState();
+    if (!st.exitsEdited) st.seedExits(defaultTp, defaultSl);
+  }, [defaultTp, defaultSl]);
 
   useEffect(() => {
     if (assetMode !== "options") return; // no chain pump for the share ticket

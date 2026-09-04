@@ -176,6 +176,13 @@ const ET_TIME = new Intl.DateTimeFormat("en-US", {
   minute: "2-digit",
   hour12: false,
 });
+const ET_TIME_SEC = new Intl.DateTimeFormat("en-US", {
+  timeZone: "America/New_York",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+  hour12: false,
+});
 const ET_DAY = new Intl.DateTimeFormat("en-US", {
   timeZone: "America/New_York",
   month: "short",
@@ -184,6 +191,11 @@ const ET_DAY = new Intl.DateTimeFormat("en-US", {
 
 export function fmtTimeET(ms: number): string {
   return ET_TIME.format(new Date(ms));
+}
+
+/** HH:MM:SS — the sub-minute chart's axis, where two labels share a minute. */
+export function fmtTimeSecET(ms: number): string {
+  return ET_TIME_SEC.format(new Date(ms));
 }
 
 export function fmtDayET(ms: number): string {

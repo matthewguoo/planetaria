@@ -48,6 +48,10 @@ class OrderIn(BaseModel):
     # Optional for equity swing plans (no time stop = held until TP/SL or
     # manual close); place_trade still requires it for options.
     time_stop_utc: str | None = None
+    # Spread optimizer per order: None = the global `spread_optimizer`
+    # setting at placement; True/False pins this plan either way. Stamped
+    # on the plan so its exit ladder follows the same choice.
+    work_spread: bool | None = None
 
 
 class TightenIn(BaseModel):
@@ -86,6 +90,38 @@ async def update_risk(request: Request, patch: dict) -> dict:
         return await request.app.state.risk.update_settings(patch)
     except ValueError as exc:
         raise HTTPException(422, str(exc))
+
+
+@router.get("/settings/risk/presets")
+async def risk_presets_catalog(request: Request) -> dict:
+    """Named settings bundles + which one (if any) the stored settings
+    currently equal."""
+    from app.services.risk import preset_matches, risk_presets
+
+    settings = await request.app.state.risk.get_settings()
+    presets = risk_presets()
+    active = next((p["name"] for p in presets if preset_matches(p["name"], settings)), None)
+    return {"presets": presets, "active": active}
+
+
+@router.post("/settings/risk/preset/{name}")
+async def apply_risk_preset(request: Request, name: str) -> dict:
+    """Apply one bundle: risk settings, then the feed cadences it carries."""
+    from app.services.risk import RISK_PRESETS
+
+    try:
+        settings = await request.app.state.risk.apply_preset(name)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+    feed = None
+    feed_patch = (RISK_PRESETS[name].get("feed") or {})
+    feed_service = getattr(request.app.state, "feed_settings", None)
+    if feed_patch and feed_service is not None:
+        try:
+            feed = await feed_service.update(feed_patch)
+        except ValueError as exc:
+            raise HTTPException(422, f"preset feed settings refused: {exc}")
+    return {"preset": name, "risk": settings, "feed": feed}
 
 
 @router.post("/orders")

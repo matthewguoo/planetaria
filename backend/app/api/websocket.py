@@ -3,6 +3,7 @@
 Client -> server:
     {"op": "subscribe",   "channel": "bars",    "symbol": "SPY", "tf": "1m"}
     {"op": "unsubscribe", "channel": "bars",    "symbol": "SPY", "tf": "1m"}
+    (tf "5s" | "15s" | "30s" rolls bars from the trade tape - see fast_bars)
     {"op": "subscribe",   "channel": "quote",   "symbol": "SPY"}
 
 Server -> client: on subscribe, the full current state (snapshot), then deltas.
@@ -16,6 +17,7 @@ import logging
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from app.services.broadcast import QUEUE_SIZE
+from app.services.fast_bars import is_fast_tf
 
 log = logging.getLogger("app.ws")
 
@@ -32,6 +34,7 @@ async def ws_stream(ws: WebSocket) -> None:
     queue: asyncio.Queue = asyncio.Queue(maxsize=QUEUE_SIZE)
     topics: set[str] = set()
     stock_subs: set[str] = set()
+    fast_subs: set[str] = set()  # symbols this socket holds a tape ref on
 
     async def pump() -> None:
         while True:
@@ -73,14 +76,25 @@ async def ws_stream(ws: WebSocket) -> None:
                 if symbol not in stock_subs:
                     stock_subs.add(symbol)
                     await market.subscribe_stock(symbol)
+                if is_fast_tf(tf) and symbol not in fast_subs:
+                    fast_subs.add(symbol)
+                    await market.subscribe_fast(symbol)
                 # Cached snapshot immediately; backfill (running in the
                 # background) pushes a fresh bars_snapshot when it lands.
                 await ws.send_json(
                     {"t": "bars_snapshot", "symbol": symbol, "tf": tf,
-                     "bars": market.bars.get_bars(symbol, tf)}
+                     "bars": market.get_bars(symbol, tf)}
                 )
             elif op == "unsubscribe":
                 leave(topic)
+                # The tape ref is held per symbol, not per tf: release it
+                # only once no fast topic of this symbol remains.
+                if symbol in fast_subs and not any(
+                    t.startswith(f"bars:{symbol}:") and is_fast_tf(t.rsplit(":", 1)[1])
+                    for t in topics
+                ):
+                    fast_subs.discard(symbol)
+                    await market.unsubscribe_fast(symbol)
 
         elif channel == "quote":
             symbol = (msg.get("symbol") or "").upper()
@@ -135,3 +149,5 @@ async def ws_stream(ws: WebSocket) -> None:
             broadcaster.unsubscribe(topic, queue)
         for symbol in stock_subs:
             await market.unsubscribe_stock(symbol)
+        for symbol in fast_subs:
+            await market.unsubscribe_fast(symbol)

@@ -137,6 +137,8 @@ class AccountService:
         """name -> {api_key, secret_key}. First source wins per name."""
         import re
 
+        if getattr(self.settings, "keyless", False):
+            return {}  # preview boot: no account may be selected, ever
         merged = self._env_sources()
 
         out: dict[str, dict] = {}

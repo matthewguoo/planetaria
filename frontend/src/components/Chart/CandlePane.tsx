@@ -58,7 +58,7 @@ import {
   extendDomain,
   fmtDayET,
   fmtPrice,
-  fmtTimeET,
+  fmtTimeET, fmtTimeSecET,
   indexToX,
   MIN_BARS_VISIBLE,
   priceDomain,
@@ -2454,7 +2454,12 @@ function drawTimeAxis(
     if (x - lastLabelX < 56) continue; // never overprint two labels
     lastLabelX = x;
     ctx.fillStyle = isNewDay ? COLORS.last : COLORS.axisText;
-    ctx.fillText(isNewDay ? fmtDayET(bars.t[i]) : fmtTimeET(bars.t[i]), x, layout.plotH + 6);
+    const label = isNewDay
+      ? fmtDayET(bars.t[i])
+      : tfMinutes < 1
+        ? fmtTimeSecET(bars.t[i])
+        : fmtTimeET(bars.t[i]);
+    ctx.fillText(label, x, layout.plotH + 6);
   }
   // Future-region ticks: +1h, +2h, ... in trading hours.
   if (overlay?.legs) {

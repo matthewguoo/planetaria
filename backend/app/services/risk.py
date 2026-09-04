@@ -59,9 +59,141 @@ DEFAULT_RISK = {
     # effective = min(stored, verified); the live server's unprobed floor
     # is 2.
     "options_level": 3,
+    # SPREAD OPTIMIZER (services/spread_optimizer.py): work entries and
+    # exits INSIDE the bid/ask instead of resting at the mid and then
+    # sweeping to market. Units are position half-spreads: 0 = mid, 1 =
+    # the touch. Off by default — the legacy behaviour (entry rests at the
+    # staged mid until the TTL; exits ladder mid-2%, mid-6%, market) is
+    # what every plan placed before this setting existed still gets. A
+    # ticket may override per order (plan.pricing.work_spread).
+    "spread_optimizer": False,
+    "spread_opt_step_s": 3.0,        # seconds a rung rests before repricing
+    "spread_opt_entry_start": 0.0,   # rung 0 offset (-1 = our touch, 0 = mid)
+    "spread_opt_entry_step": 0.25,   # half-spreads added per rung
+    "spread_opt_entry_max": 1.0,     # never work an entry past this (1 = touch)
+    "spread_opt_exit_max": 1.0,      # last limit rung before market (1 = touch)
 }
 
 RISK_KEY = "risk"
+
+# Keys a PRESET may set: every tunable EXCEPT the account-capability facts
+# (options_level, equity_long_only, equity_short_overnight) and the
+# discretionary discipline rule — those describe the account, not a style.
+PRESET_KEYS = (
+    "max_loss_pct", "daily_loss_pct", "max_positions", "bp_cap_pct",
+    "default_tp_pct", "default_sl_pct", "time_stop_et", "expiry_time_stop_et",
+    "max_spread_pct", "entry_ttl_min", "max_trades_per_day", "sl_confirm_s",
+    "equity_max_notional_per_name_pct", "equity_gross_exposure_pct",
+    "spread_optimizer", "spread_opt_step_s", "spread_opt_entry_start",
+    "spread_opt_entry_step", "spread_opt_entry_max", "spread_opt_exit_max",
+)
+
+# Named settings bundles for the manual book. `feed` rides along to the
+# feed-settings row (chain/positions poll cadence). The numbers are a
+# starting point for the style, not a study result: a scalp on a ~$10k
+# cash account risks 1% per shot with three losers ending the day, exits
+# at +30%/-20% of premium, a one-minute entry shelf life, and the spread
+# worked at a two-second cadence because the whole trade is minutes long.
+RISK_PRESETS: dict[str, dict] = {
+    "default": {
+        "label": "DEFAULT",
+        "blurb": "The engine's shipped defaults: 0-3 DTE intraday, mid entries, "
+                 "mid-2%/mid-6%/market exits.",
+        "values": {k: DEFAULT_RISK[k] for k in PRESET_KEYS},
+        "feed": {"chain_refresh_s": 10, "positions_poll_s": 5},
+        "ticket": {"hold_min": None},
+    },
+    "scalp": {
+        "label": "SCALP",
+        "blurb": "Minutes-long 0DTE scalps: 1% risk, 3% daily stop, +30%/-20% "
+                 "exits, 1-minute entry shelf life, spread worked every 2s, "
+                 "tight books only, fast stops.",
+        "values": {
+            "max_loss_pct": 0.01,
+            "daily_loss_pct": 0.03,
+            "max_positions": 2,
+            "bp_cap_pct": 0.25,
+            "default_tp_pct": 0.30,
+            "default_sl_pct": 0.20,
+            "time_stop_et": "15:55",
+            "expiry_time_stop_et": "15:50",
+            "max_spread_pct": 0.10,
+            "entry_ttl_min": 1,
+            "max_trades_per_day": 40,
+            "sl_confirm_s": 1.0,
+            "equity_max_notional_per_name_pct": 0.25,
+            "equity_gross_exposure_pct": 0.50,
+            "spread_optimizer": True,
+            "spread_opt_step_s": 2.0,
+            "spread_opt_entry_start": 0.0,
+            "spread_opt_entry_step": 0.25,
+            "spread_opt_entry_max": 1.0,
+            "spread_opt_exit_max": 1.0,
+        },
+        "feed": {"chain_refresh_s": 2, "positions_poll_s": 2},
+        # The ticket's time stop seeds to now + this many minutes.
+        "ticket": {"hold_min": 20},
+    },
+    "swing": {
+        "label": "SWING",
+        "blurb": "Multi-day directional holds: 2% risk, 6% daily stop, +100%/-50% "
+                 "exits, patient entries started inside the book (-0.5 "
+                 "half-spread) and worked every 5s.",
+        "values": {
+            "max_loss_pct": 0.02,
+            "daily_loss_pct": 0.06,
+            "max_positions": 4,
+            "bp_cap_pct": 0.25,
+            "default_tp_pct": 1.00,
+            "default_sl_pct": 0.50,
+            "time_stop_et": "15:50",
+            "expiry_time_stop_et": "15:15",
+            "max_spread_pct": 0.15,
+            "entry_ttl_min": 10,
+            "max_trades_per_day": 10,
+            "sl_confirm_s": 3.0,
+            "equity_max_notional_per_name_pct": 0.10,
+            "equity_gross_exposure_pct": 0.50,
+            "spread_optimizer": True,
+            "spread_opt_step_s": 5.0,
+            "spread_opt_entry_start": -0.5,
+            "spread_opt_entry_step": 0.25,
+            "spread_opt_entry_max": 1.0,
+            "spread_opt_exit_max": 1.0,
+        },
+        "feed": {"chain_refresh_s": 15, "positions_poll_s": 5},
+        "ticket": {"hold_min": None},
+    },
+}
+
+
+def risk_presets() -> list[dict]:
+    """Catalog for the UI: name, label, blurb, and the values each applies."""
+    return [
+        {"name": name, "label": p["label"], "blurb": p["blurb"],
+         "values": dict(p["values"]), "feed": dict(p.get("feed") or {}),
+         "ticket": dict(p.get("ticket") or {})}
+        for name, p in RISK_PRESETS.items()
+    ]
+
+
+def preset_matches(name: str, settings: dict) -> bool:
+    """True when every preset value is what the settings currently hold —
+    lets the UI light the active chip without storing a name."""
+    preset = RISK_PRESETS.get(name)
+    if preset is None:
+        return False
+    for key, want in preset["values"].items():
+        have = settings.get(key)
+        if isinstance(want, bool):
+            if bool(have) != want:
+                return False
+        elif isinstance(want, (int, float)):
+            if have is None or abs(float(have) - float(want)) > 1e-9:
+                return False
+        elif str(have) != str(want):
+            return False
+    return True
 
 
 class RiskService:
@@ -109,7 +241,7 @@ class RiskService:
                 time.fromisoformat(str(value))  # validate HH:MM
                 clean[key] = str(value)
             elif key in ("equity_long_only", "equity_short_overnight",
-                         "manual_equity_require_stop"):
+                         "manual_equity_require_stop", "spread_optimizer"):
                 clean[key] = bool(value)
             elif key in ("max_positions", "entry_ttl_min", "max_trades_per_day",
                          "options_level"):
@@ -135,6 +267,11 @@ class RiskService:
                     "sl_confirm_s": (0.0, 30.0),
                     "equity_max_notional_per_name_pct": (0.005, 0.50),
                     "equity_gross_exposure_pct": (0.01, 1.0),
+                    "spread_opt_step_s": (0.5, 30.0),
+                    "spread_opt_entry_start": (-1.0, 1.0),
+                    "spread_opt_entry_step": (0.05, 1.0),
+                    "spread_opt_entry_max": (0.0, 1.5),
+                    "spread_opt_exit_max": (0.0, 1.5),
                 }[key]
                 if not limits[0] <= fv <= limits[1]:
                     raise ValueError(f"{key} out of bounds {limits}")
@@ -151,6 +288,14 @@ class RiskService:
                 row.value = merged_value
             await session.commit()
         return await self.get_settings()
+
+    async def apply_preset(self, name: str) -> dict:
+        """Write one named bundle over the stored settings (capability keys
+        untouched) and return the effective settings."""
+        preset = RISK_PRESETS.get(name)
+        if preset is None:
+            raise ValueError(f"unknown preset {name!r} (have {', '.join(RISK_PRESETS)})")
+        return await self.update_settings(dict(preset["values"]))
 
     # ------------------------------------------------------------ guards
 
@@ -320,6 +465,10 @@ class RiskService:
         # metadata and session state): None = not checked / not applicable.
         shortable: bool | None = None,
         overnight_session: bool = False,
+        # PDT is a MARGIN-account rule: a cash account (the Roth) cannot be
+        # flagged, so its 4th round trip must not be refused. The caller
+        # passes the broker's multiplier verdict; True keeps the legacy gate.
+        margin_account: bool = True,
         # None = a MANUAL (discretionary) trade — the require-a-stop
         # discipline rule applies to its equity entries. Strategy trades
         # carry their id and are bounded by their instance
@@ -359,7 +508,7 @@ class RiskService:
                         f"exceeds {cfg['max_spread_pct']:.0%} cap (illiquid - exits unreliable)"
                     )
         # PDT: a 4th day trade on a sub-$25k account gets the account frozen.
-        if account_equity < 25_000 and daytrade_count >= 3:
+        if margin_account and account_equity < 25_000 and daytrade_count >= 3:
             violations.append("PDT guard: 4th day trade on a sub-$25k account")
         # Overtrading breaker.
         trades_today = await self.trades_created_today()

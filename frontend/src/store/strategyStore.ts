@@ -322,6 +322,15 @@ type StrategyState = {
   volShift: number;
   /** Apply skew-derived directional vol response (down-move => vol up). */
   skewBeta: boolean;
+  /** Spread optimizer for THIS ticket: null = follow the server's
+   * spread_optimizer setting, true/false = pin it for the next order. */
+  workSpread: boolean | null;
+  setWorkSpread: (v: boolean | null) => void;
+  /** True once the trader typed a TP/SL on this ticket; until then the
+   * exits follow the server's default_tp_pct / default_sl_pct (a PROFILE
+   * change re-seeds them). */
+  exitsEdited: boolean;
+  seedExits: (tpPct: number, slPct: number, timeStopEt?: string) => void;
 
   loadChain: (underlying: string) => Promise<void>;
   setExpiry: (expiry: string) => void;
@@ -511,6 +520,23 @@ export const useStrategyStore = create<StrategyState>((set, get) => ({
   timeStopEt: "15:50",
   volShift: 0,
   skewBeta: true,
+  workSpread: (() => {
+    try {
+      const v = localStorage.getItem("planetaria.workSpread");
+      return v === "1" ? true : v === "0" ? false : null;
+    } catch {
+      return null;
+    }
+  })(),
+  setWorkSpread: (v) => {
+    try {
+      if (v == null) localStorage.removeItem("planetaria.workSpread");
+      else localStorage.setItem("planetaria.workSpread", v ? "1" : "0");
+    } catch {
+      // storage unavailable — session-only
+    }
+    set({ workSpread: v });
+  },
 
   loadChain: async (underlying: string) => {
     try {
@@ -636,14 +662,22 @@ export const useStrategyStore = create<StrategyState>((set, get) => ({
     }),
   setTpPct: (v) => {
     exitPositionViewOnAction();
-    set({ tpPct: Math.max(0.05, Math.min(v, 10)) });
+    set({ tpPct: Math.max(0.05, Math.min(v, 10)), exitsEdited: true });
   },
   // SL beyond 100% of premium is meaningless for debit structures but is
   // THE standard stop for credit ones (stop at 1-2x the credit received).
   setSlPct: (v) => {
     exitPositionViewOnAction();
-    set({ slPct: Math.max(0.05, Math.min(v, 3.0)) });
+    set({ slPct: Math.max(0.05, Math.min(v, 3.0)), exitsEdited: true });
   },
+  exitsEdited: false,
+  seedExits: (tpPct, slPct, timeStopEt) =>
+    set({
+      tpPct: Math.max(0.05, Math.min(tpPct, 10)),
+      slPct: Math.max(0.05, Math.min(slPct, 3.0)),
+      ...(timeStopEt ? { timeStopEt } : {}),
+      exitsEdited: false,
+    }),
   setTimeStopEt: (v) => {
     exitPositionViewOnAction();
     set({ timeStopEt: v });

@@ -3,7 +3,8 @@ import { suggestSlPctFromUnderlying } from "../../lib/analytics";
 import { apiError, postOrder } from "../../lib/api";
 import { playCue } from "../../lib/audio";
 import { nakedShortUnits } from "../../lib/optionsMath";
-import { liveLevel2Blocked, optionsOrderPayload } from "../../lib/orderPayload";
+import { etTimePlusMinutes, liveLevel2Blocked, optionsOrderPayload } from "../../lib/orderPayload";
+import { WorkSpreadToggle, workSpreadEffective } from "./WorkSpreadToggle";
 import type { Designer } from "../../lib/useDesigner";
 import { useAccountStore, useTradingMode } from "../../store/accountStore";
 import { useStrategyStore } from "../../store/strategyStore";
@@ -53,6 +54,9 @@ export function OrderPanel({ designer }: { designer: Designer }) {
   const setSlPct = useStrategyStore((s) => s.setSlPct);
   const timeStopEt = useStrategyStore((s) => s.timeStopEt);
   const setTimeStopEt = useStrategyStore((s) => s.setTimeStopEt);
+  const workSpread = useStrategyStore((s) => s.workSpread);
+  const risk = useAccountStore((s) => s.account?.risk);
+  const worked = workSpreadEffective(workSpread, risk);
   const refreshPositions = useAccountStore((s) => s.refreshPositions);
 
   const [confirming, setConfirming] = useState(false);
@@ -99,7 +103,7 @@ export function OrderPanel({ designer }: { designer: Designer }) {
     setError(null);
     try {
       const plan = await postOrder(
-        optionsOrderPayload({ designer, symbol, kind, modified, timeStopEt }),
+        optionsOrderPayload({ designer, symbol, kind, modified, timeStopEt, workSpread }),
       );
       setPlaced(plan.id);
       setConfirming(false);
@@ -207,9 +211,25 @@ export function OrderPanel({ designer }: { designer: Designer }) {
             <span className="fld-u">ET</span>
           </span>
         </div>
+        <div
+          className="-mt-1 flex items-center justify-end gap-1"
+          title="Scalp holds: set the time stop N minutes from now (ET). The server still caps it at the session / expiry-day cutoff."
+        >
+          <span className="text-[9px] text-bb-muted">HOLD</span>
+          {[5, 10, 20, 45].map((m) => (
+            <button
+              key={m}
+              className={"fld-b " + (timeStopEt === etTimePlusMinutes(m) ? "on" : "")}
+              onClick={() => setTimeStopEt(etTimePlusMinutes(m))}
+            >
+              +{m}m
+            </button>
+          ))}
+        </div>
         <div className="fld">
           <span className="fld-l">
             ENTRY {designer.ready && designer.entry < 0 ? "CREDIT" : "LIMIT"}
+            {worked && <span className="ml-1 text-bb-profit" title="Spread optimizer: rung 0 is repriced off the live book at submit">WORKED</span>}
           </span>
           <span data-numeric className={"text-[12px] " + (designer.entry < 0 ? "text-bb-profit" : "text-bb-amber")}>
             {designer.ready ? `${Math.abs(designer.entry).toFixed(2)} × ${designer.qty}` : "—"}
@@ -218,6 +238,7 @@ export function OrderPanel({ designer }: { designer: Designer }) {
         {designer.ready && designer.legs && (
           <InstantFillRow designer={designer} />
         )}
+        <WorkSpreadToggle />
 
         {/* One of the two buttons is THE submit path for this server and the
             other is locked: PAPER on the paper server, LIVE (red) on the
@@ -335,6 +356,11 @@ export function OrderPanel({ designer }: { designer: Designer }) {
           </div>
           <div className="text-[10px] text-bb-orange">
             Exits are enforced server-side. No manual override once filled — only tightening.
+          </div>
+          <div className="text-[10px] text-bb-muted">
+            {worked
+              ? "Spread optimizer ON: entry worked from the live mid toward the ask; exit ladders inside the book."
+              : "Spread optimizer OFF: limit rests at the mid; exit ladders mid −2% → −6% → market."}
           </div>
           {error && (
             <div className="max-h-16 overflow-y-auto text-[10px] leading-tight text-bb-loss">{error}</div>

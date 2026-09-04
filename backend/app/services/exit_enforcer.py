@@ -26,6 +26,12 @@ from zoneinfo import ZoneInfo
 from app.models.trade import OPEN_STATUSES, TradePlan, as_utc
 from app.services.market_clock import MarketClock, equity_session
 from app.services.plan_fsm import MONITOR_STATES, PlanEvent
+from app.services.spread_optimizer import (
+    EntryWork,
+    exit_ladder,
+    exit_limit,
+    work_spread_enabled,
+)
 from app.services.trade_service import TradeService, position_mid_from_quotes, round_tick
 
 MONITOR_STATUSES = {s.value for s in MONITOR_STATES}
@@ -134,6 +140,9 @@ class ExitEnforcer:
         self.monitor_health: dict[str, str] = {}
         # Timing knobs (instance-level so pressure tests can compress them).
         self.escalation = list(ESCALATION)
+        # Spread-optimizer ladder is derived from the risk settings at exit
+        # time (exit_ladder); tests pin a compressed one here.
+        self.spread_ladder_override: list[tuple[float | None, float]] | None = None
         self.verify_poll_s = 5.0
         # How long a MARKET partial close is awaited inline before the
         # stream / reconcile take over (the fill usually lands in a second).
@@ -335,6 +344,13 @@ class ExitEnforcer:
                     self.trade.alpaca.trading.get_order_by_id, plan.entry_order_id, retries=1
                 )
                 filled_qty = int(float(order.filled_qty or 0))
+                if (
+                    filled_qty == 0
+                    and (plan.pricing or {}).get("reworking") == plan.entry_order_id
+                ):
+                    # The spread optimizer is replacing this rung right
+                    # now; its own cancel is not the entry dying.
+                    return
                 if filled_qty > 0:
                     await self.trade.fsm.apply(
                         plan.id, PlanEvent.ENTRY_CANCELLED_PARTIAL,
@@ -923,6 +939,7 @@ class ExitEnforcer:
             last_no_mid_warn = 0.0
             last_plan_fetch = 0.0
             next_tp_rest_try = 0.0
+            entry_work_last = time.monotonic()
             wait_s = self.quote_poll_near_s
             msg: dict | None = None
             from app.services.fair_value import FairValueFilter, position_quote_stats
@@ -982,6 +999,23 @@ class ExitEnforcer:
                             )
                             await self.trade.cancel_entry(plan)
                             return
+                    # SPREAD OPTIMIZER entry chase: every step_s, walk the
+                    # resting rung one step toward the touch (inside the TTL
+                    # above, which is the chase's hard ceiling).
+                    if plan.status == "submitted" and (plan.pricing or {}).get("entry"):
+                        work = EntryWork.from_json(plan.pricing["entry"])
+                        if not work.exhausted:
+                            due = time.monotonic() - entry_work_last >= work.step_s
+                            if due:
+                                outcome = await self.trade.rework_entry(plan)
+                                entry_work_last = time.monotonic()
+                                if outcome == "abandoned":
+                                    return
+                                if outcome == "replaced":
+                                    plan = await self.trade.get_plan(plan_id)
+                                    last_plan_fetch = time.monotonic()
+                            # Wake at the chase cadence, never slower.
+                            wait_s = min(wait_s, max(work.step_s, 0.25))
                     if plan.status == "exiting" and not plan.exit_order_id:
                         # Exit order died (cancel/reject) - resubmit the ladder.
                         log.warning("plan %s exiting with no live order - resubmitting", plan.id)
@@ -1275,6 +1309,24 @@ class ExitEnforcer:
             return equity_session() is not None
         return await self.clock.is_open()
 
+    async def _spread_rung_limit(self, plan: TradePlan, mid: float,
+                                 frac: float | None, legs: list[dict],
+                                 quotes: dict) -> float | None:
+        """Spread-optimizer rung: `frac` position half-spreads below the
+        mid, floored to a tick. None = market, with the same after-hours
+        equity substitution as the legacy ladder. A book with no usable
+        half-spread (one-sided, crossed) falls back to the legacy rung so
+        the exit still escalates."""
+        if frac is None:
+            return await self._rung_limit(plan, mid, None)
+        from app.services.fair_value import position_quote_stats
+
+        stats = position_quote_stats(legs, quotes)
+        if stats is None:
+            return await self._rung_limit(plan, mid, self.escalation[0][0] or 0.02)
+        _, half_spread = stats
+        return exit_limit(mid, half_spread, frac)
+
     async def _rung_limit(self, plan: TradePlan, mid: float,
                           buffer: float | None) -> float | None:
         """Ladder rung price. None means market order — FORBIDDEN for
@@ -1337,7 +1389,22 @@ class ExitEnforcer:
             await self._park_exit_locked(plan_id, reason)
             return
         token = uuid4().hex[:6]
-        for rung, (buffer, wait) in enumerate(self.escalation):
+        # Which ladder: the plan's stamped choice, else the global toggle.
+        # The spread ladder prices rungs in half-spreads of the live book
+        # (mid -> inside -> touch -> market); the legacy one in % of mid.
+        try:
+            risk_cfg = await self.trade.risk.get_settings()
+        except Exception:
+            risk_cfg = {}
+        worked = work_spread_enabled(plan.pricing, risk_cfg)
+        ladder = (
+            exit_ladder(float(risk_cfg.get("spread_opt_step_s", 3.0)),
+                        float(risk_cfg.get("spread_opt_exit_max", 1.0)))
+            if worked else self.escalation
+        )
+        if worked and self.spread_ladder_override is not None:
+            ladder = self.spread_ladder_override
+        for rung, (buffer, wait) in enumerate(ladder):
             plan = await self.trade.get_plan(plan_id)
             if plan.status in ("closed", "cancelled", "rejected"):
                 await self._sweep_ghosts_on_close(plan_id)
@@ -1373,7 +1440,13 @@ class ExitEnforcer:
                 mid = plan.sl_premium
             # Marketable = accept a WORSE position value: sign-agnostic shift
             # downward by |mid|*buffer (long: sell lower; short: buy back higher).
-            limit = await self._rung_limit(plan, mid, buffer) if mid is not None else None
+            if worked:
+                limit = (
+                    await self._spread_rung_limit(plan, mid, buffer, close_legs, quotes)
+                    if mid is not None else None
+                )
+            else:
+                limit = await self._rung_limit(plan, mid, buffer) if mid is not None else None
             key = f"{token}r{rung}"
             self._ghost_keys.setdefault(plan_id, []).append(key)
             try:

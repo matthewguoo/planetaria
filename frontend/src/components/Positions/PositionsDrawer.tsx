@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { RiskPresetChips } from "../Account/RiskPresetChips";
 import {
   apiError,
   closePosition,
@@ -524,6 +525,7 @@ function AccountTab() {
       </div>
       <div className="flex w-72 shrink-0 flex-col gap-1">
         <div className="mb-1 text-[10px] tracking-widest text-bb-muted">RISK RULES (SERVER-ENFORCED)</div>
+        <RiskPresetChips />
         {numField("max_loss_pct", "MAX LOSS / TRADE", 100, "%", 0.5)}
         {numField("daily_loss_pct", "DAILY LOSS BREAKER", 100, "%", 0.5)}
         {numField("max_positions", "MAX POSITIONS", 1, "", 1)}
@@ -558,6 +560,28 @@ function AccountTab() {
             <span className="fld-u">ET</span>
           </span>
         </label>
+        <div
+          className="mt-1 text-[10px] tracking-widest text-bb-muted"
+          title="Work entries and exits INSIDE the bid/ask instead of resting at the mid and sweeping to market. Units: position half-spreads (0 = mid, 1 = the touch). A ticket can override per order."
+        >
+          SPREAD OPTIMIZER
+        </div>
+        <label className="fld">
+          <span className="fld-l">WORK SPREAD</span>
+          <span className="fld-c">
+            <button
+              className={"fld-b " + (risk.spread_optimizer ? "on" : "")}
+              onClick={() => setDraft({ ...draft, spread_optimizer: !risk.spread_optimizer })}
+            >
+              {risk.spread_optimizer ? "ON" : "OFF"}
+            </button>
+          </span>
+        </label>
+        {numField("spread_opt_step_s", "REPRICE EVERY", 1, "s", 0.5)}
+        {numField("spread_opt_entry_start", "ENTRY START (½-sprd)", 1, "", 0.25)}
+        {numField("spread_opt_entry_step", "ENTRY STEP (½-sprd)", 1, "", 0.05)}
+        {numField("spread_opt_entry_max", "ENTRY MAX (½-sprd)", 1, "", 0.25)}
+        {numField("spread_opt_exit_max", "EXIT MAX (½-sprd)", 1, "", 0.25)}
         <div className="mt-1 flex items-center gap-2">
           <button
             className="btn-primary px-3 py-1 text-[11px]"

@@ -60,7 +60,35 @@ export type RiskSettings = {
   options_level: number;
   /** Read-only: the verified ceiling the two values above are capped at. */
   capability_ceiling?: { options_level?: number; equity_shorts?: boolean } | null;
+  /** SPREAD OPTIMIZER: work entries/exits inside the bid-ask instead of
+   * resting at the mid then sweeping to market. Units below are position
+   * half-spreads (0 = mid, 1 = the touch). A ticket may override per order. */
+  spread_optimizer: boolean;
+  spread_opt_step_s: number;
+  spread_opt_entry_start: number;
+  spread_opt_entry_step: number;
+  spread_opt_entry_max: number;
+  spread_opt_exit_max: number;
 };
+
+/** A named bundle of risk rules (+ feed cadences) — DEFAULT / SCALP / SWING. */
+export type RiskPreset = {
+  name: string;
+  label: string;
+  blurb: string;
+  values: Partial<RiskSettings>;
+  feed: Partial<FeedSettings>;
+  /** Ticket seeds the preset carries: hold_min = time stop now + N minutes. */
+  ticket?: { hold_min?: number | null };
+};
+export const getRiskPresets = () =>
+  api.get<{ presets: RiskPreset[]; active: string | null }>("/api/settings/risk/presets").then((r) => r.data);
+export const applyRiskPreset = (name: string) =>
+  api
+    .post<{ preset: string; risk: RiskSettings; feed: FeedSettings | null }>(
+      `/api/settings/risk/preset/${encodeURIComponent(name)}`,
+    )
+    .then((r) => r.data);
 
 export type TradingMode = "paper" | "live_manual";
 

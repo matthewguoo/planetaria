@@ -3,6 +3,9 @@
  * phone ticket). What the server holds you to is exactly what the designer
  * shows: legs at their modelled entries with measured half-spreads, the
  * limit at the mid, TP/SL as premium levels, and the time stop in UTC.
+ * `workSpread` is the ticket's spread-optimizer choice: null follows the
+ * server setting, true/false pins this order (the server reprices rung 0
+ * off the live book when on, and stamps the choice on the plan).
  */
 
 import { etDateIso, etWallToUtcIso } from "./et";
@@ -19,8 +22,9 @@ export function optionsOrderPayload(args: {
   kind: string;
   modified: boolean;
   timeStopEt: string;
+  workSpread?: boolean | null;
 }): object {
-  const { designer, symbol, kind, modified, timeStopEt } = args;
+  const { designer, symbol, kind, modified, timeStopEt, workSpread = null } = args;
   return {
     underlying: symbol,
     strategy: modified ? "custom" : kind,
@@ -40,7 +44,21 @@ export function optionsOrderPayload(args: {
     tp_premium: Number(designer.tpPremium!.toFixed(2)),
     sl_premium: Number(designer.slPremium!.toFixed(2)),
     time_stop_utc: etToUtcIso(timeStopEt),
+    work_spread: workSpread,
   };
+}
+
+/** "HH:MM" ET for now + `minutes` — the scalp ticket's hold chips. */
+export function etTimePlusMinutes(minutes: number, nowMs: number = Date.now()): string {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(new Date(nowMs + minutes * 60_000));
+  const h = parts.find((p) => p.type === "hour")?.value ?? "00";
+  const m = parts.find((p) => p.type === "minute")?.value ?? "00";
+  return `${h === "24" ? "00" : h}:${m}`;
 }
 
 /** The live account is options level 2: long single-leg only. Mirrors the

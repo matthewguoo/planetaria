@@ -47,3 +47,16 @@ describe("quoteIsStale", () => {
     expect(quoteIsStale(quote(741, QUOTE_FRESH_MS + 1), NOW)).toBe(true);
   });
 });
+
+describe("timeframes", () => {
+  it("offers the sub-minute tape bars ahead of the broker's 1m+", async () => {
+    const { TIMEFRAMES, TF_MS, FAST_TIMEFRAMES, isFastTf } = await import("./tradingStore");
+    expect(TIMEFRAMES.slice(0, 3)).toEqual(["5s", "15s", "30s"]);
+    expect(TIMEFRAMES.indexOf("1m")).toBe(3);
+    expect(FAST_TIMEFRAMES.every(isFastTf)).toBe(true);
+    expect(isFastTf("1m")).toBe(false);
+    // Every tf has a millisecond width the chart's index<->time math can use.
+    for (const tf of TIMEFRAMES) expect(TF_MS[tf]).toBeGreaterThan(0);
+    expect(TF_MS["5s"]).toBe(5_000);
+  });
+});

@@ -119,6 +119,12 @@ class TradePlan(Base):
     # a time; cleared when its fill (a kind="partial" wave in exit_fills) or
     # death is absorbed. The plan keeps running for the remainder.
     partial_exit: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # How this plan's orders are priced (services/spread_optimizer.py):
+    # {work_spread: bool | None, entry: {staged, start, step, max, step_s,
+    # frac, rung}, reworking: order_id | None}. Stamped at placement so the
+    # exit ladder honours the ticket's choice and a restart mid-chase
+    # resumes the same rung. None = legacy plan (global setting decides).
+    pricing: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     @property
@@ -198,6 +204,7 @@ class TradePlan(Base):
             "exit_fills": self.exit_fills,
             "exec_quality": self.exec_quality,
             "partial_exit": self.partial_exit,
+            "pricing": self.pricing,
         }
 
 

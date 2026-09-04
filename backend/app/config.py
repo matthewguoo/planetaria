@@ -51,6 +51,13 @@ class Settings(BaseSettings):
     # Postgres outage must be a boot failure there. Live forces it off.
     sqlite_fallback: bool = True
 
+    # KEYLESS=true boots with NO broker keys whatever .env holds: the UI
+    # preview knob (scripts/preview-ui.ps1). A second keyed engine on a
+    # box that already runs one is a second exit enforcer on the same
+    # account, and PowerShell cannot export an empty variable to blank the
+    # keys from outside — so the refusal lives here, in the process.
+    keyless: bool = False
+
     # Bar cache retention: 10 trading days of 1-minute bars per symbol.
     bar_cache_days: int = 10
 
@@ -75,6 +82,11 @@ class Settings(BaseSettings):
     finnhub_api_key: str = ""
 
     def validate_paper_lock(self) -> None:
+        if self.keyless:
+            if self.trading_mode != "paper":
+                raise RuntimeError("KEYLESS=true is a paper-server preview knob only")
+            self.alpaca_api_key = ""
+            self.alpaca_secret_key = ""
         if self.trading_mode == "paper":
             # The paper server is hard-locked to paper trading, exactly as
             # v1 always was. Refuse to boot otherwise.

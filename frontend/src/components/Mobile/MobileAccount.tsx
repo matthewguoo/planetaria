@@ -11,6 +11,7 @@ import { apiError, putRisk, type RiskSettings } from "../../lib/api";
 import { useAccountStore, useTradingMode } from "../../store/accountStore";
 import { capabilitiesSummaryLine } from "../../lib/capabilities";
 import { CapabilitiesPanel } from "../Account/CapabilitiesPanel";
+import { RiskPresetChips } from "../Account/RiskPresetChips";
 import { AccountsPanel } from "../System/SystemPanels";
 import { MobileHistory } from "./MobileOrders";
 
@@ -71,6 +72,23 @@ function RiskRules() {
   const field = (k: keyof RiskSettings) => (v: number) => { setMsg(null); setDraft({ ...draft, [k]: v }); };
   return (
     <div className="px-3 pb-3">
+      <div className="py-2"><RiskPresetChips touch /></div>
+      <div className="flex items-center justify-between gap-2 py-1">
+        <span className="flex min-w-0 flex-col">
+          <span className="text-[12px] text-bb-muted">WORK SPREAD</span>
+          <span className="text-[10px] text-bb-muted">entries/exits worked inside the bid-ask every {risk.spread_opt_step_s}s</span>
+        </span>
+        <button
+          className={"h-10 shrink-0 border px-4 text-[12px] tracking-widest " + (risk.spread_optimizer ? "border-bb-amber bg-bb-amber font-semibold text-black" : "border-bb-border text-bb-muted")}
+          onClick={() => { setMsg(null); setDraft({ ...draft, spread_optimizer: !risk.spread_optimizer }); }}
+        >
+          {risk.spread_optimizer ? "ON" : "OFF"}
+        </button>
+      </div>
+      <RiskRow label="REPRICE EVERY" hint="spread optimizer rung cadence" value={risk.spread_opt_step_s} unit="s" step={0.5} min={0.5} max={30} onChange={field("spread_opt_step_s")} />
+      <RiskRow label="TAKE PROFIT DEFAULT" value={risk.default_tp_pct} scale={100} unit="%" step={5} min={5} max={1000} onChange={field("default_tp_pct")} />
+      <RiskRow label="STOP LOSS DEFAULT" value={risk.default_sl_pct} scale={100} unit="%" step={5} min={5} max={95} onChange={field("default_sl_pct")} />
+      <RiskRow label="ENTRY TTL" hint="unfilled entries cancel after" value={risk.entry_ttl_min} unit="m" step={1} min={1} max={120} onChange={field("entry_ttl_min")} />
       <RiskRow label="MAX LOSS / TRADE" hint={`$${(account.equity * risk.max_loss_pct).toFixed(0)} at current equity`} value={risk.max_loss_pct} scale={100} unit="%" step={0.25} min={0.1} max={10} onChange={field("max_loss_pct")} />
       <RiskRow label="DAILY LOSS BREAKER" hint={`$${(account.equity * risk.daily_loss_pct).toFixed(0)} — halts new entries`} value={risk.daily_loss_pct} scale={100} unit="%" step={0.5} min={0.5} max={25} onChange={field("daily_loss_pct")} />
       <RiskRow label="MAX POSITIONS" value={risk.max_positions} unit="" step={1} min={1} max={20} onChange={field("max_positions")} />

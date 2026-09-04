@@ -30,6 +30,7 @@ from app.models.trade import TradePlan, as_utc, utcnow
 from app.services.alpaca import AlpacaService
 from app.services.market_clock import equity_session
 from app.services.portfolio_risk import plan_protection
+from app.services.spread_optimizer import EntryWork, entry_limit as worked_entry_limit
 from app.services.plan_fsm import (
     TERMINAL_STATES,
     PlanEvent,
@@ -712,6 +713,7 @@ class TradeService:
             underlying=payload["underlying"],
             stream_age_s=stream_age,
             daytrade_count=account["daytrade_count"],
+            margin_account=(account.get("multiplier") or 1) > 1,
             asset_class=asset_class,
             shortable=shortable,
             overnight_session=(asset_class == "equity"
@@ -727,6 +729,7 @@ class TradeService:
         # force-refresh the legs' quotes and refuse when the staged price has
         # drifted beyond max(2x position half-spread, 8% of |mid|). The user
         # re-stages off fresh numbers instead of chasing a vanished price.
+        live = None
         if self.alpaca.configured:
             from app.services.fair_value import position_quote_stats
 
@@ -744,6 +747,42 @@ class TradeService:
                         f"tolerance {tolerance:.2f}) - market moved, re-stage the order"
                     )
 
+        # SPREAD OPTIMIZER: the ticket's choice (work_spread) or the global
+        # setting decides whether this entry is worked inside the book. When
+        # on, rung 0 is priced off the LIVE book (not the staged mid the
+        # trader saw seconds ago) and the chase plan is stamped on the plan;
+        # the enforcer's monitor walks it. The staged limit stays the drift
+        # anchor: a chase never follows the market further than place_trade
+        # would have accepted at placement. Auction (MOO) entries have no
+        # limit to work.
+        risk_cfg = await self.risk.get_settings()
+        work_spread = payload.get("work_spread")
+        if work_spread is None:
+            work_spread = bool(risk_cfg.get("spread_optimizer", False))
+        pricing: dict = {"work_spread": bool(work_spread)}
+        working_limit = entry_limit
+        if work_spread and live is not None and not (
+            asset_class == "equity" and legs[0].get("auction") == "open"
+        ):
+            work = EntryWork.from_settings(risk_cfg, staged=entry_limit)
+            live_mid, half_spread = live
+            working_limit = worked_entry_limit(live_mid, half_spread, work.frac)
+            # A worked rung must still sit inside the bracket the trader set
+            # (the risk gate checked sl < entry < tp on the staged limit).
+            if sl is not None and working_limit <= sl:
+                working_limit = entry_limit
+            if tp is not None and working_limit >= tp:
+                working_limit = entry_limit
+            pricing["entry"] = work.to_json()
+            pricing["book"] = {"mid": round(live_mid, 4),
+                               "half_spread": round(half_spread, 4)}
+            log.info(
+                "plan entry worked: staged %.2f -> rung 0 %.2f (mid %.2f, hs %.3f, "
+                "frac %.2f, step %.2f every %.1fs to %.2f)",
+                entry_limit, working_limit, live_mid, half_spread,
+                work.frac, work.step, work.step_s, work.max,
+            )
+
         plan = TradePlan(
             underlying=payload["underlying"].upper(),
             strategy=payload["strategy"],
@@ -754,12 +793,13 @@ class TradeService:
             extended_hours=extended_hours,
             legs=legs,
             qty=qty,
-            entry_limit=entry_limit,
+            entry_limit=working_limit,
             tp_premium=tp,
             sl_premium=sl,
             time_stop_utc=time_stop,
             status="planned",
             exec_quality=self._quality_snapshot(legs, "entry"),
+            pricing=pricing,
         )
         async with self.db.session() as session:
             session.add(plan)
@@ -850,9 +890,12 @@ class TradeService:
             return None
         return {**(plan.exec_quality or {}), kind: quality_fill(snapshot, kind, fill)}
 
-    async def _submit_entry(self, plan: TradePlan):
+    async def _submit_entry(self, plan: TradePlan, rung: int = 0):
+        """Submit the plan's entry at plan.entry_limit. `rung` > 0 is a
+        spread-optimizer replacement: a fresh idempotency key per rung so an
+        ambiguous submit recovers THAT rung's order, never a prior one."""
         legs = plan.legs
-        client_order_id = f"{plan.id}-e"
+        client_order_id = f"{plan.id}-e" if rung == 0 else f"{plan.id}-e{rung}"
         if plan.asset_class == "equity":
             leg = legs[0]
             if leg.get("auction") == "open":
@@ -1041,6 +1084,18 @@ class TradeService:
                     )
                 return
             is_entry = plan.entry_order_id == order_id
+            if (
+                is_entry
+                and event in ("canceled", "expired", "rejected")
+                and (plan.pricing or {}).get("reworking") == order_id
+                and int(float(order.filled_qty or 0)) == 0
+            ):
+                # The spread optimizer cancelled this rung itself and is
+                # about to submit the next one: an empty cancel here is the
+                # chase working, not the entry dying. (A cancel WITH fills
+                # falls through: the chase stops and the partial is managed.)
+                log.info("plan %s: rung order %s cancelled by the chase", plan.id, order_id)
+                return
             raw_avg = float(order.filled_avg_price) if order.filled_avg_price else None
             avg = self._fill_value(plan, raw_avg, is_entry=is_entry)
             filled_qty = int(float(order.filled_qty or 0))
@@ -1419,6 +1474,134 @@ class TradeService:
                 await self.cancel_order(plan.entry_order_id)
             except Exception as exc:
                 log.warning("cancel entry %s failed: %s", plan.entry_order_id, exc)
+
+    # ------------------------------------------------- spread optimizer
+
+    REWORK_CANCEL_POLLS = 6      # x REWORK_CANCEL_POLL_S waiting for the cancel
+    REWORK_CANCEL_POLL_S = 0.5
+
+    async def rework_entry(self, plan: TradePlan) -> str:
+        """One spread-optimizer step on an unfilled entry: cancel the resting
+        rung, confirm it died EMPTY, reprice the next rung off the live
+        book, submit it, swap the plan's entry order. Returns what happened:
+        'replaced' | 'exhausted' | 'filled' | 'partial' | 'abandoned' |
+        'skipped'. Callers (the monitor) own the cadence.
+
+        Ordering matters: `pricing.reworking` is stamped BEFORE the cancel
+        so the broker's cancel event (stream or reconcile) is recognised as
+        the chase's own and does not close the plan; the swap to the new
+        order id happens AFTER the replacement is accepted, so a fill on
+        the OLD order that beats the cancel still lands on the plan."""
+        pricing = dict(plan.pricing or {})
+        raw = pricing.get("entry")
+        if plan.status != "submitted" or not plan.entry_order_id or not raw:
+            return "skipped"
+        work = EntryWork.from_json(raw)
+        if work.exhausted:
+            return "exhausted"
+        old_id = plan.entry_order_id
+
+        # Drift anchor: the market may have run away from the price the
+        # trader approved. Refuse to chase past the placement tolerance —
+        # cancel and stop, the trader re-stages off fresh numbers.
+        leg_symbols = [leg["symbol"] for leg in plan.legs]
+        try:
+            if plan.asset_class == "equity":
+                await self.market.fetch_latest_stock_quote(leg_symbols[0])
+            else:
+                await self.market.refresh_option_quotes(leg_symbols, max_age_s=0.5)
+        except Exception as exc:
+            log.warning("rework quote refresh failed for %s: %s", plan.id, exc)
+        from app.services.fair_value import position_quote_stats
+
+        live = position_quote_stats(
+            plan.legs, {s: self.market.latest_quote(s) for s in leg_symbols}
+        )
+        if live is None:
+            return "skipped"  # no book to price the next rung off; try later
+        live_mid, half_spread = live
+        ok, drift, tolerance = staged_price_ok(work.staged, live_mid, half_spread)
+
+        # 1. Claim the cancel, then cancel.
+        pricing["reworking"] = old_id
+        await self.fsm.update_fields(
+            plan.id, expect={"entry_order_id": old_id}, pricing=pricing
+        )
+        try:
+            await self.cancel_order(old_id)
+        except Exception as exc:
+            log.warning("rework cancel %s failed: %s", old_id, exc)
+            pricing.pop("reworking", None)
+            await self.fsm.update_fields(plan.id, expect={"entry_order_id": old_id},
+                                         pricing=pricing)
+            return "skipped"
+        # 2. Confirm it died, and died empty.
+        status, filled_qty = "", 0
+        for _ in range(self.REWORK_CANCEL_POLLS):
+            order = await self.alpaca.call(
+                self.alpaca.trading.get_order_by_id, old_id, retries=1
+            )
+            status = str(getattr(order.status, "value", order.status)).lower()
+            filled_qty = int(float(getattr(order, "filled_qty", 0) or 0))
+            if status in ("canceled", "cancelled", "expired", "rejected", "filled"):
+                break
+            await asyncio.sleep(self.REWORK_CANCEL_POLL_S)
+        if status == "filled" or filled_qty > 0:
+            # The rung filled (fully or partly) before the cancel landed:
+            # the fill/cancel events carry the plan from here. Release the
+            # claim so a partial-cancel is absorbed as ENTRY_CANCELLED_PARTIAL.
+            pricing.pop("reworking", None)
+            await self.fsm.update_fields(plan.id, expect={"entry_order_id": old_id},
+                                         pricing=pricing)
+            return "filled" if status == "filled" else "partial"
+        if status not in ("canceled", "cancelled", "expired", "rejected"):
+            # Cancel unconfirmed: leave the claim standing (a late cancel
+            # event stays recognised) and let the next wake retry the poll.
+            log.warning("rework: cancel of %s unconfirmed (%s) - retrying next wake",
+                        old_id, status)
+            return "skipped"
+        if not ok:
+            log.warning(
+                "plan %s: chase abandoned - market %.2f drifted %.2f from staged %.2f "
+                "(tolerance %.2f)", plan.id, live_mid, drift, work.staged, tolerance,
+            )
+            pricing.pop("reworking", None)
+            await self.fsm.apply(
+                plan.id, PlanEvent.ENTRY_CANCELLED, pricing=pricing,
+                notes=f"chase abandoned: market moved {drift:.2f} past the staged "
+                      f"{work.staged:.2f} (tolerance {tolerance:.2f})",
+            )
+            return "abandoned"
+        # 3. Next rung off the live book, inside the bracket.
+        nxt = work.next()
+        new_limit = worked_entry_limit(live_mid, half_spread, nxt.frac)
+        if plan.sl_premium is not None and new_limit <= plan.sl_premium:
+            new_limit = plan.entry_limit
+        if plan.tp_premium is not None and new_limit >= plan.tp_premium:
+            new_limit = plan.entry_limit
+        pricing["entry"] = nxt.to_json()
+        pricing["book"] = {"mid": round(live_mid, 4), "half_spread": round(half_spread, 4)}
+        plan.entry_limit = new_limit
+        try:
+            order = await self._submit_entry(plan, rung=nxt.rung)
+        except Exception as exc:
+            log.error("rework resubmit failed for %s: %s - entry cancelled", plan.id, exc)
+            pricing.pop("reworking", None)
+            await self.fsm.apply(
+                plan.id, PlanEvent.ENTRY_CANCELLED, pricing=pricing,
+                notes=f"chase rung {nxt.rung} rejected: {exc}",
+            )
+            return "abandoned"
+        pricing.pop("reworking", None)
+        await self.fsm.update_fields(
+            plan.id, expect={"entry_order_id": old_id},
+            entry_order_id=str(order.id), entry_limit=new_limit, pricing=pricing,
+            exec_quality={**(plan.exec_quality or {}),
+                          **(self._quality_snapshot(plan.legs, "entry") or {})},
+        )
+        log.info("plan %s: entry reworked rung %d @ %.2f (mid %.2f, hs %.3f, frac %.2f)",
+                 plan.id, nxt.rung, new_limit, live_mid, half_spread, nxt.frac)
+        return "replaced"
 
     async def order_status(self, order_id: str) -> str:
         order = await self.alpaca.call(

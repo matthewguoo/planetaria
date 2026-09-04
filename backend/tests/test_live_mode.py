@@ -248,3 +248,27 @@ async def test_live_get_account_reports_mode(live_trade):
     live_trade.alpaca.configured = False
     acct = await live_trade.get_account()
     assert acct["mode"] == "live_manual" and acct["paper"] is False
+
+
+class TestKeylessPreview:
+    """KEYLESS=true is the UI-preview knob: whatever .env holds, the process
+    boots with no broker keys and an empty account registry, and it is
+    refused outside the paper server."""
+
+    def test_keyless_blanks_keys_from_any_source(self):
+        s = make(keyless=True, alpaca_api_key="PKREAL", alpaca_secret_key="sekrit")
+        s.validate_paper_lock()
+        assert (s.alpaca_api_key, s.alpaca_secret_key) == ("", "")
+
+    def test_keyless_registry_is_empty(self, monkeypatch):
+        from app.services.system_state import AccountService
+
+        monkeypatch.setenv("ALPACA_ACCOUNT_PREVIEW_API_KEY", "PKX")
+        monkeypatch.setenv("ALPACA_ACCOUNT_PREVIEW_SECRET_KEY", "s")
+        s = make(keyless=True)
+        assert AccountService(db=None, settings=s).registry() == {}
+        assert "preview" in AccountService(db=None, settings=make()).registry()
+
+    def test_keyless_refused_on_the_live_server(self):
+        with pytest.raises(RuntimeError, match="KEYLESS"):
+            make(**{**LIVE_OK, "keyless": True}).validate_paper_lock()

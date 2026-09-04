@@ -16,7 +16,8 @@ import { legsAllowed, presetAllowed, useCapabilities } from "../../lib/capabilit
 import { pct as fmtPct, usd } from "../../lib/format";
 import type { McResult } from "../../lib/mcSim";
 import { nakedShortUnits } from "../../lib/optionsMath";
-import { liveLevel2Blocked, optionsOrderPayload } from "../../lib/orderPayload";
+import { etTimePlusMinutes, liveLevel2Blocked, optionsOrderPayload } from "../../lib/orderPayload";
+import { WorkSpreadToggle } from "../Panels/WorkSpreadToggle";
 import type { Designer } from "../../lib/useDesigner";
 import { useMonteCarlo, type McInputs } from "../../lib/useMonteCarlo";
 import { useAccountStore, useTradingMode } from "../../store/accountStore";
@@ -158,6 +159,7 @@ export function MobileOptionsTicket({ designer }: { designer: Designer }) {
   const setQty = useStrategyStore((s) => s.setQty);
   const volShift = useStrategyStore((s) => s.volShift);
   const skewBeta = useStrategyStore((s) => s.skewBeta);
+  const workSpread = useStrategyStore((s) => s.workSpread);
   const refreshPositions = useAccountStore((s) => s.refreshPositions);
   const caps = useCapabilities();
   const { live, loaded } = useTradingMode();
@@ -201,7 +203,7 @@ export function MobileOptionsTicket({ designer }: { designer: Designer }) {
     setSubmitting(true);
     setError(null);
     try {
-      const plan = await postOrder(optionsOrderPayload({ designer, symbol, kind, modified, timeStopEt }));
+      const plan = await postOrder(optionsOrderPayload({ designer, symbol, kind, modified, timeStopEt, workSpread }));
       playCue("submitted");
       setPlaced(plan.id);
       setConfirming(false);
@@ -333,6 +335,14 @@ export function MobileOptionsTicket({ designer }: { designer: Designer }) {
             SUGGEST −{Math.round(slSuggestion.slPct * 100)}% (underlying 1.5σ ±{slSuggestion.movePct.toFixed(1)}% by the time stop)
           </button>
         )}
+        <div className="mt-2 chip-rail">
+          <span className="text-[12px] text-bb-muted">HOLD</span>
+          {[5, 10, 20, 45].map((m) => (
+            <button key={m} className={chip(timeStopEt === etTimePlusMinutes(m))} onClick={() => setTimeStopEt(etTimePlusMinutes(m))}>
+              +{m}m
+            </button>
+          ))}
+        </div>
         <div className="mt-2 flex items-center justify-between">
           <span className="text-[12px] text-bb-muted">TIME STOP (ET)</span>
           <input
@@ -342,6 +352,9 @@ export function MobileOptionsTicket({ designer }: { designer: Designer }) {
             className="h-11 border border-bb-border bg-black px-2 text-[16px] text-bb-orange outline-none focus:border-bb-amber"
             aria-label="Time stop (ET)"
           />
+        </div>
+        <div className="mt-2">
+          <WorkSpreadToggle touch />
         </div>
       </Section>
 

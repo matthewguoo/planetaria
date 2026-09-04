@@ -28,14 +28,24 @@ export type FeedStatus = {
   connection: "connecting" | "open" | "down";
 };
 
-export type Timeframe = "1m" | "5m" | "15m" | "1h";
-export const TIMEFRAMES: Timeframe[] = ["1m", "5m", "15m", "1h"];
+/** Sub-minute timeframes are rolled server-side from the trade tape (IEX
+ * prints on the free tier — real prices, a fraction of the volume) for the
+ * symbol on screen; 1m and up are the broker's own bars. */
+export type Timeframe = "5s" | "15s" | "30s" | "1m" | "5m" | "15m" | "1h";
+export const TIMEFRAMES: Timeframe[] = ["5s", "15s", "30s", "1m", "5m", "15m", "1h"];
+export const FAST_TIMEFRAMES: Timeframe[] = ["5s", "15s", "30s"];
 export const TF_MS: Record<Timeframe, number> = {
+  "5s": 5_000,
+  "15s": 15_000,
+  "30s": 30_000,
   "1m": 60_000,
   "5m": 300_000,
   "15m": 900_000,
   "1h": 3_600_000,
 };
+export function isFastTf(tf: Timeframe): boolean {
+  return TF_MS[tf] < 60_000;
+}
 
 export type IndicatorToggles = {
   heat: boolean; // P/L heatmap surface
